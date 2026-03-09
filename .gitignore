@@ -1,0 +1,14 @@
+.venv/
+venv/
+.pytest_cache/
+pytest-of-*/
+__pycache__/
+*.py[cod]
+
+# Local runtime data
+data.csv
+*.db
+
+# Generated backups
+backups/
+*.bak
