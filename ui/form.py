@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from tkinter import ttk
 from typing import Callable, Sequence
 
+from ..models import calculate_field6
 from ..settings import save_labels
 
 
@@ -267,15 +268,11 @@ class InputForm(ttk.Frame):
         if not v3 or not v5:
             self._set_field6_text("")
             return
-        try:
-            n3 = float(v3)
-            n5 = float(v5)
-            if n5 == 0:
-                self._set_field6_text("N/A")
-                return
-            self._set_field6_text(f"\u00A3{n3 / n5:.2f}")
-        except Exception:
+        value = calculate_field6(v3, v5)
+        if value is None:
             self._set_field6_text("N/A")
+        else:
+            self._set_field6_text(f"\u00A3{value:.2f}")
         try:
             self.recalc_metrics()
         except Exception:

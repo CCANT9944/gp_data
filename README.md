@@ -20,6 +20,8 @@ numeric change history per item.
 
 - Add records through the form on the left.
 - Edit records either through `Edit selected` or by double-clicking cells in the table.
+- Add and edit flows warn when the same `Type + Name` already exists.
+- Inline edits and form edits keep the edited row in place instead of moving it.
 - Live search filters rows as you type.
 - Export writes the currently displayed rows.
 - Backup management includes preview, restore, and delete operations.
@@ -138,4 +140,6 @@ GUI-related tests skip automatically if Tk is not available in the current envir
 
 - The app stores recent numeric change history, not a full unlimited audit log.
 - Column order, visible columns, and widths are persisted in `settings.json`.
+- Duplicate warnings are advisory: the GUI can still allow a duplicate if the user explicitly confirms it.
+- Older duplicate rows already stored in the database are not merged automatically.
 - The README is a technical overview. For normal day-to-day usage, see `MANUAL.txt`.

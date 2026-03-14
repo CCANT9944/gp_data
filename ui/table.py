@@ -181,7 +181,7 @@ class RecordTable(ttk.Treeview):
 
     def _apply_column_layout(self, reload_rows: bool = False) -> None:
         records = list(self._records)
-        visible_display_cols = _build_display_columns(self.get_visible_columns())
+        visible_display_cols = self._visible_display_columns()
         self.configure(columns=self._display_cols, displaycolumns=visible_display_cols)
         for col in self._display_cols:
             if _is_separator_column(col):
@@ -200,6 +200,9 @@ class RecordTable(ttk.Treeview):
         if reload_rows:
             self.load(records)
 
+    def _visible_display_columns(self) -> list[str]:
+        return _build_display_columns(self.get_visible_columns())
+
     def _column_name_from_event(self, event) -> str | None:
         if self.identify_region(event.x, event.y) != "heading":
             return None
@@ -207,14 +210,14 @@ class RecordTable(ttk.Treeview):
         if not col_id:
             return None
         col_index = int(col_id.lstrip("#")) - 1
-        visible_display_cols = _build_display_columns(self.get_visible_columns())
+        visible_display_cols = self._visible_display_columns()
         if col_index < 0 or col_index >= len(visible_display_cols):
             return None
         return visible_display_cols[col_index]
 
     def _display_column_bounds(self, column_name: str) -> tuple[int, int]:
         left = 0
-        for name in _build_display_columns(self.get_visible_columns()):
+        for name in self._visible_display_columns():
             width = int(self.column(name, "width"))
             right = left + width
             if name == column_name:
@@ -279,7 +282,10 @@ class RecordTable(ttk.Treeview):
             if not row or not col_id:
                 return
             col_index = int(col_id.lstrip("#")) - 1
-            col_name = self._display_cols[col_index]
+            visible_display_cols = self._visible_display_columns()
+            if col_index < 0 or col_index >= len(visible_display_cols):
+                return
+            col_name = visible_display_cols[col_index]
             if _is_separator_column(col_name):
                 return
             if col_name == "field6":
@@ -369,6 +375,13 @@ class RecordTable(ttk.Treeview):
         for record in records:
             self.insert_record(record)
 
+    def update_record(self, record: Record) -> None:
+        values = self._values_for_record(record)
+        if self.exists(record.id):
+            self.item(record.id, values=values)
+        else:
+            self.insert_record(record)
+
     def _format_display_value(self, col: str, val) -> str:
         if val is None:
             return ""
@@ -386,12 +399,16 @@ class RecordTable(ttk.Treeview):
             return ("{:.6f}".format(val)).rstrip("0").rstrip(".")
         return str(val)
 
-    def insert_record(self, record: Record):
+    def _values_for_record(self, record: Record) -> list[str]:
         values: list[str] = []
         for index, col in enumerate(self._cols):
             values.append(self._format_display_value(col, getattr(record, col)))
             if index < len(self._cols) - 1:
                 values.append(SEPARATOR_GLYPH)
+        return values
+
+    def insert_record(self, record: Record):
+        values = self._values_for_record(record)
         row_index = len(self.get_children())
         tag = ROW_TAG_EVEN if row_index % 2 else ROW_TAG_ODD
         return self.insert("", "end", iid=record.id, values=values, tags=(tag,))

@@ -98,3 +98,39 @@ def test_sqlite_restore_from_timestamped_backup(tmp_path: Path):
     rows = dm.load_all()
     assert any(r.field1.lower() == "one" for r in rows)
     assert not any(r.field1.lower() == "two" for r in rows)
+
+
+def test_sqlite_round_trips_all_persisted_fields(tmp_path: Path):
+    db = tmp_path / "data.db"
+    dm = SQLiteDataManager(db)
+
+    record = Record(
+        field1="alpha",
+        field2="beta",
+        field3=10.0,
+        field4="qty",
+        field5="5",
+        field6=2.0,
+        field7=6.5,
+        last_numeric_field="field7",
+        last_numeric_from=6.0,
+        last_numeric_to=6.5,
+        numeric_change_history=[],
+    )
+
+    saved = dm.save(record)
+    rows = dm.load_all()
+
+    assert len(rows) == 1
+    loaded = rows[0]
+    assert loaded.id == saved.id
+    assert loaded.field1 == "Alpha"
+    assert loaded.field2 == "Beta"
+    assert loaded.field3 == 10.0
+    assert loaded.field4 == "qty"
+    assert loaded.field5 == "5"
+    assert loaded.field6 == 2.0
+    assert loaded.field7 == 6.5
+    assert loaded.last_numeric_field == "field7"
+    assert loaded.last_numeric_from == 6.0
+    assert loaded.last_numeric_to == 6.5

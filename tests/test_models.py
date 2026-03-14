@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from gp_data.models import Record, calculate_gp, calculate_cash_margin, calculate_gp70
+from gp_data.models import Record, calculate_cash_margin, calculate_field6, calculate_gp, calculate_gp70
 
 
 def test_record_roundtrip():
@@ -42,3 +42,11 @@ def test_calculation_helpers():
     # gp70
     assert calculate_gp70(3.0) == pytest.approx(3.0 * 100.0 / 30.0 * 1.2)
     assert calculate_gp70(None) is None
+
+
+def test_calculate_field6_helper():
+    assert calculate_field6(20, 5) == pytest.approx(4.0)
+    assert calculate_field6("£20.00", "5") == pytest.approx(4.0)
+    assert calculate_field6(20, 0) is None
+    assert calculate_field6(20, "abc") is None
+    assert calculate_field6("bad", 5) is None

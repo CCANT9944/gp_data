@@ -8,7 +8,7 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Sequence
 
 from ..data_manager import CSVDataManager, DataManager
-from ..models import Record
+from ..models import Record, calculate_field6
 from ..settings import load_settings, save_column_order, save_column_widths, save_visible_columns
 from .form import InputForm
 from .table import METRIC_LABELS, RecordTable
@@ -161,6 +161,48 @@ class GPDataApp(tk.Tk):
         records = self.data_manager.load_all()
         return next((record for record in records if record.id == record_id), None)
 
+    def _duplicate_identity(self, record: Record) -> tuple[str, str] | None:
+        field1 = (record.field1 or "").strip().lower()
+        field2 = (record.field2 or "").strip().lower()
+        if not field1 or not field2:
+            return None
+        return field1, field2
+
+    def _find_duplicate_record(self, record: Record, exclude_id: str | None = None) -> Record | None:
+        duplicate_identity = self._duplicate_identity(record)
+        if duplicate_identity is None:
+            return None
+        for existing in self.data_manager.load_all():
+            if exclude_id is not None and existing.id == exclude_id:
+                continue
+            if self._duplicate_identity(existing) == duplicate_identity:
+                return existing
+        return None
+
+    def _confirm_duplicate_record(self, record: Record, exclude_id: str | None = None, action_text: str = "save") -> bool:
+        duplicate = self._find_duplicate_record(record, exclude_id=exclude_id)
+        if duplicate is None:
+            return True
+        should_continue = messagebox.askyesno(
+            "Duplicate item",
+            f"{record.field1} / {record.field2} already exists.\n\n{action_text.capitalize()} anyway?",
+        )
+        if not should_continue:
+            self._focus_record(duplicate.id)
+            return False
+        return True
+
+    def _focus_record(self, record_id: str) -> None:
+        if not self.table.exists(record_id):
+            self.load_records()
+        if not self.table.exists(record_id):
+            return
+        try:
+            self.table.selection_set(record_id)
+            self.table.see(record_id)
+        except Exception:
+            pass
+
     def _on_table_select(self, event=None) -> None:
         sel_id = self.table.get_selected_id()
         if not sel_id:
@@ -182,6 +224,39 @@ class GPDataApp(tk.Tk):
             for record in records
             if (record.field1 or "").lower().find(query) != -1 or (record.field2 or "").lower().find(query) != -1
         ]
+
+    def _record_matches_current_filter(self, record: Record) -> bool:
+        query = self._current_search_query()
+        if not query:
+            return True
+        return (record.field1 or "").lower().find(query) != -1 or (record.field2 or "").lower().find(query) != -1
+
+    def _refresh_saved_record(self, record: Record) -> None:
+        still_visible = self._record_matches_current_filter(record)
+        previous_index = next((index for index, existing in enumerate(self._displayed_records) if existing.id == record.id), None)
+        self._displayed_records = [existing for existing in self._displayed_records if existing.id != record.id]
+
+        if still_visible:
+            if self.table.exists(record.id):
+                if previous_index is not None and previous_index <= len(self._displayed_records):
+                    self._displayed_records.insert(previous_index, record)
+                else:
+                    self._displayed_records.append(record)
+                self.table.update_record(record)
+            else:
+                self.load_records()
+                return
+            try:
+                self.table.selection_set(record.id)
+            except Exception:
+                pass
+            return
+
+        if self.table.exists(record.id):
+            try:
+                self.table.delete(record.id)
+            except Exception:
+                self.load_records()
 
     def load_records(self) -> None:
         records = self.data_manager.load_all()
@@ -207,6 +282,10 @@ class GPDataApp(tk.Tk):
         except Exception as exc:
             messagebox.showerror("Validation error", str(exc))
             return
+
+        if not self._confirm_duplicate_record(rec, action_text="add another record"):
+            return
+
         try:
             self.data_manager.create_timestamped_backup()
         except Exception:
@@ -237,9 +316,11 @@ class GPDataApp(tk.Tk):
             except Exception as exc:
                 messagebox.showerror("Validation error", str(exc))
                 return
+            if not self._confirm_duplicate_record(updated, exclude_id=record.id, action_text="save this edit"):
+                return
             saved = self.data_manager.update(record.id, updated)
             self.form.set_values(saved.to_dict())
-            self.load_records()
+            self._refresh_saved_record(saved)
             edit_win.destroy()
 
         edit_win = tk.Toplevel(self)
@@ -456,20 +537,14 @@ class GPDataApp(tk.Tk):
             data[col] = new_value
 
             if col in ("field3", "field5"):
-                try:
-                    f3 = float(data.get("field3") or 0)
-                    f5 = float(data.get("field5") or 0)
-                    if f5:
-                        data["field6"] = f3 / f5
-                    else:
-                        data["field6"] = None
-                except Exception:
-                    pass
+                data["field6"] = calculate_field6(data.get("field3"), data.get("field5"))
 
             try:
                 updated = Record(**data)
             except Exception as exc:
                 messagebox.showerror("Validation error", str(exc))
+                return
+            if not self._confirm_duplicate_record(updated, exclude_id=record_id, action_text="save this edit"):
                 return
 
             try:
@@ -479,11 +554,7 @@ class GPDataApp(tk.Tk):
 
             saved = self.data_manager.update(record_id, updated)
             self.form.set_values(saved.to_dict())
-            self.load_records()
-            try:
-                self.table.selection_set(record_id)
-            except Exception:
-                pass
+            self._refresh_saved_record(saved)
         except Exception as exc:
             messagebox.showerror("Error", str(exc))
 

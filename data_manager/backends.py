@@ -32,6 +32,23 @@ SQLITE_COLUMN_DEFS = [
     ("last_numeric_changed_at", "TEXT"),
     ("numeric_change_history", "TEXT"),
 ]
+SQLITE_COLUMN_NAMES = [name for name, _definition in SQLITE_COLUMN_DEFS]
+SQLITE_CREATE_TABLE_SQL = (
+    "CREATE TABLE IF NOT EXISTS records ("
+    + ", ".join(f"{name} {definition}" for name, definition in SQLITE_COLUMN_DEFS)
+    + ")"
+)
+SQLITE_INSERT_SQL = (
+    "INSERT INTO records ("
+    + ", ".join(SQLITE_COLUMN_NAMES)
+    + ") VALUES ("
+    + ", ".join(f":{name}" for name in SQLITE_COLUMN_NAMES)
+    + ") ON CONFLICT(id) DO UPDATE SET "
+    + ", ".join(f"{name} = excluded.{name}" for name in SQLITE_COLUMN_NAMES if name != "id")
+)
+
+if SQLITE_COLUMN_NAMES != FIELDNAMES:
+    raise ValueError("SQLite columns must stay aligned with FIELDNAMES")
 
 
 def _record_with_last_numeric_change(previous: Record | None, record: Record) -> Record:
@@ -79,6 +96,19 @@ def _default_db_path() -> Path:
     from . import DEFAULT_DB
 
     return DEFAULT_DB
+
+
+def _record_from_sqlite_row(row: tuple) -> Record:
+    data = dict(zip(SQLITE_COLUMN_NAMES, row))
+    for key, val in data.items():
+        if val == "":
+            data[key] = None
+    return Record.from_dict(data)
+
+
+def _sqlite_record_params(record: Record) -> dict:
+    data = record.to_dict()
+    return {name: data.get(name) for name in SQLITE_COLUMN_NAMES}
 
 
 class CSVDataManager:
@@ -229,27 +259,7 @@ class CSVDataManager:
 class SQLiteDataManager:
     """SQLite-backed persistence layer mirroring the CSV API."""
 
-    CREATE_TABLE = (
-        "CREATE TABLE IF NOT EXISTS records ("
-        "id TEXT PRIMARY KEY,"
-        "field1 TEXT,"
-        "field2 TEXT,"
-        "field3 REAL,"
-        "field4 TEXT,"
-        "field5 TEXT,"
-        "field6 REAL,"
-        "field7 REAL,"
-        "gp REAL,"
-        "cash_margin REAL,"
-        "gp70 REAL,"
-        "created_at TEXT,"
-        "last_numeric_field TEXT,"
-        "last_numeric_from REAL,"
-        "last_numeric_to REAL,"
-        "last_numeric_changed_at TEXT,"
-        "numeric_change_history TEXT"
-        ")"
-    )
+    CREATE_TABLE = SQLITE_CREATE_TABLE_SQL
 
     def __init__(self, path: Optional[Path] = None):
         self.path = Path(path) if path else _default_db_path()
@@ -291,11 +301,7 @@ class SQLiteDataManager:
         row = cur.fetchone()
         if row is None:
             return None
-        data = dict(zip(FIELDNAMES, row))
-        for key, val in data.items():
-            if val == "":
-                data[key] = None
-        return Record.from_dict(data)
+        return _record_from_sqlite_row(row)
 
     def _reset_conn(self) -> None:
         if self._conn is not None:
@@ -315,14 +321,7 @@ class SQLiteDataManager:
         cur = self._conn.cursor()
         cur.execute("SELECT * FROM records")
         rows = cur.fetchall()
-        records: List[Record] = []
-        for row in rows:
-            data = dict(zip(FIELDNAMES, row))
-            for key, val in data.items():
-                if val == "":
-                    data[key] = None
-            records.append(Record.from_dict(data))
-        return records
+        return [_record_from_sqlite_row(row) for row in rows]
 
     def _write_all(self, records: List[Record]) -> None:
         self._ensure_conn()
@@ -331,12 +330,7 @@ class SQLiteDataManager:
         cur = self._conn.cursor()
         cur.execute("DELETE FROM records")
         for record in records:
-            data = record.to_dict()
-            cur.execute(
-                "INSERT OR REPLACE INTO records (id, field1, field2, field3, field4, field5, field6, field7, gp, cash_margin, gp70, created_at, last_numeric_field, last_numeric_from, last_numeric_to, last_numeric_changed_at, numeric_change_history) "
-                "VALUES (:id, :field1, :field2, :field3, :field4, :field5, :field6, :field7, :gp, :cash_margin, :gp70, :created_at, :last_numeric_field, :last_numeric_from, :last_numeric_to, :last_numeric_changed_at, :numeric_change_history)",
-                data,
-            )
+            cur.execute(SQLITE_INSERT_SQL, _sqlite_record_params(record))
         self._conn.commit()
 
     def restore_backup(self) -> Path:
@@ -391,12 +385,7 @@ class SQLiteDataManager:
             raise RuntimeError("database unavailable")
         record = _record_with_last_numeric_change(self._load_record_by_id(record.id), record)
         cur = self._conn.cursor()
-        data = record.to_dict()
-        cur.execute(
-            "INSERT OR REPLACE INTO records (id, field1, field2, field3, field4, field5, field6, field7, gp, cash_margin, gp70, created_at, last_numeric_field, last_numeric_from, last_numeric_to, last_numeric_changed_at, numeric_change_history) "
-            "VALUES (:id, :field1, :field2, :field3, :field4, :field5, :field6, :field7, :gp, :cash_margin, :gp70, :created_at, :last_numeric_field, :last_numeric_from, :last_numeric_to, :last_numeric_changed_at, :numeric_change_history)",
-            data,
-        )
+        cur.execute(SQLITE_INSERT_SQL, _sqlite_record_params(record))
         self._conn.commit()
         return record
 

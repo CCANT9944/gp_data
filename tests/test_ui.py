@@ -142,6 +142,34 @@ def test_record_table_hides_columns_and_keeps_visible_order():
     root.destroy()
 
 
+def test_double_click_uses_visible_column_mapping_when_columns_are_hidden():
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+
+    table = RecordTable(root)
+    record = Record(field1="whisky", field2="woodford reserve", field3=31.99, field5="28", field6=1.14, field7=5.75)
+    table.insert_record(record)
+    table.set_visible_columns(["field1", "field2", "field3", "field6", "field7", "gp", "cash_margin", "gp70"])
+
+    seen: list[tuple[str, str]] = []
+
+    def fake_start_cell_edit(iid: str, col: str) -> None:
+        seen.append((iid, col))
+
+    table.start_cell_edit = fake_start_cell_edit  # type: ignore[method-assign]
+    table.identify_row = lambda y: record.id  # type: ignore[method-assign]
+    table.identify_column = lambda x: "#9"  # type: ignore[method-assign]
+
+    event = type("Event", (), {"x": 0, "y": 0})()
+    table._on_double_click(event)
+
+    assert seen == [(record.id, "field7")]
+
+    root.destroy()
+
+
 def test_app_loads_saved_column_order(tmp_path, monkeypatch):
     settings_path = tmp_path / "settings.json"
     settings_module.save_settings(
@@ -211,6 +239,69 @@ def test_app_loads_saved_visible_columns(tmp_path, monkeypatch):
 
     assert app.table.get_visible_columns() == ["field1", "field3", "field7"]
     assert list(app.table.cget("displaycolumns")) == ["field1", f"{SEPARATOR_PREFIX}0", "field3", f"{SEPARATOR_PREFIX}1", "field7"]
+
+    app.destroy()
+
+
+def test_add_duplicate_warning_can_cancel_new_record(tmp_path, monkeypatch):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    existing = Record(field1="soft drink", field2="frobisher pineapple")
+    app.data_manager.save(existing)
+    app.load_records()
+
+    asked: dict[str, str] = {}
+
+    def fake_askyesno(title, message):
+        asked["title"] = title
+        asked["message"] = message
+        return False
+
+    monkeypatch.setattr("gp_data.ui.app.messagebox.askyesno", fake_askyesno)
+
+    app.form.entries["field1"].insert(0, "Soft Drink")
+    app.form.entries["field2"].insert(0, "Frobisher Pineapple")
+    app.form.entries["field3"].insert(0, "24.11")
+    app.form.entries["field5"].insert(0, "24")
+    app.form.entries["field7"].insert(0, "4.00")
+    app.on_add()
+
+    rows = app.data_manager.load_all()
+    assert len(rows) == 1
+    assert asked["title"] == "Duplicate item"
+    assert "already exists" in asked["message"]
+    assert app.table.get_selected_id() == existing.id
+
+    app.destroy()
+
+
+def test_add_duplicate_warning_can_allow_new_record(tmp_path, monkeypatch):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    existing = Record(field1="soft drink", field2="frobisher pineapple")
+    app.data_manager.save(existing)
+    app.load_records()
+
+    monkeypatch.setattr("gp_data.ui.app.messagebox.askyesno", lambda *args, **kwargs: True)
+
+    app.form.entries["field1"].insert(0, "Soft Drink")
+    app.form.entries["field2"].insert(0, "Frobisher Pineapple")
+    app.form.entries["field3"].insert(0, "24.11")
+    app.form.entries["field5"].insert(0, "24")
+    app.form.entries["field7"].insert(0, "4.00")
+    app.on_add()
+
+    rows = app.data_manager.load_all()
+    assert len(rows) == 2
+    assert sum(1 for row in rows if row.field1 == "Soft Drink" and row.field2 == "Frobisher Pineapple") == 2
 
     app.destroy()
 

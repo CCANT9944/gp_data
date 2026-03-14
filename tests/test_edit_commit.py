@@ -56,3 +56,90 @@ def test_edit_commit_updates_storage(tmp_path):
     assert '£12.00' in summary
 
     app.destroy()
+
+
+def test_form_edit_preserves_row_position(tmp_path):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    first = Record(field1="orig", field2="first")
+    second = Record(field1="other", field2="second")
+    for record in (first, second):
+        app.data_manager.save(record)
+    app.load_records()
+
+    assert app.table.get_children() == (first.id, second.id)
+
+    app.table.selection_set(first.id)
+    app.on_edit()
+    app.form.entries['field2'].delete(0, tk.END)
+    app.form.entries['field2'].insert(0, 'updated')
+
+    apply_btn = None
+    for w in app.winfo_children():
+        if isinstance(w, tk.Toplevel):
+            for child in w.winfo_children():
+                if getattr(child, 'cget', lambda x: '')('text') == 'Apply':
+                    apply_btn = child
+                    break
+
+    assert apply_btn is not None
+    apply_btn.invoke()
+
+    assert app.table.get_children() == (first.id, second.id)
+
+    app.destroy()
+
+
+def test_form_edit_duplicate_warning_can_cancel_edit(tmp_path, monkeypatch):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    first = Record(field1="soft drink", field2="first")
+    second = Record(field1="soft drink", field2="second")
+    for record in (first, second):
+        app.data_manager.save(record)
+    app.load_records()
+
+    asked: dict[str, str] = {}
+
+    def fake_askyesno(title, message):
+        asked["title"] = title
+        asked["message"] = message
+        return False
+
+    monkeypatch.setattr("gp_data.ui.app.messagebox.askyesno", fake_askyesno)
+
+    app.table.selection_set(first.id)
+    app.on_edit()
+    app.form.entries['field2'].delete(0, tk.END)
+    app.form.entries['field2'].insert(0, 'second')
+
+    apply_btn = None
+    for w in app.winfo_children():
+        if isinstance(w, tk.Toplevel):
+            for child in w.winfo_children():
+                if getattr(child, 'cget', lambda x: '')('text') == 'Apply':
+                    apply_btn = child
+                    break
+
+    assert apply_btn is not None
+    apply_btn.invoke()
+
+    rows = app.data_manager.load_all()
+    first_row = next(row for row in rows if row.id == first.id)
+    assert first_row.field2 == 'First'
+    assert asked["title"] == "Duplicate item"
+    assert "already exists" in asked["message"]
+    assert app.table.get_selected_id() == second.id
+
+    for w in app.winfo_children():
+        if isinstance(w, tk.Toplevel):
+            w.destroy()
+    app.destroy()

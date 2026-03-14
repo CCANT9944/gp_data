@@ -47,6 +47,25 @@ def calculate_gp70(cost: Optional[float]) -> Optional[float]:
         return None
 
 
+def calculate_field6(total_value, units_in) -> Optional[float]:
+    """Return the computed cost/unit value or ``None`` if not computable."""
+    try:
+        total = _parse_optional_float(total_value, "field3")
+    except ValueError:
+        return None
+    if total is None:
+        return None
+    if units_in is None or units_in == "":
+        return None
+    try:
+        units = float(str(units_in).replace(",", "").strip())
+    except Exception:
+        return None
+    if units == 0:
+        return None
+    return total / units
+
+
 def _parse_optional_float(value, field_name: str) -> Optional[float]:
     if value is None or value == "":
         return None
