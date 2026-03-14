@@ -16,3 +16,38 @@ def test_load_defaults_when_missing(tmp_path: Path):
     p = tmp_path / "settings.json"
     loaded = settings.load_labels(p)
     assert loaded == ["Field 1", "Field 2", "Field 3", "Field 4", "Field 5", "Field 6", "Field 7"]
+
+
+def test_save_and_load_column_order(tmp_path: Path):
+    p = tmp_path / "settings.json"
+    order = ["field3", "field1", "field2", "field7", "field6", "field4", "field5", "gp70", "gp", "cash_margin"]
+    settings.save_column_order(order, p)
+    loaded = settings.load_column_order(p)
+    assert loaded == order
+
+
+def test_load_settings_backfills_missing_columns(tmp_path: Path):
+    p = tmp_path / "settings.json"
+    settings.save_settings({"labels": ["A", "B", "C", "D", "E", "F", "G"], "column_order": ["field3", "field1"]}, p)
+    loaded = settings.load_settings(p)
+    assert loaded["column_order"][:2] == ["field3", "field1"]
+    assert loaded["column_order"][-1] == "gp70"
+
+
+def test_save_and_load_column_widths(tmp_path: Path):
+    p = tmp_path / "settings.json"
+    widths = {"field1": 220, "field3": 95, "gp": 110}
+    settings.save_column_widths(widths, p)
+    loaded = settings.load_column_widths(p)
+    assert loaded["field1"] == 220
+    assert loaded["field3"] == 95
+    assert loaded["gp"] == 110
+    assert loaded["field2"] == 140
+
+
+def test_save_and_load_visible_columns(tmp_path: Path):
+    p = tmp_path / "settings.json"
+    visible = ["field1", "field3", "field7", "gp"]
+    settings.save_visible_columns(visible, p)
+    loaded = settings.load_visible_columns(p)
+    assert loaded == visible

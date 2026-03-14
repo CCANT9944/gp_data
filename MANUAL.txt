@@ -1,0 +1,219 @@
+GP DATA MANAGER MANUAL
+
+This file explains how the program works today in plain language.
+
+1. WHAT THE PROGRAM DOES
+
+GP Data Manager stores records such as products, drinks, items, or stock lines.
+You can:
+
+- add a new item
+- edit an existing item
+- search items
+- back up your data
+- restore old backups
+- export data to CSV
+- track recent numeric changes for an item
+- change table layout and keep it for next time
+
+
+2. HOW TO START IT
+
+Open a terminal in the gp_data folder and run:
+
+python main.py
+
+This opens the desktop window.
+
+
+3. THE MAIN SCREEN
+
+The window has 2 main parts:
+
+- Left side: the input form
+- Right side: the table of saved records
+
+The form is used for adding and editing.
+The table is used for browsing, searching, selecting, and inline editing.
+
+
+4. ADDING A RECORD
+
+Fill in the fields on the left and click Add.
+
+Important notes:
+
+- Field 6 is calculated automatically from Field 3 and Field 5 when possible.
+- GP, CASH MARGIN, and WITH 70% GP are calculated fields.
+- Some text fields are automatically title-cased.
+
+
+5. EDITING A RECORD
+
+There are 2 ways to edit.
+
+Method A: Edit selected
+
+1. Click a row in the table.
+2. Click Edit selected.
+3. Change the values in the form.
+4. Click Apply.
+
+Method B: Inline edit
+
+1. Double-click a table cell.
+2. Type a new value.
+3. Press Enter.
+
+This is useful for quick changes.
+
+
+6. SEARCHING
+
+Use the search box near the top.
+
+- Filtering happens live while you type.
+- The table only shows matching rows.
+- Export uses the rows currently displayed in the table.
+
+
+7. CHANGES BOX
+
+The Changes box is on the form side.
+
+It shows recent numeric changes for the selected item.
+
+Examples of tracked changes:
+
+- price change
+- menu price change
+- cost/unit change
+
+How to use it:
+
+1. Select an item.
+2. Change one of its numeric values.
+3. Select the item again if needed.
+4. Read the Changes box.
+
+What it shows:
+
+- the selected item name/type
+- what field changed
+- old value -> new value
+- time of change
+
+It now keeps multiple recent numeric changes for the same item.
+If there are several entries, use the scrollbar in the box.
+
+
+8. TABLE LAYOUT
+
+You can customize the table.
+
+Reorder columns:
+
+1. Click and hold a column header.
+2. Drag it left or right.
+3. Release it.
+
+Resize columns:
+
+1. Drag the edge of a column header.
+
+Hide columns:
+
+1. Click Columns.
+2. Untick the columns you do not want.
+3. Click Apply.
+
+The app remembers:
+
+- column order
+- column widths
+- hidden/visible columns
+
+So when you close and reopen the program, the layout comes back.
+
+
+9. BACKUPS
+
+The program creates timestamped backups.
+
+You can also manage backups from the UI:
+
+1. Click Manage backups.
+2. Select a backup.
+3. Preview it.
+4. Restore or delete it.
+
+Restore backup button:
+
+- restores from the latest simple backup when available
+
+Important:
+
+- restoring overwrites current storage
+- a pre-restore backup is made before restore completes
+
+
+10. EXPORTING
+
+Click Export CSV.
+
+If the table is filtered by search, only the currently shown rows are exported.
+
+
+11. COMMAND LINE
+
+The program also has CLI commands.
+
+Examples:
+
+python main.py list
+python main.py backup
+python main.py restore
+python main.py export output.csv
+
+
+12. SETTINGS THAT ARE SAVED
+
+The program saves settings in settings.json.
+
+This includes:
+
+- field labels
+- column order
+- column widths
+- visible columns
+
+
+13. IF SOMETHING LOOKS WRONG
+
+If the table or form looks odd:
+
+- close the program and open it again
+- check that the item is selected before reading the Changes box
+- check the scrollbar in the Changes box if only one entry is visible
+
+If data looks wrong after an edit:
+
+- open Manage backups
+- preview recent backups
+- restore the needed one
+
+
+14. CURRENT LIMITATIONS
+
+- The Changes box shows recent numeric changes, not an unlimited full audit log.
+- At least one table column must stay visible.
+- GUI tests may be skipped on systems without Tk support, but the app itself still targets Tkinter.
+
+
+15. QUICK DAILY WORKFLOW
+
+1. Start the app with python main.py
+2. Search or select an item
+3. Edit inline or with Edit selected
+4. Check the Changes box
+5. Export or manage backups when needed

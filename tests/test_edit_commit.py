@@ -7,12 +7,9 @@ from gp_data.models import Record
 
 def test_edit_commit_updates_storage(tmp_path):
     try:
-        root = tk.Tk()
+        app = GPDataApp(storage_path=tmp_path / "data.db")
     except tk.TclError:
         pytest.skip("Tk not available in this environment")
-    root.withdraw()
-
-    app = GPDataApp(storage_path=tmp_path / "data.db")
     app.withdraw()
 
     # add a record
@@ -45,6 +42,17 @@ def test_edit_commit_updates_storage(tmp_path):
     assert len(rows) == 1
     assert rows[0].field2 == 'Updated'  # title-cased by model
     assert rows[0].field3 == 12.0
+    assert rows[0].last_numeric_field == 'field3'
+    assert rows[0].last_numeric_from == pytest.approx(10.0)
+    assert rows[0].last_numeric_to == pytest.approx(12.0)
+    assert rows[0].last_numeric_changed_at is not None
+    summary = app.form.last_numeric_change_var.get()
+    assert app.form.labels[0] in summary
+    assert 'Orig' in summary
+    assert app.form.labels[1] in summary
+    assert 'Updated' in summary
+    assert app.form.labels[2] in summary
+    assert '£10.00' in summary
+    assert '£12.00' in summary
 
     app.destroy()
-    root.destroy()

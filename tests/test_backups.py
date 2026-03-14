@@ -1,7 +1,7 @@
 from pathlib import Path
 import time
 
-from gp_data.data_manager import DataManager
+from gp_data.data_manager import CSVDataManager, DataManager
 from gp_data.models import Record
 
 
@@ -29,3 +29,19 @@ def test_create_timestamped_backups_and_rotation(tmp_path: Path):
     assert len(files) == 3
     # newest backup should be present
     assert files[-1].exists()
+
+
+def test_csv_restore_from_timestamped_backup(tmp_path: Path):
+    p = tmp_path / "data.csv"
+    dm = CSVDataManager(p)
+    dm.save(Record(field1="one"))
+
+    backup = dm.create_timestamped_backup()
+
+    dm.save(Record(field1="two"))
+    pre = dm.restore_from_backup(backup)
+
+    assert pre.exists()
+    rows = dm.load_all()
+    assert any(r.field1.lower() == "one" for r in rows)
+    assert not any(r.field1.lower() == "two" for r in rows)

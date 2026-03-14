@@ -1,10 +1,26 @@
+from datetime import datetime
 import tkinter as tk
 import tkinter.messagebox as mb
 import pytest
 
 from gp_data.ui import GPDataApp
+from gp_data.ui.app import _build_backup_preview
 from gp_data.data_manager import DataManager
 from gp_data.models import Record
+
+
+def _backup_label(path):
+    stem = path.name[:-4]
+    base, _, stamp = stem.rpartition('.')
+    dt = datetime.strptime(stamp, "%Y%m%dT%H%M%S%fZ")
+    return f"{dt.strftime('%Y-%m-%d %H:%M:%S.%f')} UTC - {base}"
+
+
+def _find_backup_index(labels, expected: str):
+    for idx, label in enumerate(labels):
+        if label == expected:
+            return idx
+    return None
 
 
 def test_manage_backups_dialog_lists_and_allows_delete_and_restore(tmp_path):
@@ -41,12 +57,9 @@ def test_manage_backups_dialog_lists_and_allows_delete_and_restore(tmp_path):
     lb = _find(dlg, tk.Listbox)
     assert lb is not None
 
-# determine index for b1 in the listbox and select it
+    # determine index for b1 in the listbox and select it
     names = lb.get(0, 'end')
-    try:
-        idx_b1 = names.index(b1.name)
-    except ValueError:
-        idx_b1 = None
+    idx_b1 = _find_backup_index(names, _backup_label(b1))
     assert idx_b1 is not None
     lb.selection_clear(0, 'end')
     lb.selection_set(idx_b1)
@@ -75,11 +88,11 @@ def test_manage_backups_dialog_lists_and_allows_delete_and_restore(tmp_path):
         delete_btn.invoke()
         # UI may remove the entry or the file itself may be deleted; accept either
         names_after = lb.get(0, 'end')
-        assert (b1.name not in names_after) or (not b1.exists())
+        assert (len(names_after) < len(names)) or (not b1.exists())
 
         # select the remaining (newest) backup and restore it
         names = lb.get(0, 'end')
-        idx_b2 = names.index(b2.name)
+        idx_b2 = _find_backup_index(names, _backup_label(b2))
         lb.selection_clear(0, 'end')
         lb.selection_set(idx_b2)
         lb.event_generate('<<ListboxSelect>>')
@@ -93,3 +106,16 @@ def test_manage_backups_dialog_lists_and_allows_delete_and_restore(tmp_path):
 
     dlg.destroy()
     app.destroy()
+
+
+def test_build_backup_preview_for_sqlite_backup(tmp_path):
+    p = tmp_path / "data.db"
+    dm = DataManager(p)
+    dm.save(Record(field1='one', field2='first'))
+    backup = dm.create_timestamped_backup()
+
+    preview = _build_backup_preview(backup)
+
+    assert "Type: SQLite backup" in preview
+    assert "Records: 1" in preview
+    assert "one" in preview.lower()

@@ -4,7 +4,6 @@ import pytest
 
 
 GUI_TEST_FILES = {
-    "test_backfill.py",
     "test_edit_commit.py",
     "test_enter_submit.py",
     "test_field1_capitalize.py",

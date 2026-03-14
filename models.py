@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 from datetime import datetime
 from typing import Optional
 import uuid
@@ -46,6 +47,30 @@ def calculate_gp70(cost: Optional[float]) -> Optional[float]:
         return None
 
 
+def _parse_optional_float(value, field_name: str) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        s = value.replace("£", "").replace(",", "").strip()
+        if s == "" or s.upper() == "N/A":
+            return None
+        try:
+            return float(s)
+        except Exception:
+            raise ValueError(f"{field_name} must be a number or empty")
+    try:
+        return float(value)
+    except Exception:
+        raise ValueError(f"{field_name} must be a number or empty")
+
+
+class NumericChange(BaseModel):
+    field_name: str
+    from_value: Optional[float] = None
+    to_value: Optional[float] = None
+    changed_at: datetime
+
+
 
 class Record(BaseModel):
     """Pydantic v2-style Record model for the five input fields.
@@ -67,6 +92,11 @@ class Record(BaseModel):
     field6: Optional[float] = None
     field7: Optional[float] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(__import__('datetime').timezone.utc))
+    last_numeric_field: Optional[str] = None
+    last_numeric_from: Optional[float] = None
+    last_numeric_to: Optional[float] = None
+    last_numeric_changed_at: Optional[datetime] = None
+    numeric_change_history: list[NumericChange] = Field(default_factory=list)
 
     @field_validator("field1", mode="before")
     def _normalize_field1(cls, v):
@@ -90,57 +120,37 @@ class Record(BaseModel):
 
     @field_validator("field3", mode="before")
     def _parse_field3(cls, v):
-        if v is None or v == "":
-            return None
-        # accept numeric, numeric strings, or currency-formatted strings (e.g. "£15.00")
-        if isinstance(v, str):
-            s = v.replace("£", "").replace(",", "").strip()
-            if s == "" or s.upper() == "N/A":
-                return None
-            try:
-                return float(s)
-            except Exception:
-                raise ValueError("field3 must be a number or empty")
-        try:
-            return float(v)
-        except Exception:
-            raise ValueError("field3 must be a number or empty")
+        return _parse_optional_float(v, "field3")
 
     @field_validator("field6", mode="before")
     def _parse_field6(cls, v):
-        if v is None or v == "":
-            return None
-        # accept numeric, numeric strings, or currency-formatted strings (e.g. "£2.50")
-        if isinstance(v, str):
-            s = v.replace("£", "").replace(",", "").strip()
-            if s == "" or s.upper() == "N/A":
-                return None
-            try:
-                return float(s)
-            except Exception:
-                raise ValueError("field6 must be a number or currency string")
-        try:
-            return float(v)
-        except Exception:
-            raise ValueError("field6 must be a number or empty")
+        return _parse_optional_float(v, "field6")
 
     @field_validator("field7", mode="before")
     def _parse_field7(cls, v):
+        return _parse_optional_float(v, "field7")
+
+    @field_validator("last_numeric_from", mode="before")
+    def _parse_last_numeric_from(cls, v):
+        return _parse_optional_float(v, "last_numeric_from")
+
+    @field_validator("last_numeric_to", mode="before")
+    def _parse_last_numeric_to(cls, v):
+        return _parse_optional_float(v, "last_numeric_to")
+
+    @field_validator("numeric_change_history", mode="before")
+    def _parse_numeric_change_history(cls, v):
         if v is None or v == "":
-            return None
-        # accept numeric, numeric strings, or currency-formatted strings
+            return []
         if isinstance(v, str):
-            s = v.replace("£", "").replace(",", "").strip()
-            if s == "" or s.upper() == "N/A":
-                return None
             try:
-                return float(s)
+                parsed = json.loads(v)
             except Exception:
-                raise ValueError("field7 must be a number or currency string")
-        try:
-            return float(v)
-        except Exception:
-            raise ValueError("field7 must be a number or empty")
+                return []
+            return parsed if isinstance(parsed, list) else []
+        if isinstance(v, list):
+            return v
+        return []
 
     @property
     def gp(self) -> float | None:
@@ -176,6 +186,19 @@ class Record(BaseModel):
         ca = d.get("created_at")
         if isinstance(ca, datetime):
             d["created_at"] = ca.isoformat()
+        last_changed = d.get("last_numeric_changed_at")
+        if isinstance(last_changed, datetime):
+            d["last_numeric_changed_at"] = last_changed.isoformat()
+        history = d.get("numeric_change_history") or []
+        d["numeric_change_history"] = json.dumps([
+            {
+                "field_name": entry["field_name"],
+                "from_value": entry.get("from_value"),
+                "to_value": entry.get("to_value"),
+                "changed_at": entry["changed_at"].isoformat() if isinstance(entry.get("changed_at"), datetime) else entry.get("changed_at"),
+            }
+            for entry in history
+        ], ensure_ascii=False)
         return d
 
     @classmethod

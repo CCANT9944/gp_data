@@ -1,8 +1,12 @@
 import tkinter as tk
+from datetime import datetime, timezone
+from tkinter import ttk
 import pytest
 
+from gp_data import settings as settings_module
 from gp_data.ui import RecordTable, GPDataApp
-from gp_data.models import Record
+from gp_data.ui.table import ROW_TAG_EVEN, ROW_TAG_ODD, SEPARATOR_GLYPH, SEPARATOR_PREFIX, TABLE_HEADING_STYLE, TABLE_STYLE
+from gp_data.models import NumericChange, Record
 
 
 def test_record_table_hides_id_and_uses_iid():
@@ -16,6 +20,7 @@ def test_record_table_hides_id_and_uses_iid():
 
     # `id` should not be a visible column
     assert "id" not in table["columns"]
+    assert any(str(col).startswith(SEPARATOR_PREFIX) for col in table["columns"])
 
     # insert a record and ensure iid is the record.id
     r = Record(field1="alpha")
@@ -25,6 +30,7 @@ def test_record_table_hides_id_and_uses_iid():
     # selecting the row should return the record id
     table.selection_set(item)
     assert table.get_selected_id() == r.id
+    assert ROW_TAG_ODD in table.item(item)["tags"]
 
     # ensure table displays Field1 unchanged here (model capitalizes)
     assert r.field1 == "Alpha"
@@ -45,7 +51,168 @@ def test_record_table_hides_id_and_uses_iid():
         assert table.column(c)["anchor"] == "w"
         assert table.heading(c)["anchor"] == "w"
 
+    assert table.cget("style") == TABLE_STYLE
+    style = ttk.Style(table)
+    assert int(style.configure(TABLE_STYLE)["rowheight"]) == 30
+    assert int(style.configure(TABLE_STYLE)["borderwidth"]) == 2
+    assert int(style.configure(TABLE_HEADING_STYLE)["borderwidth"]) == 2
+    separator_cols = [col for col in table["columns"] if str(col).startswith(SEPARATOR_PREFIX)]
+    assert separator_cols
+    assert table.heading(separator_cols[0])["text"] == SEPARATOR_GLYPH
+
     root.destroy()
+
+
+def test_record_table_applies_alternating_row_tags():
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    root.withdraw()
+
+    table = RecordTable(root)
+    first = Record(field1="alpha")
+    second = Record(field1="beta")
+
+    first_id = table.insert_record(first)
+    second_id = table.insert_record(second)
+
+    assert ROW_TAG_ODD in table.item(first_id)["tags"]
+    assert ROW_TAG_EVEN in table.item(second_id)["tags"]
+    assert SEPARATOR_GLYPH in table.item(first_id)["values"]
+
+    root.destroy()
+
+
+def test_record_table_reorders_columns_and_calls_callback():
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    root.withdraw()
+
+    seen: list[list[str]] = []
+    table = RecordTable(root, on_column_order_changed=lambda order: seen.append(list(order)))
+
+    moved = table._move_data_column("field7", "field1")
+
+    assert moved is True
+    assert table.get_column_order()[0] == "field7"
+    assert seen[-1][0] == "field7"
+
+    root.destroy()
+
+
+def test_record_table_tracks_column_width_changes():
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    root.withdraw()
+
+    seen: list[dict[str, int]] = []
+    table = RecordTable(root, on_column_widths_changed=lambda widths: seen.append(dict(widths)))
+
+    table.column("field1", width=210)
+    table._notify_if_widths_changed()
+
+    assert seen
+    assert seen[-1]["field1"] == 210
+    assert table.get_column_widths()["field1"] == 210
+
+    root.destroy()
+
+
+def test_record_table_hides_columns_and_keeps_visible_order():
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    root.withdraw()
+
+    seen: list[list[str]] = []
+    table = RecordTable(root, on_visible_columns_changed=lambda columns: seen.append(list(columns)))
+
+    table.set_visible_columns(["field1", "field3", "gp"])
+
+    assert table.get_visible_columns() == ["field1", "field3", "gp"]
+    assert list(table.cget("displaycolumns")) == ["field1", f"{SEPARATOR_PREFIX}0", "field3", f"{SEPARATOR_PREFIX}1", "gp"]
+    assert seen[-1] == ["field1", "field3", "gp"]
+
+    root.destroy()
+
+
+def test_app_loads_saved_column_order(tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    settings_module.save_settings(
+        {
+            "labels": ["Type", "Name", "Price", "Quantity", "Units In", "Cost/Unit", "MENU PRICE"],
+            "column_order": ["field7", "field1", "field2", "field3", "field4", "field5", "field6", "gp", "cash_margin", "gp70"],
+        },
+        settings_path,
+    )
+    monkeypatch.setattr(settings_module, "DEFAULT_PATH", settings_path)
+
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    assert app.table.get_column_order()[0] == "field7"
+    assert app.table.heading("field7")["text"] == "MENU PRICE"
+
+    app.destroy()
+
+
+def test_app_loads_saved_column_widths(tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    settings_module.save_settings(
+        {
+            "labels": ["Type", "Name", "Price", "Quantity", "Units In", "Cost/Unit", "MENU PRICE"],
+            "column_order": ["field1", "field2", "field3", "field4", "field5", "field6", "field7", "gp", "cash_margin", "gp70"],
+            "column_widths": {"field1": 220, "field3": 104, "gp": 96},
+        },
+        settings_path,
+    )
+    monkeypatch.setattr(settings_module, "DEFAULT_PATH", settings_path)
+
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    assert int(app.table.column("field1", "width")) == 220
+    assert int(app.table.column("field3", "width")) == 104
+    assert int(app.table.column("gp", "width")) == 96
+
+    app.destroy()
+
+
+def test_app_loads_saved_visible_columns(tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    settings_module.save_settings(
+        {
+            "labels": ["Type", "Name", "Price", "Quantity", "Units In", "Cost/Unit", "MENU PRICE"],
+            "column_order": ["field1", "field2", "field3", "field4", "field5", "field6", "field7", "gp", "cash_margin", "gp70"],
+            "column_widths": {"field1": 220},
+            "visible_columns": ["field1", "field3", "field7"],
+        },
+        settings_path,
+    )
+    monkeypatch.setattr(settings_module, "DEFAULT_PATH", settings_path)
+
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    assert app.table.get_visible_columns() == ["field1", "field3", "field7"]
+    assert list(app.table.cget("displaycolumns")) == ["field1", f"{SEPARATOR_PREFIX}0", "field3", f"{SEPARATOR_PREFIX}1", "field7"]
+
+    app.destroy()
 
 
 def test_record_table_copy_and_delete(tmp_path):
@@ -109,3 +276,74 @@ def test_field6_autocompute_and_edgecases():
     assert str(inp.entries['field6'].cget('state')) == 'readonly'
 
     root.destroy()
+
+
+def test_form_shows_existing_last_numeric_change(tmp_path):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    changed_at = datetime(2026, 3, 14, 12, 30, tzinfo=timezone.utc)
+    record = Record(
+        field1="alpha",
+        field2="house",
+        field3=10.0,
+        last_numeric_field="field7",
+        last_numeric_from=4.0,
+        last_numeric_to=5.0,
+        last_numeric_changed_at=changed_at,
+        numeric_change_history=[
+            NumericChange(field_name="field3", from_value=3.0, to_value=10.0, changed_at=datetime(2026, 3, 13, 18, 0, tzinfo=timezone.utc)),
+            NumericChange(field_name="field7", from_value=4.0, to_value=5.0, changed_at=changed_at),
+        ],
+    )
+    app.data_manager.save(record)
+    app.load_records()
+    app.table.selection_set(record.id)
+    app.on_edit()
+
+    summary = app.form.last_numeric_change_var.get()
+    assert app.form.labels[0] in summary
+    assert 'Alpha' in summary
+    assert app.form.labels[1] in summary
+    assert 'House' in summary
+    assert app.form.labels[2] in summary
+    assert '£3.00' in summary
+    assert '£10.00' in summary
+    assert app.form.labels[6] in summary
+    assert '£4.00' in summary
+    assert '£5.00' in summary
+    assert '2026-03-14 12:30:00 UTC' in summary
+
+    for window in app.winfo_children():
+        if isinstance(window, tk.Toplevel):
+            window.destroy()
+    app.destroy()
+
+
+def test_form_shows_selected_item_when_no_changes_exist(tmp_path):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    record = Record(field1="lager", field2="house")
+    app.data_manager.save(record)
+    app.load_records()
+    app.table.selection_set(record.id)
+    app.on_edit()
+
+    summary = app.form.last_numeric_change_var.get()
+    assert app.form.labels[0] in summary
+    assert 'Lager' in summary
+    assert app.form.labels[1] in summary
+    assert 'House' in summary
+    assert 'No changes recorded' in summary
+
+    for window in app.winfo_children():
+        if isinstance(window, tk.Toplevel):
+            window.destroy()
+    app.destroy()

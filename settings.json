@@ -7,5 +7,39 @@
     "Units In",
     "Cost/Unit",
     "MENU PRICE"
+  ],
+  "column_order": [
+    "field1",
+    "field2",
+    "field3",
+    "field4",
+    "field5",
+    "field6",
+    "field7",
+    "gp",
+    "cash_margin",
+    "gp70"
+  ],
+  "column_widths": {
+    "field1": 67,
+    "field2": 122,
+    "field3": 90,
+    "field4": 52,
+    "field5": 56,
+    "field6": 82,
+    "field7": 88,
+    "gp": 62,
+    "cash_margin": 99,
+    "gp70": 110
+  },
+  "visible_columns": [
+    "field1",
+    "field2",
+    "field3",
+    "field6",
+    "field7",
+    "gp",
+    "cash_margin",
+    "gp70"
   ]
 }
