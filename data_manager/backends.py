@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 import shutil
 import sqlite3
 from datetime import datetime, timezone
@@ -9,7 +10,11 @@ from typing import List, Optional
 
 from ..models import NumericChange, Record
 from ..settings import load_labels
+from . import backup_ops
 from .constants import FIELDNAMES
+
+
+LOGGER = logging.getLogger(__name__)
 
 TRACKED_NUMERIC_FIELDS = ("field7", "field3", "field6")
 MAX_NUMERIC_CHANGE_HISTORY = 8
@@ -181,49 +186,19 @@ class CSVDataManager:
         shutil.move(str(tmp), str(self.path))
 
     def restore_backup(self) -> Path:
-        bak = self.path.with_name(self.path.name + ".bak")
-        if not bak.exists():
-            raise FileNotFoundError("Backup file not found")
-        pre = self.path.with_name(self.path.name + ".pre_restore.bak")
-        shutil.copyfile(str(self.path), str(pre))
-        shutil.copyfile(str(bak), str(self.path))
-        return pre
+        return backup_ops.restore_backup(self.path)
 
     def create_timestamped_backup(self, keep: int = 14) -> Path:
-        backup_dir = self.path.parent / "backups"
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%dT%H%M%S%fZ")
-        dest = backup_dir / f"{self.path.name}.{ts}.bak"
-        shutil.copyfile(str(self.path), str(dest))
-
-        pattern = f"{self.path.name}.*.bak"
-        files = sorted(backup_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
-        for old in files[keep:]:
-            try:
-                old.unlink()
-            except Exception:
-                pass
-        return dest
+        return backup_ops.create_timestamped_backup(self.path, keep=keep)
 
     def list_backups(self) -> list[Path]:
-        backup_dir = self.path.parent / "backups"
-        if not backup_dir.exists():
-            return []
-        return sorted(backup_dir.glob(f"{self.path.name}.*.bak"), key=lambda p: p.stat().st_mtime, reverse=True)
+        return backup_ops.list_backups(self.path)
 
     def delete_backup(self, backup: Path) -> None:
-        try:
-            backup.unlink()
-        except Exception:
-            pass
+        backup_ops.delete_backup(backup)
 
     def restore_from_backup(self, backup: Path) -> Path:
-        if not backup.exists():
-            raise FileNotFoundError("Specified backup not found")
-        pre = self.path.with_name(self.path.name + ".pre_restore.bak")
-        shutil.copyfile(str(self.path), str(pre))
-        shutil.copyfile(str(backup), str(self.path))
-        return pre
+        return backup_ops.restore_from_backup(self.path, backup)
 
     def save(self, record: Record) -> Record:
         records = self.load_all()
@@ -307,8 +282,8 @@ class SQLiteDataManager:
         if self._conn is not None:
             try:
                 self._conn.close()
-            except Exception:
-                pass
+            except sqlite3.Error:
+                LOGGER.debug("Unable to close SQLite connection cleanly", exc_info=True)
         self._conn = None
 
     def ensure_storage(self) -> None:
@@ -334,50 +309,19 @@ class SQLiteDataManager:
         self._conn.commit()
 
     def restore_backup(self) -> Path:
-        bak = self.path.with_name(self.path.name + ".bak")
-        if not bak.exists():
-            raise FileNotFoundError("Backup file not found")
-        pre = self.path.with_name(self.path.name + ".pre_restore.bak")
-        shutil.copyfile(str(self.path), str(pre))
-        shutil.copyfile(str(bak), str(self.path))
-        self._reset_conn()
-        return pre
+        return backup_ops.restore_backup(self.path, after_restore=self._reset_conn)
 
     def create_timestamped_backup(self, keep: int = 14) -> Path:
-        backup_dir = self.path.parent / "backups"
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%dT%H%M%S%fZ")
-        dest = backup_dir / f"{self.path.name}.{ts}.bak"
-        shutil.copyfile(str(self.path), str(dest))
-        pattern = f"{self.path.name}.*.bak"
-        files = sorted(backup_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
-        for old in files[keep:]:
-            try:
-                old.unlink()
-            except Exception:
-                pass
-        return dest
+        return backup_ops.create_timestamped_backup(self.path, keep=keep)
 
     def list_backups(self) -> list[Path]:
-        backup_dir = self.path.parent / "backups"
-        if not backup_dir.exists():
-            return []
-        return sorted(backup_dir.glob(f"{self.path.name}.*.bak"), key=lambda p: p.stat().st_mtime, reverse=True)
+        return backup_ops.list_backups(self.path)
 
     def delete_backup(self, backup: Path) -> None:
-        try:
-            backup.unlink()
-        except Exception:
-            pass
+        backup_ops.delete_backup(backup)
 
     def restore_from_backup(self, backup: Path) -> Path:
-        if not backup.exists():
-            raise FileNotFoundError("Specified backup not found")
-        pre = self.path.with_name(self.path.name + ".pre_restore.bak")
-        shutil.copyfile(str(self.path), str(pre))
-        shutil.copyfile(str(backup), str(self.path))
-        self._reset_conn()
-        return pre
+        return backup_ops.restore_from_backup(self.path, backup, after_restore=self._reset_conn)
 
     def save(self, record: Record) -> Record:
         self._ensure_conn()

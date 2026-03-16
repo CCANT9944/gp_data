@@ -55,3 +55,32 @@ def test_data_manager_tracks_last_numeric_change_in_csv(tmp_path: Path):
     assert len(rows[0].numeric_change_history) == 2
     assert rows[0].numeric_change_history[0].field_name == "field3"
     assert rows[0].numeric_change_history[1].field_name == "field7"
+
+
+def test_data_manager_find_duplicate_record(tmp_path: Path):
+    dm = DataManager(tmp_path / "data.db")
+
+    first = Record(field1="soft drink", field2="tonic")
+    second = Record(field1="spirit", field2="gin")
+    dm.save(first)
+    dm.save(second)
+
+    duplicate = dm.find_duplicate_record(Record(field1="Soft Drink", field2="Tonic"))
+    assert duplicate is not None
+    assert duplicate.id == first.id
+
+    same_record = dm.find_duplicate_record(Record(id=first.id, field1="Soft Drink", field2="Tonic"), exclude_id=first.id)
+    assert same_record is None
+
+    assert dm.duplicate_identity(Record(field1="  Soft Drink ", field2=" Tonic ")) == ("soft drink", "tonic")
+
+
+def test_data_manager_exposes_explicit_public_api(tmp_path: Path):
+    dm = DataManager(tmp_path / "data.db")
+
+    assert dm.path == tmp_path / "data.db"
+    dm.ensure_storage()
+    assert dm.load_all() == []
+
+    with pytest.raises(AttributeError):
+        getattr(dm, "missing_attribute")

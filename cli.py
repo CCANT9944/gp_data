@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from typing import Iterable, Optional
 
+from pydantic import ValidationError
+
 from .data_manager import DataManager
 from .ui import GPDataApp
 
@@ -76,17 +78,22 @@ def _handle_cleanup(base: Path) -> None:
         base / "data.csv.pre_restore.bak",
         base / "old.csv",
     ]
-    removed = []
+    removed: list[str] = []
+    failed: list[str] = []
     for path in files:
         try:
             if path.exists():
                 path.unlink()
                 removed.append(str(path))
-        except Exception:
-            pass
+        except FileNotFoundError:
+            continue
+        except OSError:
+            failed.append(str(path))
     if removed:
         print("removed:", ", ".join(removed))
-    else:
+    if failed:
+        print("unable to remove:", ", ".join(failed), file=sys.stderr)
+    if not removed and not failed:
         print("nothing to clean")
 
 
@@ -137,7 +144,7 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
             DataManager.migrate_from_csv(Path(args.src), Path(args.dest))
             print(f"migrated data from {args.src} to {args.dest}")
             return 0
-        except Exception as exc:
+        except (OSError, RuntimeError, ValueError, ValidationError) as exc:
             print("migration failed:", exc, file=sys.stderr)
             return 1
 

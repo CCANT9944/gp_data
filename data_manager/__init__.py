@@ -1,18 +1,37 @@
 from __future__ import annotations
 
+import logging
 import warnings
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Protocol
 
 from .backends import CSVDataManager, SQLiteDataManager
 from .constants import FIELDNAMES
+from .duplicates import DuplicateDetector
 
 DEFAULT_CSV = Path(__file__).resolve().parent.parent / "data.csv"
 DEFAULT_DB = Path(__file__).resolve().parent.parent / "data.db"
+LOGGER = logging.getLogger(__name__)
+
+
+class DataBackend(Protocol):
+    path: Path
+
+    def ensure_storage(self) -> None: ...
+    def load_all(self) -> list: ...
+    def save(self, record): ...
+    def update(self, id: str, record): ...
+    def delete(self, id: str) -> None: ...
+    def export_csv(self, dest: Path) -> None: ...
+    def restore_backup(self) -> Path: ...
+    def create_timestamped_backup(self, keep: int = 14) -> Path: ...
+    def list_backups(self) -> list[Path]: ...
+    def delete_backup(self, backup: Path) -> None: ...
+    def restore_from_backup(self, backup: Path) -> Path: ...
 
 
 class DataManager:
-    """Wrapper that selects backend based on file extension."""
+    """Stable app-facing API over the CSV and SQLite backends."""
 
     def __init__(self, path: Optional[Path] = None):
         if path is None:
@@ -26,13 +45,10 @@ class DataManager:
                         db_should_migrate = True
                     tmp._reset_conn()
                 except Exception:
+                    LOGGER.warning("Unable to inspect existing SQLite database; falling back to CSV migration", exc_info=True)
                     db_should_migrate = True
             if db_should_migrate and DEFAULT_CSV.exists():
                 warnings.warn("legacy CSV detected; migrating to SQLite database", UserWarning)
-                try:
-                    DEFAULT_DB.unlink()
-                except Exception:
-                    pass
                 DataManager.migrate_from_csv(DEFAULT_CSV, DEFAULT_DB)
             path = DEFAULT_DB
         else:
@@ -42,30 +58,66 @@ class DataManager:
             self._backend = CSVDataManager(path)
         else:
             self._backend = SQLiteDataManager(path)
+        self._duplicate_detector = DuplicateDetector(self.load_all)
 
-    def __getattr__(self, name):
-        return getattr(self._backend, name)
+    @property
+    def path(self) -> Path:
+        return self._backend.path
+
+    def ensure_storage(self) -> None:
+        self._backend.ensure_storage()
+
+    def load_all(self) -> list:
+        return self._backend.load_all()
+
+    def save(self, record):
+        return self._backend.save(record)
+
+    def update(self, id: str, record):
+        return self._backend.update(id, record)
+
+    def delete(self, id: str) -> None:
+        self._backend.delete(id)
+
+    def export_csv(self, dest: Path) -> None:
+        self._backend.export_csv(dest)
+
+    def restore_backup(self) -> Path:
+        return self._backend.restore_backup()
+
+    def create_timestamped_backup(self, keep: int = 14) -> Path:
+        return self._backend.create_timestamped_backup(keep=keep)
+
+    def list_backups(self) -> list[Path]:
+        return self._backend.list_backups()
+
+    def delete_backup(self, backup: Path) -> None:
+        self._backend.delete_backup(backup)
+
+    def restore_from_backup(self, backup: Path) -> Path:
+        return self._backend.restore_from_backup(backup)
+
+    def duplicate_identity(self, record):
+        return self._duplicate_detector.duplicate_identity(record)
+
+    def find_duplicate_record(self, record, exclude_id: str | None = None):
+        return self._duplicate_detector.find_duplicate_record(record, exclude_id=exclude_id)
 
     @staticmethod
     def migrate_from_csv(src: Path, dest: Path) -> None:
         src = Path(src)
         dest = Path(dest)
-        if dest.exists():
-            try:
-                dest.unlink()
-            except Exception:
-                pass
         csv_dm = CSVDataManager(src)
         rows = csv_dm.load_all()
         db_dm = SQLiteDataManager(dest)
-        for row in rows:
-            db_dm.save(row)
+        db_dm._write_all(rows)
 
 
 __all__ = [
     "CSVDataManager",
     "SQLiteDataManager",
     "DataManager",
+    "DuplicateDetector",
     "FIELDNAMES",
     "DEFAULT_CSV",
     "DEFAULT_DB",

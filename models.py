@@ -19,7 +19,7 @@ def calculate_gp(cost: Optional[float], menu_price: Optional[float]) -> Optional
         if float(menu_price) == 0:
             return None
         return 1 - (float(cost) * 1.2) / float(menu_price)
-    except Exception:
+    except (TypeError, ValueError, ZeroDivisionError):
         return None
 
 
@@ -29,7 +29,7 @@ def calculate_cash_margin(cost: Optional[float], menu_price: Optional[float]) ->
         return None
     try:
         return float(menu_price) - (float(cost) * 1.2)
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -43,7 +43,7 @@ def calculate_gp70(cost: Optional[float]) -> Optional[float]:
         return None
     try:
         return float(cost) * 100.0 / 30.0 * 1.2
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -59,7 +59,7 @@ def calculate_field6(total_value, units_in) -> Optional[float]:
         return None
     try:
         units = float(str(units_in).replace(",", "").strip())
-    except Exception:
+    except (TypeError, ValueError):
         return None
     if units == 0:
         return None
@@ -75,11 +75,11 @@ def _parse_optional_float(value, field_name: str) -> Optional[float]:
             return None
         try:
             return float(s)
-        except Exception:
+        except ValueError:
             raise ValueError(f"{field_name} must be a number or empty")
     try:
         return float(value)
-    except Exception:
+    except (TypeError, ValueError):
         raise ValueError(f"{field_name} must be a number or empty")
 
 
@@ -164,7 +164,7 @@ class Record(BaseModel):
         if isinstance(v, str):
             try:
                 parsed = json.loads(v)
-            except Exception:
+            except json.JSONDecodeError:
                 return []
             return parsed if isinstance(parsed, list) else []
         if isinstance(v, list):
@@ -191,15 +191,15 @@ class Record(BaseModel):
         # include derived, read-only metrics so they can be exported to CSV
         try:
             d["gp"] = None if self.gp is None else float(self.gp)
-        except Exception:
+        except (TypeError, ValueError):
             d["gp"] = None
         try:
             d["cash_margin"] = None if self.cash_margin is None else float(self.cash_margin)
-        except Exception:
+        except (TypeError, ValueError):
             d["cash_margin"] = None
         try:
             d["gp70"] = None if self.gp70 is None else float(self.gp70)
-        except Exception:
+        except (TypeError, ValueError):
             d["gp70"] = None
         # ensure created_at is JSON-friendly (ISO string)
         ca = d.get("created_at")

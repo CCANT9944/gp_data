@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import tkinter as tk
 from tkinter import ttk
 from typing import Callable, Sequence
@@ -20,6 +21,7 @@ ROW_TAG_ODD = "row-odd"
 ROW_TAG_EVEN = "row-even"
 ROW_ODD_BACKGROUND = "#ffffff"
 ROW_EVEN_BACKGROUND = "#e7edf5"
+LOGGER = logging.getLogger(__name__)
 
 
 def _is_separator_column(name: str) -> bool:
@@ -117,7 +119,7 @@ class RecordTable(ttk.Treeview):
             try:
                 self._on_visible_columns_changed(self.get_visible_columns())
             except Exception:
-                pass
+                LOGGER.exception("Visible-columns callback failed")
 
     def set_column_order(self, columns: Sequence[str]) -> None:
         new_order = [column for column in columns if column in self._cols]
@@ -157,7 +159,7 @@ class RecordTable(ttk.Treeview):
         for col in self._cols:
             try:
                 widths[col] = int(self.column(col, "width"))
-            except Exception:
+            except (tk.TclError, ValueError):
                 width, _anchor = self._column_presentation(col)
                 widths[col] = width
         return widths
@@ -177,7 +179,7 @@ class RecordTable(ttk.Treeview):
             try:
                 self._on_column_widths_changed(widths)
             except Exception:
-                pass
+                LOGGER.exception("Column-width callback failed")
 
     def _apply_column_layout(self, reload_rows: bool = False) -> None:
         records = list(self._records)
@@ -241,7 +243,7 @@ class RecordTable(ttk.Treeview):
             try:
                 self._on_column_order_changed(self.get_column_order())
             except Exception:
-                pass
+                LOGGER.exception("Column-order callback failed")
         return True
 
     def _on_button_press(self, event) -> None:
@@ -272,8 +274,8 @@ class RecordTable(ttk.Treeview):
             top = self.winfo_toplevel()
             top.clipboard_clear()
             top.clipboard_append(sel)
-        except Exception:
-            pass
+        except tk.TclError:
+            LOGGER.debug("Unable to copy record id to clipboard", exc_info=True)
 
     def _on_double_click(self, event) -> None:
         try:
@@ -291,15 +293,15 @@ class RecordTable(ttk.Treeview):
             if col_name == "field6":
                 return
             self.start_cell_edit(row, col_name)
-        except Exception:
-            pass
+        except (tk.TclError, ValueError):
+            LOGGER.debug("Unable to start inline cell edit from double click", exc_info=True)
 
     def start_cell_edit(self, iid: str, col: str) -> None:
         try:
             if getattr(self, "_editor", None):
                 self._editor.destroy()
-        except Exception:
-            pass
+        except tk.TclError:
+            LOGGER.debug("Unable to destroy previous cell editor", exc_info=True)
 
         if col == "field6":
             return
@@ -318,13 +320,13 @@ class RecordTable(ttk.Treeview):
             s = cur.replace("£", "").replace(",", "").strip()
             try:
                 cur = str(float(s))
-            except Exception:
-                pass
+            except (TypeError, ValueError):
+                LOGGER.debug("Unable to normalize editor value for %s", col, exc_info=True)
 
         editor = ttk.Entry(self)
         try:
             editor.place(x=x, y=y, width=w, height=h)
-        except Exception:
+        except tk.TclError:
             editor.pack()
         editor.insert(0, cur)
         editor.focus_set()
@@ -336,36 +338,36 @@ class RecordTable(ttk.Treeview):
         self._editing = (iid, col)
 
     def _commit_edit(self, event=None) -> None:
+        if not getattr(self, "_editor", None) or not getattr(self, "_editing", None):
+            return
+        iid, col = self._editing
+        new_val = self._editor.get()
         try:
-            if not getattr(self, "_editor", None) or not getattr(self, "_editing", None):
-                return
-            iid, col = self._editing
-            new_val = self._editor.get()
+            self._editor.destroy()
+        except tk.TclError:
+            LOGGER.debug("Unable to destroy inline editor during commit", exc_info=True)
+        self._editor = None
+        self._editing = None
+        if callable(self._on_commit):
             try:
-                self._editor.destroy()
+                self._on_commit(iid, col, new_val)
             except Exception:
-                pass
-            self._editor = None
-            self._editing = None
-            if callable(self._on_commit):
-                try:
-                    self._on_commit(iid, col, new_val)
-                except Exception as exc:
-                    print("commit callback error:", exc)
-            else:
-                cur_vals = list(self.item(iid)["values"])
-                idx = self._display_cols.index(col)
-                cur_vals[idx] = new_val
-                self.item(iid, values=cur_vals)
-        except Exception:
-            pass
+                LOGGER.exception("Inline edit commit callback failed")
+            return
+        try:
+            cur_vals = list(self.item(iid)["values"])
+            idx = self._display_cols.index(col)
+            cur_vals[idx] = new_val
+            self.item(iid, values=cur_vals)
+        except tk.TclError:
+            LOGGER.debug("Unable to apply inline edit locally", exc_info=True)
 
     def _cancel_edit(self, event=None) -> None:
         try:
             if getattr(self, "_editor", None):
                 self._editor.destroy()
-        except Exception:
-            pass
+        except tk.TclError:
+            LOGGER.debug("Unable to destroy inline editor during cancel", exc_info=True)
         self._editor = None
         self._editing = None
 
@@ -388,12 +390,12 @@ class RecordTable(ttk.Treeview):
         if col == "gp":
             try:
                 return f"{float(val) * 100:.2f}%"
-            except Exception:
+            except (TypeError, ValueError):
                 return str(val)
         if col in ("field3", "field6", "field7", "cash_margin", "gp70"):
             try:
                 return f"\u00A3{float(val):.2f}"
-            except Exception:
+            except (TypeError, ValueError):
                 return str(val)
         if isinstance(val, float):
             return ("{:.6f}".format(val)).rstrip("0").rstrip(".")

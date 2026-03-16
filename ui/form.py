@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import logging
 
 import tkinter as tk
 from datetime import datetime, timezone
@@ -8,6 +9,22 @@ from typing import Callable, Sequence
 
 from ..models import calculate_field6
 from ..settings import save_labels
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _focus_widget(widget: tk.Misc | None) -> None:
+    if widget is None:
+        return
+    try:
+        widget.focus_set()
+        widget.focus_force()
+    except tk.TclError:
+        try:
+            widget.focus_set()
+        except tk.TclError:
+            LOGGER.debug("Unable to focus widget", exc_info=True)
 
 
 class InputForm(ttk.Frame):
@@ -104,11 +121,12 @@ class InputForm(ttk.Frame):
         self.changes_text.insert("1.0", text)
         self.changes_text.config(state="disabled")
 
-    def get_values(self) -> dict:
-        try:
-            self.recalc_field6()
-        except Exception:
-            pass
+    def get_values(self, recalculate: bool = True) -> dict:
+        if recalculate:
+            try:
+                self.recalc_field6()
+            except tk.TclError:
+                LOGGER.debug("Unable to recalculate field6 while reading form values", exc_info=True)
 
         out: dict = {}
         for key, entry in self.entries.items():
@@ -120,7 +138,7 @@ class InputForm(ttk.Frame):
                     s = str(val).replace("£", "").replace(",", "").strip()
                     try:
                         out[key] = float(s)
-                    except Exception:
+                    except (TypeError, ValueError):
                         out[key] = val
             else:
                 out[key] = val
@@ -156,21 +174,21 @@ class InputForm(ttk.Frame):
             new = txt[:start_ws] + titlecased
             try:
                 pos = ent.index(tk.INSERT)
-            except Exception:
+            except tk.TclError:
                 pos = len(new)
             ent.delete(0, tk.END)
             ent.insert(0, new)
             try:
                 ent.icursor(min(pos, len(new)))
-            except Exception:
-                pass
+            except tk.TclError:
+                LOGGER.debug("Unable to restore cursor position while capitalizing %s", field_name, exc_info=True)
 
     def _field_label_for(self, field_name: str | None) -> str:
         if not field_name or not field_name.startswith("field"):
             return "Unknown field"
         try:
             idx = int(field_name[5:]) - 1
-        except Exception:
+        except ValueError:
             return field_name
         if 0 <= idx < len(self.labels):
             return self.labels[idx]
@@ -181,7 +199,7 @@ class InputForm(ttk.Frame):
             return "empty"
         try:
             return f"£{float(value):.2f}"
-        except Exception:
+        except (TypeError, ValueError):
             return str(value)
 
     def _format_changed_at(self, value) -> str:
@@ -190,7 +208,7 @@ class InputForm(ttk.Frame):
         if isinstance(value, str):
             try:
                 value = datetime.fromisoformat(value)
-            except Exception:
+            except ValueError:
                 return value
         if isinstance(value, datetime):
             if value.tzinfo is not None:
@@ -212,7 +230,7 @@ class InputForm(ttk.Frame):
         if isinstance(history, str):
             try:
                 history = json.loads(history)
-            except Exception:
+            except json.JSONDecodeError:
                 history = []
         if not isinstance(history, list):
             history = []
@@ -272,8 +290,8 @@ class InputForm(ttk.Frame):
         self._set_last_numeric_change(data)
         try:
             self.recalc_field6()
-        except Exception:
-            pass
+        except tk.TclError:
+            LOGGER.debug("Unable to recalculate field6 after loading record values", exc_info=True)
         self._mark_clean()
 
     def recalc_field6(self) -> None:
@@ -289,20 +307,21 @@ class InputForm(ttk.Frame):
             self._set_field6_text(f"\u00A3{value:.2f}")
         try:
             self.recalc_metrics()
-        except Exception:
-            pass
+        except tk.TclError:
+            LOGGER.debug("Unable to refresh derived metrics", exc_info=True)
 
     def recalc_metrics(self) -> None:
         try:
-            vals = self.get_values()
-        except Exception:
+            vals = self.get_values(recalculate=False)
+        except tk.TclError:
+            LOGGER.debug("Unable to read values while recalculating metrics", exc_info=True)
             vals = {}
 
         def as_float(key):
             val = vals.get(key)
             try:
                 return None if val is None or val == "" else float(val)
-            except Exception:
+            except (TypeError, ValueError):
                 return None
 
         cost = as_float("field6")
@@ -310,29 +329,14 @@ class InputForm(ttk.Frame):
 
         from ..models import calculate_cash_margin, calculate_gp, calculate_gp70
 
-        gp_text = ""
-        try:
-            gp_val = calculate_gp(cost, menu)
-            if gp_val is not None:
-                gp_text = f"{gp_val * 100:.2f}%"
-        except Exception:
-            gp_text = ""
+        gp_val = calculate_gp(cost, menu)
+        gp_text = f"{gp_val * 100:.2f}%" if gp_val is not None else ""
 
-        cm_text = ""
-        try:
-            cm_val = calculate_cash_margin(cost, menu)
-            if cm_val is not None:
-                cm_text = f"\u00A3{cm_val:.2f}"
-        except Exception:
-            cm_text = ""
+        cm_val = calculate_cash_margin(cost, menu)
+        cm_text = f"\u00A3{cm_val:.2f}" if cm_val is not None else ""
 
-        gp70_text = ""
-        try:
-            gp70_val = calculate_gp70(cost)
-            if gp70_val is not None:
-                gp70_text = f"\u00A3{gp70_val:.2f}"
-        except Exception:
-            gp70_text = ""
+        gp70_val = calculate_gp70(cost)
+        gp70_text = f"\u00A3{gp70_val:.2f}" if gp70_val is not None else ""
 
         def _update_entry(key: str, text: str) -> None:
             try:
@@ -345,8 +349,8 @@ class InputForm(ttk.Frame):
                     ent.insert(0, text)
                     if prev == "readonly":
                         ent.config(state="readonly")
-            except Exception:
-                pass
+            except tk.TclError:
+                LOGGER.debug("Unable to update derived metric %s", key, exc_info=True)
 
         _update_entry("gp", gp_text)
         _update_entry("cash_margin", cm_text)
@@ -355,8 +359,8 @@ class InputForm(ttk.Frame):
     def _on_enter(self, event) -> None:
         try:
             self.recalc_field6()
-        except Exception:
-            pass
+        except tk.TclError:
+            LOGGER.debug("Unable to recalculate field6 on Enter key", exc_info=True)
 
         widget = getattr(event, "widget", None)
         if widget is None:
@@ -374,27 +378,16 @@ class InputForm(ttk.Frame):
             try:
                 self.on_submit()
             except Exception:
-                pass
+                LOGGER.exception("Form submit callback failed")
+        nxt = self.entries.get(next_key)
+        if nxt is None:
+            return "break"
+        _focus_widget(nxt)
+        self._last_focused = nxt
         try:
-            nxt = self.entries[next_key]
-            try:
-                nxt.focus_set()
-                nxt.focus_force()
-            except Exception:
-                try:
-                    nxt.focus_set()
-                except Exception:
-                    pass
-            try:
-                self._last_focused = nxt
-            except Exception:
-                pass
-            try:
-                nxt.icursor("end")
-            except Exception:
-                pass
-        except Exception:
-            pass
+            nxt.icursor("end")
+        except tk.TclError:
+            LOGGER.debug("Unable to move cursor to the end of %s", next_key, exc_info=True)
         return "break"
 
     def clear(self) -> None:
@@ -402,10 +395,7 @@ class InputForm(ttk.Frame):
         for entry in self.entries.values():
             entry.delete(0, tk.END)
         self._set_changes_text("No changes recorded")
-        try:
-            self._set_field6_text("")
-        except Exception:
-            pass
+        self._set_field6_text("")
         self._mark_clean()
 
     def rename_fields(self) -> None:
@@ -426,17 +416,17 @@ class InputForm(ttk.Frame):
                 self.grid_slaves(row=i, column=0)[0].config(text=new)
             try:
                 save_labels(self.labels)
-            except Exception:
-                pass
+            except (OSError, TypeError, ValueError):
+                LOGGER.warning("Unable to persist renamed field labels", exc_info=True)
             if callable(self.on_rename):
                 try:
                     self.on_rename(self.labels)
                 except Exception:
-                    pass
+                    LOGGER.exception("Rename callback failed")
             try:
                 self.recalc_field6()
-            except Exception:
-                pass
+            except tk.TclError:
+                LOGGER.debug("Unable to recalculate field6 after renaming labels", exc_info=True)
             win.destroy()
 
         ttk.Button(win, text="Apply", command=apply).grid(row=len(edits), column=0, columnspan=2, pady=6)

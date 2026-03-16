@@ -4,7 +4,7 @@ import tkinter.messagebox as mb
 import pytest
 
 from gp_data.ui import GPDataApp
-from gp_data.ui.app import _build_backup_preview
+from gp_data.ui.backup_dialog import _build_backup_preview
 from gp_data.data_manager import DataManager
 from gp_data.models import Record
 

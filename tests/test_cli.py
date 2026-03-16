@@ -100,3 +100,15 @@ def test_cli_migrate_overwrite(tmp_path: Path, capsys):
     assert "migrated" in out
     dm2 = DataManager(db_path)
     assert dm2.load_all()[0].field1.lower() == "two"
+
+
+def test_cli_migration_failure_returns_error(tmp_path: Path, capsys):
+    invalid_src = tmp_path / "src-dir"
+    invalid_src.mkdir()
+    db_path = tmp_path / "dest.db"
+
+    result = run_cli(["migrate", str(invalid_src), str(db_path)])
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert "migration failed:" in captured.err

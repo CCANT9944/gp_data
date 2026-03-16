@@ -50,3 +50,9 @@ def test_calculate_field6_helper():
     assert calculate_field6(20, 0) is None
     assert calculate_field6(20, "abc") is None
     assert calculate_field6("bad", 5) is None
+
+
+def test_record_ignores_malformed_numeric_change_history_string():
+    record = Record(field1="Alpha", numeric_change_history="{not-json")
+
+    assert record.numeric_change_history == []

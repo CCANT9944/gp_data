@@ -38,6 +38,15 @@ DEFAULT_SETTINGS = {
 DEFAULT_PATH = Path(__file__).parent / "settings.json"
 
 
+def _default_settings() -> dict:
+    return {
+        "labels": DEFAULT_LABELS.copy(),
+        "column_order": DEFAULT_COLUMN_ORDER.copy(),
+        "column_widths": dict(DEFAULT_COLUMN_WIDTHS),
+        "visible_columns": DEFAULT_VISIBLE_COLUMNS.copy(),
+    }
+
+
 def _ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -78,7 +87,7 @@ def _normalized_column_widths(raw_widths) -> dict[str, int]:
             continue
         try:
             width = int(value)
-        except Exception:
+        except (TypeError, ValueError):
             continue
         if width < 24:
             continue
@@ -105,22 +114,14 @@ def _normalized_visible_columns(raw_visible) -> list[str]:
 def load_settings(path: Optional[Path] = None) -> dict:
     path = Path(path) if path else DEFAULT_PATH
     if not path.exists():
-        return {
-            "labels": DEFAULT_LABELS.copy(),
-            "column_order": DEFAULT_COLUMN_ORDER.copy(),
-            "column_widths": dict(DEFAULT_COLUMN_WIDTHS),
-            "visible_columns": DEFAULT_VISIBLE_COLUMNS.copy(),
-        }
+        return _default_settings()
     try:
         with path.open("r", encoding="utf-8") as f:
             data = json.load(f)
-    except Exception:
-        return {
-            "labels": DEFAULT_LABELS.copy(),
-            "column_order": DEFAULT_COLUMN_ORDER.copy(),
-            "column_widths": dict(DEFAULT_COLUMN_WIDTHS),
-            "visible_columns": DEFAULT_VISIBLE_COLUMNS.copy(),
-        }
+    except (OSError, json.JSONDecodeError):
+        return _default_settings()
+    if not isinstance(data, dict):
+        return _default_settings()
 
     labels = _normalized_labels(data.get("labels", DEFAULT_LABELS))
     column_order = _normalized_column_order(data.get("column_order", DEFAULT_COLUMN_ORDER))

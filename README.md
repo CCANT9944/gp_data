@@ -130,6 +130,7 @@ python main.py cleanup
 - `models.py`: record model and calculated fields
 - `settings.json`: local saved labels and table layout preferences
 - `MANUAL.txt`: plain-language user guide
+- `BUG_HUNTING.md`: manual and test checklist for finding regressions
 
 ## Testing
 

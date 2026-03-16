@@ -51,3 +51,23 @@ def test_save_and_load_visible_columns(tmp_path: Path):
     settings.save_visible_columns(visible, p)
     loaded = settings.load_visible_columns(p)
     assert loaded == visible
+
+
+def test_load_settings_defaults_on_malformed_json(tmp_path: Path):
+    p = tmp_path / "settings.json"
+    p.write_text("{not-json", encoding="utf-8")
+
+    loaded = settings.load_settings(p)
+
+    assert loaded["labels"] == settings.DEFAULT_LABELS
+    assert loaded["column_order"] == settings.DEFAULT_COLUMN_ORDER
+
+
+def test_load_settings_defaults_when_json_root_is_not_an_object(tmp_path: Path):
+    p = tmp_path / "settings.json"
+    p.write_text('["not", "an", "object"]', encoding="utf-8")
+
+    loaded = settings.load_settings(p)
+
+    assert loaded["column_widths"] == settings.DEFAULT_COLUMN_WIDTHS
+    assert loaded["visible_columns"] == settings.DEFAULT_VISIBLE_COLUMNS

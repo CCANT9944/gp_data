@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import re
-import sqlite3
+import logging
 import tkinter as tk
-from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Sequence
@@ -11,7 +9,9 @@ from typing import Sequence
 from ..data_manager import CSVDataManager, DataManager
 from ..models import Record, calculate_field6
 from ..settings import load_settings, save_column_order, save_column_widths, save_visible_columns
+from .backup_dialog import open_manage_backups_dialog
 from .form import InputForm
+from .record_logic import filtered_records, record_matches_query
 from .table import METRIC_LABELS, RecordTable
 
 
@@ -19,95 +19,7 @@ NEW_MODE_BANNER_BG = "#e7f1ff"
 NEW_MODE_BANNER_FG = "#0b4f8a"
 EDIT_MODE_BANNER_BG = "#fff1c9"
 EDIT_MODE_BANNER_FG = "#7a4b00"
-
-
-def _format_backup_label(path: Path) -> str:
-    name = path.name
-    if not name.endswith(".bak"):
-        return name
-    stem = name[:-4]
-    base, sep, stamp = stem.rpartition(".")
-    if not sep:
-        return name
-    try:
-        dt = datetime.strptime(stamp, "%Y%m%dT%H%M%S%fZ")
-    except ValueError:
-        return name
-    return f"{dt.strftime('%Y-%m-%d %H:%M:%S.%f')} UTC - {base}"
-
-
-def _is_sqlite_backup(path: Path) -> bool:
-    try:
-        with path.open("rb") as handle:
-            return handle.read(16) == b"SQLite format 3\x00"
-    except OSError:
-        return False
-
-
-def _preview_metadata(path: Path) -> list[str]:
-    stat = path.stat()
-    modified = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-    return [
-        f"Name: {path.name}",
-        f"Saved: {modified}",
-        f"Size: {stat.st_size:,} bytes",
-    ]
-
-
-def _build_sqlite_backup_preview(path: Path) -> str:
-    lines = _preview_metadata(path)
-    lines.append("Type: SQLite backup")
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-        tables = [row[0] for row in cur.fetchall()]
-        lines.append(f"Tables: {', '.join(tables) if tables else '(none)'}")
-        if "records" not in tables:
-            return "\n".join(lines + ["", "No records table found in this backup."])
-
-        cur.execute("SELECT COUNT(*) FROM records")
-        count = cur.fetchone()[0]
-        lines.append(f"Records: {count}")
-        lines.append("")
-        lines.append("Recent entries:")
-        cur.execute(
-            "SELECT field1, field2, created_at FROM records ORDER BY created_at DESC LIMIT 5"
-        )
-        rows = cur.fetchall()
-        if not rows:
-            lines.append("- No rows in records")
-        else:
-            for field1, field2, created_at in rows:
-                left = field1 or "(blank)"
-                right = field2 or "(blank)"
-                stamp = created_at or "(no timestamp)"
-                lines.append(f"- {left} | {right} | {stamp}")
-        return "\n".join(lines)
-    finally:
-        conn.close()
-
-
-def _build_backup_preview(path: Path) -> str:
-    if _is_sqlite_backup(path):
-        try:
-            return _build_sqlite_backup_preview(path)
-        except Exception as exc:
-            lines = _preview_metadata(path)
-            lines.append("Type: SQLite backup")
-            lines.append("")
-            lines.append(f"Unable to inspect database contents: {exc}")
-            return "\n".join(lines)
-
-    lines = _preview_metadata(path)
-    lines.append("Type: Text backup")
-    lines.append("")
-    try:
-        text = path.read_text(encoding="utf-8")
-        lines.append(text[:2000])
-    except Exception as exc:
-        lines.append(f"Unable to preview text contents: {exc}")
-    return "\n".join(lines)
+LOGGER = logging.getLogger(__name__)
 
 
 class GPDataApp(tk.Tk):
@@ -184,26 +96,8 @@ class GPDataApp(tk.Tk):
         records = self.data_manager.load_all()
         return next((record for record in records if record.id == record_id), None)
 
-    def _duplicate_identity(self, record: Record) -> tuple[str, str] | None:
-        field1 = (record.field1 or "").strip().lower()
-        field2 = (record.field2 or "").strip().lower()
-        if not field1 or not field2:
-            return None
-        return field1, field2
-
-    def _find_duplicate_record(self, record: Record, exclude_id: str | None = None) -> Record | None:
-        duplicate_identity = self._duplicate_identity(record)
-        if duplicate_identity is None:
-            return None
-        for existing in self.data_manager.load_all():
-            if exclude_id is not None and existing.id == exclude_id:
-                continue
-            if self._duplicate_identity(existing) == duplicate_identity:
-                return existing
-        return None
-
     def _confirm_duplicate_record(self, record: Record, exclude_id: str | None = None, action_text: str = "save") -> bool:
-        duplicate = self._find_duplicate_record(record, exclude_id=exclude_id)
+        duplicate = self.data_manager.find_duplicate_record(record, exclude_id=exclude_id)
         if duplicate is None:
             return True
         should_continue = messagebox.askyesno(
@@ -223,8 +117,26 @@ class GPDataApp(tk.Tk):
         try:
             self.table.selection_set(record_id)
             self.table.see(record_id)
-        except Exception:
-            pass
+        except tk.TclError:
+            LOGGER.debug("Unable to focus record %s in the table", record_id, exc_info=True)
+
+    def _focus_widget(self, widget: tk.Misc | None) -> None:
+        if widget is None:
+            return
+        try:
+            widget.focus_set()
+            widget.focus_force()
+        except tk.TclError:
+            try:
+                widget.focus_set()
+            except tk.TclError:
+                LOGGER.debug("Unable to focus widget", exc_info=True)
+
+    def _recalc_form_field6(self, context: str) -> None:
+        try:
+            self.form.recalc_field6()
+        except tk.TclError:
+            LOGGER.debug("Unable to recalculate field6 while %s", context, exc_info=True)
 
     def _on_table_select(self, event=None) -> None:
         if self._suspend_table_select:
@@ -295,36 +207,12 @@ class GPDataApp(tk.Tk):
             reverse=True,
         )
 
-    def _search_words(self, text: str) -> set[str]:
-        return set(re.findall(r"[a-z0-9]+", (text or "").lower()))
-
-    def _record_matches_substring_query(self, record: Record, query: str) -> bool:
-        return query in (record.field1 or "").lower() or query in (record.field2 or "").lower()
-
-    def _record_matches_exact_word_query(self, record: Record, query: str) -> bool:
-        return query in self._search_words(record.field1 or "") or query in self._search_words(record.field2 or "")
-
     def _filtered_records(self, records: list[Record]) -> list[Record]:
-        query = self._current_search_query()
-        if not query:
-            return records
-
-        exact_matches = [record for record in records if self._record_matches_exact_word_query(record, query)]
-        if exact_matches:
-            return exact_matches
-
-        return [record for record in records if self._record_matches_substring_query(record, query)]
+        return filtered_records(records, self._current_search_query())
 
     def _record_matches_current_filter(self, record: Record) -> bool:
         query = self._current_search_query()
-        if not query:
-            return True
-
-        records = self.data_manager.load_all()
-        if any(self._record_matches_exact_word_query(existing, query) for existing in records):
-            return self._record_matches_exact_word_query(record, query)
-
-        return self._record_matches_substring_query(record, query)
+        return record_matches_query(record, query, self.data_manager.load_all())
 
     def _refresh_saved_record(self, record: Record) -> None:
         still_visible = self._record_matches_current_filter(record)
@@ -343,14 +231,15 @@ class GPDataApp(tk.Tk):
                 return
             try:
                 self.table.selection_set(record.id)
-            except Exception:
-                pass
+            except tk.TclError:
+                LOGGER.debug("Unable to restore table selection for %s", record.id, exc_info=True)
             return
 
         if self.table.exists(record.id):
             try:
                 self.table.delete(record.id)
-            except Exception:
+            except tk.TclError:
+                LOGGER.debug("Unable to remove hidden record %s from the table; reloading rows", record.id, exc_info=True)
                 self.load_records()
 
     def load_records(self) -> None:
@@ -376,19 +265,11 @@ class GPDataApp(tk.Tk):
         self.form.clear()
         try:
             self.table.selection_remove(*self.table.selection())
-        except Exception:
-            pass
+        except tk.TclError:
+            LOGGER.debug("Unable to clear table selection", exc_info=True)
         self._update_form_mode_ui()
         first_field = self.form.entries.get("field1")
-        if first_field is not None:
-            try:
-                first_field.focus_set()
-                first_field.focus_force()
-            except Exception:
-                try:
-                    first_field.focus_set()
-                except Exception:
-                    pass
+        self._focus_widget(first_field)
 
     def on_form_submit(self) -> None:
         if self.form.current_record_id:
@@ -397,10 +278,7 @@ class GPDataApp(tk.Tk):
         self.on_add()
 
     def on_add(self) -> None:
-        try:
-            self.form.recalc_field6()
-        except Exception:
-            pass
+        self._recalc_form_field6("adding a new item")
         data = self.form.get_values()
         try:
             rec = Record(**data)
@@ -413,8 +291,8 @@ class GPDataApp(tk.Tk):
 
         try:
             self.data_manager.create_timestamped_backup()
-        except Exception:
-            pass
+        except OSError:
+            LOGGER.warning("Unable to create a backup before adding a record", exc_info=True)
         self.data_manager.save(rec)
         self.load_records()
         self._reset_to_new_item()
@@ -431,15 +309,7 @@ class GPDataApp(tk.Tk):
         self.form.set_values(record.to_dict())
         self._update_form_mode_ui(record)
         first_field = self.form.entries.get("field1")
-        if first_field is not None:
-            try:
-                first_field.focus_set()
-                first_field.focus_force()
-            except Exception:
-                try:
-                    first_field.focus_set()
-                except Exception:
-                    pass
+        self._focus_widget(first_field)
 
     def on_save_changes(self) -> None:
         record_id = self.form.current_record_id or self.table.get_selected_id()
@@ -450,10 +320,7 @@ class GPDataApp(tk.Tk):
         if not record:
             messagebox.showerror("Error", "Record not found")
             return
-        try:
-            self.form.recalc_field6()
-        except Exception:
-            pass
+        self._recalc_form_field6("saving changes")
         values = self.form.get_values()
         try:
             updated = Record(id=record.id, created_at=record.created_at, **values)
@@ -492,131 +359,31 @@ class GPDataApp(tk.Tk):
             messagebox.showerror("Export failed", str(exc))
 
     def on_manage_backups(self) -> None:
-        win = tk.Toplevel(self)
-        win.title("Manage Backups")
-        win.geometry("720x360")
-
-        btn_frame = ttk.Frame(win)
-        btn_frame.pack(side="bottom", fill="x", padx=8, pady=6)
-        btn_restore = ttk.Button(btn_frame, text="Restore", state="disabled")
-        btn_delete = ttk.Button(btn_frame, text="Delete", state="disabled")
-        btn_close = ttk.Button(btn_frame, text="Close", command=win.destroy)
-        btn_delete.pack(side="right", padx=4)
-        btn_restore.pack(side="right", padx=4)
-        btn_close.pack(side="right", padx=4)
-
-        content = ttk.Frame(win)
-        content.pack(fill="both", expand=True)
-
-        left = ttk.Frame(content)
-        left.pack(side="left", fill="y", padx=8, pady=8)
-        lb = tk.Listbox(left, width=48, height=18)
-        lb.pack(side="top", fill="y", expand=True)
-
-        info = ttk.Label(left, text="Select a backup to preview or restore")
-        info.pack(side="top", pady=(6, 0))
-
-        right = ttk.Frame(content)
-        right.pack(side="left", fill="both", expand=True, padx=8, pady=8)
-        preview = tk.Text(right, wrap="none", height=20)
-        preview.pack(fill="both", expand=True)
-
-        backup_paths: list[Path] = []
-
-        def _selected_backup_path() -> Path | None:
-            sel = lb.curselection()
-            if not sel:
-                return None
-            idx = sel[0]
-            if idx >= len(backup_paths):
-                return None
-            return backup_paths[idx]
-
-        def _refresh_list():
-            nonlocal backup_paths
-            backup_paths = list(self.data_manager.list_backups())
-            lb.delete(0, "end")
-            for path in backup_paths:
-                lb.insert("end", _format_backup_label(path))
-            preview.delete("1.0", "end")
-            btn_restore.config(state="disabled")
-            btn_delete.config(state="disabled")
-
-        _refresh_list()
-
-        def _on_select(evt=None):
-            path = _selected_backup_path()
-            if path is None:
-                preview.delete("1.0", "end")
-                btn_restore.config(state="disabled")
-                btn_delete.config(state="disabled")
-                return
-            preview.delete("1.0", "end")
-            preview.insert("1.0", _build_backup_preview(path))
-            btn_restore.config(state="normal")
-            btn_delete.config(state="normal")
-
-        def _do_restore():
-            path = _selected_backup_path()
-            if path is None:
-                return
-            label = _format_backup_label(path)
-            if not messagebox.askyesno("Restore", f"Restore from {label}?"):
-                return
-            try:
-                pre = self.data_manager.restore_from_backup(path)
-                self.load_records()
-                messagebox.showinfo("Restored", f"Restored {label}; pre-restore at {pre}")
-                _refresh_list()
-            except Exception as exc:
-                messagebox.showerror("Restore failed", str(exc))
-
-        def _do_delete():
-            path = _selected_backup_path()
-            if path is None:
-                return
-            label = _format_backup_label(path)
-            if not messagebox.askyesno("Delete", f"Delete backup {label}?"):
-                return
-            try:
-                self.data_manager.delete_backup(path)
-                _refresh_list()
-            except Exception as exc:
-                messagebox.showerror("Delete failed", str(exc))
-
-        lb.bind("<<ListboxSelect>>", _on_select)
-        btn_restore.config(command=_do_restore)
-        btn_delete.config(command=_do_delete)
-        try:
-            win.transient(self)
-            win.grab_set()
-        except Exception:
-            pass
-        return win
+        return open_manage_backups_dialog(self, self.data_manager, on_restored=self.load_records)
 
     def on_labels_changed(self, labels: Sequence[str]) -> None:
         try:
             self.table.update_column_labels(labels)
-        except Exception:
-            pass
+        except tk.TclError:
+            LOGGER.debug("Unable to update table column labels", exc_info=True)
 
     def on_column_order_changed(self, columns: Sequence[str]) -> None:
         try:
             save_column_order(list(columns))
-        except Exception:
-            pass
+        except (OSError, TypeError, ValueError):
+            LOGGER.warning("Unable to persist column order", exc_info=True)
 
     def on_column_widths_changed(self, column_widths: dict[str, int]) -> None:
         try:
             save_column_widths(column_widths)
-        except Exception:
-            pass
+        except (OSError, TypeError, ValueError):
+            LOGGER.warning("Unable to persist column widths", exc_info=True)
 
     def on_visible_columns_changed(self, visible_columns: Sequence[str]) -> None:
         try:
             save_visible_columns(list(visible_columns))
-        except Exception:
-            pass
+        except (OSError, TypeError, ValueError):
+            LOGGER.warning("Unable to persist visible columns", exc_info=True)
 
     def _column_label(self, column: str) -> str:
         if column.startswith("field") and column[5:].isdigit():
@@ -677,8 +444,8 @@ class GPDataApp(tk.Tk):
 
             try:
                 self.data_manager.create_timestamped_backup()
-            except Exception:
-                pass
+            except OSError:
+                LOGGER.warning("Unable to create a backup before inline edit commit", exc_info=True)
 
             saved = self.data_manager.update(record_id, updated)
             self.form.set_values(saved.to_dict())
@@ -693,14 +460,14 @@ class GPDataApp(tk.Tk):
                 self.table.selection_set(row)
                 self._on_table_select()
                 self.row_menu.post(event.x_root, event.y_root)
-        except Exception:
-            pass
+        except tk.TclError:
+            LOGGER.debug("Unable to open row context menu", exc_info=True)
 
     def _copy_selected_id_to_clipboard(self) -> None:
         try:
             self.table.copy_selected_id_to_clipboard()
-        except Exception:
-            pass
+        except tk.TclError:
+            LOGGER.debug("Unable to copy selected id to clipboard", exc_info=True)
 
     def run(self) -> None:
         self.mainloop()
