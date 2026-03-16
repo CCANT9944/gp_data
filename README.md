@@ -29,6 +29,8 @@ numeric change history per item.
 - Inline edits and form edits keep the edited row in place instead of moving it.
 - Live search filters rows as you type.
 - Search prefers exact whole-word matches when possible, so `gin` can match gin items without pulling in `ginger beer`.
+- Click the `GP` column header to open a small menu with highlight presets, a custom threshold option, and a clear option.
+- The GP highlight threshold is saved in your local `settings.json` and comes back after restart.
 - Export writes the currently displayed rows.
 - Restore from the UI is handled through `Manage backups`, which includes preview, restore, and delete operations.
 - Table layout is customizable:

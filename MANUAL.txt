@@ -94,6 +94,10 @@ Use the search box near the top.
 - Search checks Type and Name.
 - If there is an exact word match, the app prefers that over a loose substring match.
 - Example: searching for gin shows gin items first and avoids matching ginger beer when exact gin matches exist.
+- Click the GP column header if you want a small menu with preset highlight levels.
+- You can also pick Custom from that menu and type your own GP threshold.
+- Use Clear GP highlight from that same menu to remove the highlighting again.
+- That GP highlight choice is saved locally, so it stays there next time you open the app.
 - The table only shows matching rows.
 - Export uses the rows currently displayed in the table.
 

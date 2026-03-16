@@ -34,6 +34,7 @@ DEFAULT_SETTINGS = {
     "column_order": DEFAULT_COLUMN_ORDER,
     "column_widths": DEFAULT_COLUMN_WIDTHS,
     "visible_columns": DEFAULT_VISIBLE_COLUMNS,
+    "gp_highlight_threshold": None,
 }
 DEFAULT_PATH = Path(__file__).parent / "settings.json"
 
@@ -44,6 +45,7 @@ def _default_settings() -> dict:
         "column_order": DEFAULT_COLUMN_ORDER.copy(),
         "column_widths": dict(DEFAULT_COLUMN_WIDTHS),
         "visible_columns": DEFAULT_VISIBLE_COLUMNS.copy(),
+        "gp_highlight_threshold": None,
     }
 
 
@@ -111,6 +113,18 @@ def _normalized_visible_columns(raw_visible) -> list[str]:
     return visible or DEFAULT_VISIBLE_COLUMNS.copy()
 
 
+def _normalized_gp_highlight_threshold(raw_threshold) -> float | None:
+    if raw_threshold is None or raw_threshold == "":
+        return None
+    try:
+        threshold = float(raw_threshold)
+    except (TypeError, ValueError):
+        return None
+    if threshold < 0 or threshold > 100:
+        return None
+    return threshold
+
+
 def load_settings(path: Optional[Path] = None) -> dict:
     path = Path(path) if path else DEFAULT_PATH
     if not path.exists():
@@ -127,11 +141,13 @@ def load_settings(path: Optional[Path] = None) -> dict:
     column_order = _normalized_column_order(data.get("column_order", DEFAULT_COLUMN_ORDER))
     column_widths = _normalized_column_widths(data.get("column_widths", DEFAULT_COLUMN_WIDTHS))
     visible_columns = _normalized_visible_columns(data.get("visible_columns", DEFAULT_VISIBLE_COLUMNS))
+    gp_highlight_threshold = _normalized_gp_highlight_threshold(data.get("gp_highlight_threshold"))
     return {
         "labels": labels,
         "column_order": column_order,
         "column_widths": column_widths,
         "visible_columns": visible_columns,
+        "gp_highlight_threshold": gp_highlight_threshold,
     }
 
 
@@ -179,4 +195,14 @@ def load_visible_columns(path: Optional[Path] = None) -> List[str]:
 def save_visible_columns(visible_columns: List[str], path: Optional[Path] = None) -> None:
     data = load_settings(path)
     data["visible_columns"] = _normalized_visible_columns(list(visible_columns))
+    save_settings(data, path)
+
+
+def load_gp_highlight_threshold(path: Optional[Path] = None) -> float | None:
+    return load_settings(path)["gp_highlight_threshold"]
+
+
+def save_gp_highlight_threshold(threshold: float | None, path: Optional[Path] = None) -> None:
+    data = load_settings(path)
+    data["gp_highlight_threshold"] = _normalized_gp_highlight_threshold(threshold)
     save_settings(data, path)

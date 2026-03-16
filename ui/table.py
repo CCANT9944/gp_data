@@ -19,8 +19,12 @@ METRIC_LABELS = {
 }
 ROW_TAG_ODD = "row-odd"
 ROW_TAG_EVEN = "row-even"
+ROW_TAG_GP_LOW_ODD = "row-gp-low-odd"
+ROW_TAG_GP_LOW_EVEN = "row-gp-low-even"
 ROW_ODD_BACKGROUND = "#ffffff"
 ROW_EVEN_BACKGROUND = "#e7edf5"
+ROW_GP_LOW_ODD_BACKGROUND = "#ffe4d8"
+ROW_GP_LOW_EVEN_BACKGROUND = "#ffd7c5"
 LOGGER = logging.getLogger(__name__)
 
 
@@ -65,7 +69,7 @@ def _configure_table_style(widget: ttk.Treeview) -> None:
 class RecordTable(ttk.Treeview):
     """Table-like display using ttk.Treeview."""
 
-    def __init__(self, parent, columns: Sequence[str] | None = None, labels: Sequence[str] | None = None, on_commit: Callable[[str, str, str], None] | None = None, on_column_order_changed: Callable[[list[str]], None] | None = None, column_widths: dict[str, int] | None = None, on_column_widths_changed: Callable[[dict[str, int]], None] | None = None, visible_columns: Sequence[str] | None = None, on_visible_columns_changed: Callable[[list[str]], None] | None = None, **kwargs):
+    def __init__(self, parent, columns: Sequence[str] | None = None, labels: Sequence[str] | None = None, on_commit: Callable[[str, str, str], None] | None = None, on_column_order_changed: Callable[[list[str]], None] | None = None, column_widths: dict[str, int] | None = None, on_column_widths_changed: Callable[[dict[str, int]], None] | None = None, visible_columns: Sequence[str] | None = None, on_visible_columns_changed: Callable[[list[str]], None] | None = None, on_heading_click: Callable[[str], None] | None = None, **kwargs):
         cols = list(columns or ["field1", "field2", "field3", "field4", "field5", "field6", "field7", "gp", "cash_margin", "gp70"])
         self._data_cols = ["id"] + cols
         self._cols = cols
@@ -82,8 +86,12 @@ class RecordTable(ttk.Treeview):
         self._on_column_widths_changed = on_column_widths_changed
         self._visible_cols = [col for col in self._cols if visible_columns is None or col in visible_columns] or list(self._cols)
         self._on_visible_columns_changed = on_visible_columns_changed
+        self._on_heading_click = on_heading_click
         self._records: list[Record] = []
         self._drag_column: str | None = None
+        self._heading_press_column: str | None = None
+        self._heading_press_xy = (0, 0)
+        self._gp_highlight_threshold: float | None = None
         self._last_known_widths = dict(self._column_widths)
         _configure_table_style(parent)
 
@@ -106,6 +114,13 @@ class RecordTable(ttk.Treeview):
 
     def get_visible_columns(self) -> list[str]:
         return [col for col in self._cols if col in self._visible_cols]
+
+    def get_gp_highlight_threshold(self) -> float | None:
+        return self._gp_highlight_threshold
+
+    def set_gp_highlight_threshold(self, threshold_percent: float | None) -> None:
+        self._gp_highlight_threshold = threshold_percent
+        self._refresh_row_tags()
 
     def set_visible_columns(self, columns: Sequence[str]) -> None:
         visible = [col for col in self._cols if col in columns]
@@ -198,6 +213,8 @@ class RecordTable(ttk.Treeview):
 
         self.tag_configure(ROW_TAG_ODD, background=ROW_ODD_BACKGROUND)
         self.tag_configure(ROW_TAG_EVEN, background=ROW_EVEN_BACKGROUND)
+        self.tag_configure(ROW_TAG_GP_LOW_ODD, background=ROW_GP_LOW_ODD_BACKGROUND)
+        self.tag_configure(ROW_TAG_GP_LOW_EVEN, background=ROW_GP_LOW_EVEN_BACKGROUND)
         self._last_known_widths = self.get_column_widths()
         if reload_rows:
             self.load(records)
@@ -246,12 +263,25 @@ class RecordTable(ttk.Treeview):
                 LOGGER.exception("Column-order callback failed")
         return True
 
+    def _row_tag_for_record(self, record: Record, row_index: int) -> str:
+        if self._gp_highlight_threshold is not None and record.gp is not None and (record.gp * 100.0) < self._gp_highlight_threshold:
+            return ROW_TAG_GP_LOW_EVEN if row_index % 2 else ROW_TAG_GP_LOW_ODD
+        return ROW_TAG_EVEN if row_index % 2 else ROW_TAG_ODD
+
+    def _refresh_row_tags(self) -> None:
+        for row_index, record in enumerate(self._records):
+            if self.exists(record.id):
+                self.item(record.id, tags=(self._row_tag_for_record(record, row_index),))
+
     def _on_button_press(self, event) -> None:
         column_name = self._column_name_from_event(event)
         if column_name is None or _is_separator_column(column_name):
             self._drag_column = None
+            self._heading_press_column = None
             return
         self._drag_column = column_name
+        self._heading_press_column = column_name
+        self._heading_press_xy = (event.x, event.y)
 
     def _on_button_release(self, event) -> None:
         self.after_idle(self._notify_if_widths_changed)
@@ -259,7 +289,17 @@ class RecordTable(ttk.Treeview):
             return
         dragged = self._drag_column
         self._drag_column = None
+        pressed = self._heading_press_column
+        press_x, press_y = self._heading_press_xy
+        self._heading_press_column = None
         target = self._column_name_from_event(event)
+        is_click = target == pressed and abs(event.x - press_x) <= 4 and abs(event.y - press_y) <= 4
+        if is_click and callable(self._on_heading_click):
+            try:
+                self._on_heading_click(target)
+            except Exception:
+                LOGGER.exception("Heading-click callback failed")
+            return
         if target is None or _is_separator_column(target) or target == dragged:
             return
         left, right = self._display_column_bounds(target)
@@ -379,8 +419,14 @@ class RecordTable(ttk.Treeview):
 
     def update_record(self, record: Record) -> None:
         values = self._values_for_record(record)
+        row_index = next((index for index, existing in enumerate(self._records) if existing.id == record.id), None)
+        if row_index is None:
+            self._records.append(record)
+            row_index = len(self._records) - 1
+        else:
+            self._records[row_index] = record
         if self.exists(record.id):
-            self.item(record.id, values=values)
+            self.item(record.id, values=values, tags=(self._row_tag_for_record(record, row_index),))
         else:
             self.insert_record(record)
 
@@ -412,7 +458,7 @@ class RecordTable(ttk.Treeview):
     def insert_record(self, record: Record):
         values = self._values_for_record(record)
         row_index = len(self.get_children())
-        tag = ROW_TAG_EVEN if row_index % 2 else ROW_TAG_ODD
+        tag = self._row_tag_for_record(record, row_index)
         return self.insert("", "end", iid=record.id, values=values, tags=(tag,))
 
     def get_selected_id(self) -> str | None:

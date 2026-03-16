@@ -53,6 +53,14 @@ def test_save_and_load_visible_columns(tmp_path: Path):
     assert loaded == visible
 
 
+def test_save_and_load_gp_highlight_threshold(tmp_path: Path):
+    p = tmp_path / "settings.json"
+
+    settings.save_gp_highlight_threshold(60.0, p)
+
+    assert settings.load_gp_highlight_threshold(p) == 60.0
+
+
 def test_load_settings_defaults_on_malformed_json(tmp_path: Path):
     p = tmp_path / "settings.json"
     p.write_text("{not-json", encoding="utf-8")
@@ -71,3 +79,12 @@ def test_load_settings_defaults_when_json_root_is_not_an_object(tmp_path: Path):
 
     assert loaded["column_widths"] == settings.DEFAULT_COLUMN_WIDTHS
     assert loaded["visible_columns"] == settings.DEFAULT_VISIBLE_COLUMNS
+
+
+def test_load_settings_invalid_gp_highlight_threshold_defaults_to_none(tmp_path: Path):
+    p = tmp_path / "settings.json"
+    p.write_text('{"gp_highlight_threshold": 150}', encoding="utf-8")
+
+    loaded = settings.load_settings(p)
+
+    assert loaded["gp_highlight_threshold"] is None

@@ -6,7 +6,7 @@ import pytest
 from gp_data import settings as settings_module
 from gp_data.ui import RecordTable, GPDataApp
 from gp_data.ui.app import EDIT_MODE_BANNER_BG, NEW_MODE_BANNER_BG
-from gp_data.ui.table import ROW_TAG_EVEN, ROW_TAG_ODD, SEPARATOR_GLYPH, SEPARATOR_PREFIX, TABLE_HEADING_STYLE, TABLE_STYLE
+from gp_data.ui.table import ROW_TAG_EVEN, ROW_TAG_GP_LOW_EVEN, ROW_TAG_GP_LOW_ODD, ROW_TAG_ODD, SEPARATOR_GLYPH, SEPARATOR_PREFIX, TABLE_HEADING_STYLE, TABLE_STYLE
 from gp_data.models import NumericChange, Record
 
 
@@ -120,6 +120,50 @@ def test_record_table_tracks_column_width_changes():
     assert seen
     assert seen[-1]["field1"] == 210
     assert table.get_column_widths()["field1"] == 210
+
+    root.destroy()
+
+
+def test_record_table_gp_header_click_calls_callback():
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    root.withdraw()
+
+    seen: list[str] = []
+    table = RecordTable(root, on_heading_click=lambda column: seen.append(column))
+    table._column_name_from_event = lambda event: "gp"  # type: ignore[method-assign]
+
+    event = type("Event", (), {"x": 24, "y": 8})()
+    table._on_button_press(event)
+    table._on_button_release(event)
+
+    assert seen == ["gp"]
+
+    root.destroy()
+
+
+def test_record_table_can_highlight_rows_below_gp_threshold():
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    root.withdraw()
+
+    table = RecordTable(root)
+    low_gp = Record(field1="low", field6=2.0, field7=5.0)
+    high_gp = Record(field1="high", field6=1.0, field7=5.0)
+    table.load([low_gp, high_gp])
+
+    table.set_gp_highlight_threshold(60)
+
+    assert ROW_TAG_GP_LOW_ODD in table.item(low_gp.id)["tags"]
+    assert ROW_TAG_EVEN in table.item(high_gp.id)["tags"]
+
+    table.set_gp_highlight_threshold(None)
+
+    assert ROW_TAG_ODD in table.item(low_gp.id)["tags"]
 
     root.destroy()
 
@@ -240,6 +284,116 @@ def test_app_loads_saved_visible_columns(tmp_path, monkeypatch):
 
     assert app.table.get_visible_columns() == ["field1", "field3", "field7"]
     assert list(app.table.cget("displaycolumns")) == ["field1", f"{SEPARATOR_PREFIX}0", "field3", f"{SEPARATOR_PREFIX}1", "field7"]
+
+    app.destroy()
+
+
+def test_app_loads_saved_gp_highlight_threshold(tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    settings_module.save_settings(
+        {
+            "labels": ["Type", "Name", "Price", "Quantity", "Units In", "Cost/Unit", "MENU PRICE"],
+            "column_order": ["field1", "field2", "field3", "field4", "field5", "field6", "field7", "gp", "cash_margin", "gp70"],
+            "column_widths": {"field1": 220},
+            "visible_columns": ["field1", "field3", "field7", "gp"],
+            "gp_highlight_threshold": 60,
+        },
+        settings_path,
+    )
+    monkeypatch.setattr(settings_module, "DEFAULT_PATH", settings_path)
+
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    assert app.table.get_gp_highlight_threshold() == 60.0
+
+    app.destroy()
+
+
+def _menu_index_by_label(menu: tk.Menu, expected: str) -> int:
+    end_index = menu.index("end")
+    assert end_index is not None
+    for index in range(end_index + 1):
+        if menu.type(index) == "separator":
+            continue
+        if menu.entrycget(index, "label") == expected:
+            return index
+    raise AssertionError(f"Menu label not found: {expected}")
+
+
+def test_app_gp_heading_click_opens_menu(tmp_path):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    seen: list[tuple[int, int]] = []
+    app._gp_highlight_menu.tk_popup = lambda x, y: seen.append((x, y))  # type: ignore[method-assign]
+    app._show_gp_highlight_menu = lambda: seen.append((app.winfo_pointerx(), app.winfo_pointery()))  # type: ignore[method-assign]
+
+    app._on_table_heading_click("gp")
+
+    assert len(seen) == 1
+
+    app.destroy()
+
+
+def test_app_gp_heading_menu_sets_and_clears_highlight_threshold(tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setattr(settings_module, "DEFAULT_PATH", settings_path)
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    low_gp = Record(field1="low", field6=2.0, field7=5.0)
+    high_gp = Record(field1="high", field6=1.0, field7=5.0)
+    app.data_manager.save(low_gp)
+    app.data_manager.save(high_gp)
+    app.load_records()
+
+    highlight_index = _menu_index_by_label(app._gp_highlight_menu, "Highlight below 60%")
+    app._gp_highlight_menu.invoke(highlight_index)
+
+    assert app.table.get_gp_highlight_threshold() == 60.0
+    assert settings_module.load_gp_highlight_threshold(settings_path) == 60.0
+    assert any(tag in (ROW_TAG_GP_LOW_ODD, ROW_TAG_GP_LOW_EVEN) for tag in app.table.item(low_gp.id)["tags"])
+
+    clear_index = _menu_index_by_label(app._gp_highlight_menu, "Clear GP highlight")
+    app._gp_highlight_menu.invoke(clear_index)
+
+    assert app.table.get_gp_highlight_threshold() is None
+    assert settings_module.load_gp_highlight_threshold(settings_path) is None
+    assert any(tag in (ROW_TAG_ODD, ROW_TAG_EVEN) for tag in app.table.item(low_gp.id)["tags"])
+
+    app.destroy()
+
+
+def test_app_gp_heading_menu_custom_threshold(tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setattr(settings_module, "DEFAULT_PATH", settings_path)
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    low_gp = Record(field1="low", field6=2.0, field7=5.0)
+    app.data_manager.save(low_gp)
+    app.load_records()
+
+    monkeypatch.setattr("gp_data.ui.app.simpledialog.askstring", lambda *args, **kwargs: "55")
+    custom_index = _menu_index_by_label(app._gp_highlight_menu, "Custom...")
+    app._gp_highlight_menu.invoke(custom_index)
+
+    assert app.table.get_gp_highlight_threshold() == 55.0
+    assert settings_module.load_gp_highlight_threshold(settings_path) == 55.0
+    assert any(tag in (ROW_TAG_GP_LOW_ODD, ROW_TAG_GP_LOW_EVEN) for tag in app.table.item(low_gp.id)["tags"])
 
     app.destroy()
 

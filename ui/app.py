@@ -3,12 +3,12 @@ from __future__ import annotations
 import logging
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Sequence
 
 from ..data_manager import CSVDataManager, DataManager
 from ..models import Record, calculate_field6
-from ..settings import load_settings, save_column_order, save_column_widths, save_visible_columns
+from ..settings import load_settings, save_column_order, save_column_widths, save_gp_highlight_threshold, save_visible_columns
 from .backup_dialog import open_manage_backups_dialog
 from .form import InputForm
 from .record_logic import filtered_records, record_matches_query
@@ -19,6 +19,7 @@ NEW_MODE_BANNER_BG = "#e7f1ff"
 NEW_MODE_BANNER_FG = "#0b4f8a"
 EDIT_MODE_BANNER_BG = "#fff1c9"
 EDIT_MODE_BANNER_FG = "#7a4b00"
+GP_HIGHLIGHT_PRESETS = (50.0, 60.0, 70.0, 80.0)
 LOGGER = logging.getLogger(__name__)
 
 
@@ -35,6 +36,7 @@ class GPDataApp(tk.Tk):
         column_order = app_settings["column_order"]
         column_widths = app_settings["column_widths"]
         visible_columns = app_settings["visible_columns"]
+        gp_highlight_threshold = app_settings["gp_highlight_threshold"]
 
         container = ttk.Frame(self)
         container.pack(fill="both", expand=True, padx=8, pady=8)
@@ -58,7 +60,7 @@ class GPDataApp(tk.Tk):
 
         right = ttk.Frame(container)
         right.pack(side="left", fill="both", expand=True)
-        self.table = RecordTable(right, columns=column_order, labels=labels, on_commit=self._on_table_commit, on_column_order_changed=self.on_column_order_changed, column_widths=column_widths, on_column_widths_changed=self.on_column_widths_changed, visible_columns=visible_columns, on_visible_columns_changed=self.on_visible_columns_changed)
+        self.table = RecordTable(right, columns=column_order, labels=labels, on_commit=self._on_table_commit, on_column_order_changed=self.on_column_order_changed, column_widths=column_widths, on_column_widths_changed=self.on_column_widths_changed, visible_columns=visible_columns, on_visible_columns_changed=self.on_visible_columns_changed, on_heading_click=self._on_table_heading_click)
         self.table.pack(fill="both", expand=True)
 
         controls = ttk.Frame(self)
@@ -85,10 +87,18 @@ class GPDataApp(tk.Tk):
         self.row_menu.add_command(label="Delete", command=self.on_delete)
         self.row_menu.add_separator()
         self.row_menu.add_command(label="Copy ID", command=self._copy_selected_id_to_clipboard)
+        self._gp_highlight_menu = tk.Menu(self, tearoff=0)
+        for threshold in GP_HIGHLIGHT_PRESETS:
+            label = f"Highlight below {threshold:g}%"
+            self._gp_highlight_menu.add_command(label=label, command=lambda value=threshold: self._set_gp_highlight_threshold(value))
+        self._gp_highlight_menu.add_separator()
+        self._gp_highlight_menu.add_command(label="Custom...", command=self._prompt_custom_gp_highlight_threshold)
+        self._gp_highlight_menu.add_command(label="Clear GP highlight", command=lambda: self._set_gp_highlight_threshold(None))
         self.table.bind("<<TreeviewSelect>>", self._on_table_select)
         self.table.bind("<Button-3>", self._on_row_right_click)
 
         self._suspend_table_select = False
+        self.table.set_gp_highlight_threshold(gp_highlight_threshold)
         self._update_form_mode_ui()
         self.load_records()
 
@@ -213,6 +223,52 @@ class GPDataApp(tk.Tk):
     def _record_matches_current_filter(self, record: Record) -> bool:
         query = self._current_search_query()
         return record_matches_query(record, query, self.data_manager.load_all())
+
+    def _set_gp_highlight_threshold(self, threshold: float | None) -> None:
+        self.table.set_gp_highlight_threshold(threshold)
+        try:
+            save_gp_highlight_threshold(threshold)
+        except (OSError, TypeError, ValueError):
+            LOGGER.warning("Unable to persist GP highlight threshold", exc_info=True)
+
+    def _prompt_custom_gp_highlight_threshold(self) -> None:
+        current_threshold = self.table.get_gp_highlight_threshold()
+        initial_value = "" if current_threshold is None else f"{current_threshold:g}"
+        response = simpledialog.askstring(
+            "Highlight GP rows",
+            "Highlight rows with GP smaller than what percentage?\n\nEnter a number like 70 or 70.5.\nLeave blank to clear highlighting.",
+            parent=self,
+            initialvalue=initial_value,
+        )
+        if response is None:
+            return
+        text = response.strip().rstrip("%")
+        if not text:
+            self._set_gp_highlight_threshold(None)
+            return
+        try:
+            threshold = float(text)
+        except ValueError:
+            messagebox.showerror("Invalid GP threshold", "Enter a GP percentage like 70 or 70.5.")
+            return
+        if threshold < 0 or threshold > 100:
+            messagebox.showerror("Invalid GP threshold", "GP highlight threshold must be between 0 and 100.")
+            return
+        self._set_gp_highlight_threshold(threshold)
+
+    def _show_gp_highlight_menu(self) -> None:
+        try:
+            self._gp_highlight_menu.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
+        finally:
+            try:
+                self._gp_highlight_menu.grab_release()
+            except tk.TclError:
+                LOGGER.debug("Unable to release GP highlight menu grab", exc_info=True)
+
+    def _on_table_heading_click(self, column_name: str) -> None:
+        if column_name != "gp":
+            return
+        self._show_gp_highlight_menu()
 
     def _refresh_saved_record(self, record: Record) -> None:
         still_visible = self._record_matches_current_filter(record)
