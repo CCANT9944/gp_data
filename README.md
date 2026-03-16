@@ -21,7 +21,9 @@ numeric change history per item.
 - Add records through the form on the left and press `Enter` in the last field to save.
 - Clicking a table row loads that record into the main form for editing.
 - Use `Save changes` to commit form edits, or press `Enter` in the last field while an item is loaded.
-- The form shows whether you are adding a new item or editing the currently loaded record.
+- The form shows a highlighted mode banner so edit mode stands out clearly from new-item mode.
+- Switching rows or returning to `New item` asks before discarding unsaved form changes.
+- `Delete selected` is only active when a table row is selected.
 - Add and edit flows warn when the same `Type + Name` already exists.
 - The table shows the newest saved items first.
 - Inline edits and form edits keep the edited row in place instead of moving it.

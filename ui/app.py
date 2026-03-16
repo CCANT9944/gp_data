@@ -15,6 +15,12 @@ from .form import InputForm
 from .table import METRIC_LABELS, RecordTable
 
 
+NEW_MODE_BANNER_BG = "#e7f1ff"
+NEW_MODE_BANNER_FG = "#0b4f8a"
+EDIT_MODE_BANNER_BG = "#fff1c9"
+EDIT_MODE_BANNER_FG = "#7a4b00"
+
+
 def _format_backup_label(path: Path) -> str:
     name = path.name
     if not name.endswith(".bak"):
@@ -125,8 +131,17 @@ class GPDataApp(tk.Tk):
         left.pack(side="left", fill="y", padx=(0, 8))
         self.form = InputForm(left, labels=labels, on_rename=self.on_labels_changed, on_submit=self.on_form_submit)
         self.form.pack(fill="y", expand=False)
-        self._form_mode_var = tk.StringVar(value="Mode: New item")
-        self._form_mode_label = ttk.Label(left, textvariable=self._form_mode_var)
+        self._form_mode_var = tk.StringVar(value="NEW ITEM MODE")
+        self._form_mode_label = tk.Label(
+            left,
+            textvariable=self._form_mode_var,
+            anchor="w",
+            padx=8,
+            pady=6,
+            relief="solid",
+            borderwidth=1,
+            font=("TkDefaultFont", 9, "bold"),
+        )
         self._form_mode_label.pack(fill="x", pady=(6, 0))
 
         right = ttk.Frame(container)
@@ -139,7 +154,8 @@ class GPDataApp(tk.Tk):
         ttk.Button(controls, text="New item", command=self.on_new_item).pack(side="left", padx=4)
         self._save_changes_button = ttk.Button(controls, text="Save changes", command=self.on_save_changes)
         self._save_changes_button.pack(side="left", padx=4)
-        ttk.Button(controls, text="Delete selected", command=self.on_delete).pack(side="left", padx=4)
+        self._delete_selected_button = ttk.Button(controls, text="Delete selected", command=self.on_delete)
+        self._delete_selected_button.pack(side="left", padx=4)
         ttk.Button(controls, text="Columns", command=self.on_manage_columns).pack(side="left", padx=4)
         ttk.Button(controls, text="Rename fields", command=self.form.rename_fields).pack(side="left", padx=4)
 
@@ -160,6 +176,7 @@ class GPDataApp(tk.Tk):
         self.table.bind("<<TreeviewSelect>>", self._on_table_select)
         self.table.bind("<Button-3>", self._on_row_right_click)
 
+        self._suspend_table_select = False
         self._update_form_mode_ui()
         self.load_records()
 
@@ -210,30 +227,63 @@ class GPDataApp(tk.Tk):
             pass
 
     def _on_table_select(self, event=None) -> None:
+        if self._suspend_table_select:
+            return
         sel_id = self.table.get_selected_id()
         if not sel_id:
             return
+        current_record_id = self.form.current_record_id
+        if sel_id != current_record_id and self.form.is_dirty():
+            if not self._confirm_discard_form_changes():
+                self._restore_table_selection(current_record_id)
+                return
         record = self._record_by_id(sel_id)
         if record is None:
             return
         self.form.set_values(record.to_dict())
         self._update_form_mode_ui(record)
 
+    def _restore_table_selection(self, record_id: str | None) -> None:
+        self._suspend_table_select = True
+        try:
+            selection = self.table.selection()
+            if selection:
+                self.table.selection_remove(*selection)
+            if record_id:
+                self.table.selection_set(record_id)
+                self.table.see(record_id)
+        finally:
+            self._suspend_table_select = False
+
+    def _confirm_discard_form_changes(self) -> bool:
+        if not self.form.is_dirty():
+            return True
+        return messagebox.askyesno(
+            "Discard changes",
+            "You have unsaved changes in the form.\n\nDiscard them?",
+        )
+
     def _update_form_mode_ui(self, record: Record | None = None) -> None:
         current_record_id = self.form.current_record_id
+        selected_record_id = self.table.get_selected_id()
+        self._delete_selected_button.config(state="normal" if selected_record_id else "disabled")
         if current_record_id is None:
             self._save_changes_button.config(state="disabled")
-            self._form_mode_var.set("Mode: New item")
+            self._set_form_mode_banner("NEW ITEM MODE", NEW_MODE_BANNER_BG, NEW_MODE_BANNER_FG)
             return
         if record is None or record.id != current_record_id:
             record = self._record_by_id(current_record_id)
         self._save_changes_button.config(state="normal")
         if record is None:
-            self._form_mode_var.set("Mode: Editing selected item")
+            self._set_form_mode_banner("EDITING SELECTED ITEM", EDIT_MODE_BANNER_BG, EDIT_MODE_BANNER_FG)
             return
         left = (record.field1 or "").strip() or "(blank)"
         right = (record.field2 or "").strip() or "(blank)"
-        self._form_mode_var.set(f"Mode: Editing {left} / {right}")
+        self._set_form_mode_banner(f"EDITING: {left} / {right}", EDIT_MODE_BANNER_BG, EDIT_MODE_BANNER_FG)
+
+    def _set_form_mode_banner(self, text: str, bg: str, fg: str) -> None:
+        self._form_mode_var.set(text)
+        self._form_mode_label.config(bg=bg, fg=fg)
 
     def _current_search_query(self) -> str:
         return self._search_entry.get().strip().lower()
@@ -308,6 +358,7 @@ class GPDataApp(tk.Tk):
         displayed = self._sort_records_for_display(self._filtered_records(records))
         self._displayed_records = displayed
         self.table.load(displayed)
+        self._update_form_mode_ui()
 
     def on_search(self) -> None:
         self.load_records()
@@ -317,6 +368,11 @@ class GPDataApp(tk.Tk):
         self.load_records()
 
     def on_new_item(self) -> None:
+        if not self._confirm_discard_form_changes():
+            return
+        self._reset_to_new_item()
+
+    def _reset_to_new_item(self) -> None:
         self.form.clear()
         try:
             self.table.selection_remove(*self.table.selection())
@@ -361,7 +417,7 @@ class GPDataApp(tk.Tk):
             pass
         self.data_manager.save(rec)
         self.load_records()
-        self.on_new_item()
+        self._reset_to_new_item()
 
     def on_edit(self) -> None:
         sel_id = self.table.get_selected_id()
@@ -419,7 +475,7 @@ class GPDataApp(tk.Tk):
         if messagebox.askyesno("Confirm", "Delete selected record?"):
             self.data_manager.delete(sel_id)
             self.load_records()
-            self.on_new_item()
+            self._reset_to_new_item()
 
     def on_export(self) -> None:
         path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files", "*.csv")])

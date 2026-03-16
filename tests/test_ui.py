@@ -5,6 +5,7 @@ import pytest
 
 from gp_data import settings as settings_module
 from gp_data.ui import RecordTable, GPDataApp
+from gp_data.ui.app import EDIT_MODE_BANNER_BG, NEW_MODE_BANNER_BG
 from gp_data.ui.table import ROW_TAG_EVEN, ROW_TAG_ODD, SEPARATOR_GLYPH, SEPARATOR_PREFIX, TABLE_HEADING_STYLE, TABLE_STYLE
 from gp_data.models import NumericChange, Record
 
@@ -471,6 +472,7 @@ def test_main_controls_hide_add_button_and_keep_new_item(tmp_path):
     assert "Save changes" in button_labels
     assert "Edit selected" not in button_labels
     assert str(app._save_changes_button.cget("state")) == "disabled"
+    assert str(app._delete_selected_button.cget("state")) == "disabled"
 
     app.destroy()
 
@@ -512,8 +514,10 @@ def test_new_item_clears_form_and_selection(tmp_path):
     assert app.form.entries["field1"].get() == "Gin"
     assert app.form.entries["field2"].get() == "House"
     assert app.table.get_selected_id() == record.id
-    assert app._form_mode_var.get() == "Mode: Editing Gin / House"
+    assert app._form_mode_var.get() == "EDITING: Gin / House"
+    assert app._form_mode_label.cget("bg") == EDIT_MODE_BANNER_BG
     assert str(app._save_changes_button.cget("state")) == "normal"
+    assert str(app._delete_selected_button.cget("state")) == "normal"
 
     app.on_new_item()
 
@@ -521,8 +525,41 @@ def test_new_item_clears_form_and_selection(tmp_path):
     assert app.form.entries["field1"].get() == ""
     assert app.form.entries["field2"].get() == ""
     assert app.table.get_selected_id() is None
-    assert app._form_mode_var.get() == "Mode: New item"
+    assert app._form_mode_var.get() == "NEW ITEM MODE"
+    assert app._form_mode_label.cget("bg") == NEW_MODE_BANNER_BG
     assert str(app._save_changes_button.cget("state")) == "disabled"
+    assert str(app._delete_selected_button.cget("state")) == "disabled"
+
+    app.destroy()
+
+
+def test_new_item_can_cancel_discarding_unsaved_changes(tmp_path, monkeypatch):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    asked: dict[str, str] = {}
+
+    def fake_askyesno(title, message):
+        asked["title"] = title
+        asked["message"] = message
+        return False
+
+    monkeypatch.setattr("gp_data.ui.app.messagebox.askyesno", fake_askyesno)
+
+    app.form.entries["field1"].insert(0, "Gin")
+    app.form.entries["field2"].insert(0, "House")
+
+    app.on_new_item()
+
+    assert app.form.current_record_id is None
+    assert app.form.entries["field1"].get() == "Gin"
+    assert app.form.entries["field2"].get() == "House"
+    assert app.table.get_selected_id() is None
+    assert asked["title"] == "Discard changes"
+    assert "unsaved changes" in asked["message"]
 
     app.destroy()
 
@@ -538,14 +575,58 @@ def test_selecting_row_updates_mode_label_and_enables_save(tmp_path):
     app.data_manager.save(record)
     app.load_records()
 
-    assert app._form_mode_var.get() == "Mode: New item"
+    assert app._form_mode_var.get() == "NEW ITEM MODE"
+    assert app._form_mode_label.cget("bg") == NEW_MODE_BANNER_BG
     assert str(app._save_changes_button.cget("state")) == "disabled"
+    assert str(app._delete_selected_button.cget("state")) == "disabled"
 
     app.table.selection_set(record.id)
     app._on_table_select()
 
-    assert app._form_mode_var.get() == "Mode: Editing Vodka / House"
+    assert app._form_mode_var.get() == "EDITING: Vodka / House"
+    assert app._form_mode_label.cget("bg") == EDIT_MODE_BANNER_BG
     assert str(app._save_changes_button.cget("state")) == "normal"
+    assert str(app._delete_selected_button.cget("state")) == "normal"
+
+    app.destroy()
+
+
+def test_selecting_new_row_can_cancel_discarding_unsaved_changes(tmp_path, monkeypatch):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    first = Record(field1="gin", field2="house")
+    second = Record(field1="vodka", field2="rail")
+    app.data_manager.save(first)
+    app.data_manager.save(second)
+    app.load_records()
+
+    asked: dict[str, str] = {}
+
+    def fake_askyesno(title, message):
+        asked["title"] = title
+        asked["message"] = message
+        return False
+
+    monkeypatch.setattr("gp_data.ui.app.messagebox.askyesno", fake_askyesno)
+
+    app.table.selection_set(first.id)
+    app._on_table_select()
+    app.form.entries["field2"].delete(0, tk.END)
+    app.form.entries["field2"].insert(0, "changed")
+
+    app.table.selection_set(second.id)
+    app._on_table_select()
+
+    assert app.table.get_selected_id() == first.id
+    assert app.form.current_record_id == first.id
+    assert app.form.entries["field2"].get() == "changed"
+    assert app._form_mode_var.get() == "EDITING: Gin / House"
+    assert asked["title"] == "Discard changes"
+    assert "unsaved changes" in asked["message"]
 
     app.destroy()
 

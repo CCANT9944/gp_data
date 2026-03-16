@@ -38,7 +38,7 @@ The table is used for browsing, searching, selecting, and inline editing.
 
 The newest saved items are shown first in the table.
 
-The line under the form tells you whether you are in New item mode or editing a selected record.
+The highlighted banner under the form tells you whether you are in New item mode or editing a selected record.
 
 4. ADDING A RECORD
 
@@ -68,6 +68,8 @@ Method A: Main form edit
 
 If you want to stop editing that row and enter a completely new item instead, click New item to clear the form and remove the current selection.
 Save changes is only active when a record is loaded into the form.
+If you changed something and then click another row or New item, the app now asks before throwing those unsaved changes away.
+Delete selected is only active when a table row is selected.
 
 Method B: Inline edit
 

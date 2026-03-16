@@ -21,6 +21,7 @@ class InputForm(ttk.Frame):
         self.on_rename = on_rename
         self.on_submit = on_submit
         self.current_record_id: str | None = None
+        self._clean_snapshot: dict | None = None
 
         label_padx = 3
         field_padx = 3
@@ -83,6 +84,18 @@ class InputForm(ttk.Frame):
             self.entries["field2"].bind("<KeyRelease>", lambda e: self._capitalize_field("field2"))
 
         self.columnconfigure(1, weight=1)
+        self._mark_clean()
+
+    def _snapshot_values(self) -> dict:
+        return self.get_values()
+
+    def _mark_clean(self) -> None:
+        self._clean_snapshot = self._snapshot_values()
+
+    def is_dirty(self) -> bool:
+        if self._clean_snapshot is None:
+            return False
+        return self._snapshot_values() != self._clean_snapshot
 
     def _set_changes_text(self, text: str) -> None:
         self.last_numeric_change_var.set(text)
@@ -261,6 +274,7 @@ class InputForm(ttk.Frame):
             self.recalc_field6()
         except Exception:
             pass
+        self._mark_clean()
 
     def recalc_field6(self) -> None:
         v3 = self.entries.get("field3").get() if self.entries.get("field3") else None
@@ -392,6 +406,7 @@ class InputForm(ttk.Frame):
             self._set_field6_text("")
         except Exception:
             pass
+        self._mark_clean()
 
     def rename_fields(self) -> None:
         win = tk.Toplevel(self)
