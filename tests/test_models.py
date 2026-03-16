@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import json
 
 import pytest
 
@@ -56,3 +57,37 @@ def test_record_ignores_malformed_numeric_change_history_string():
     record = Record(field1="Alpha", numeric_change_history="{not-json")
 
     assert record.numeric_change_history == []
+
+
+def test_record_to_dict_serializes_metrics_and_change_history():
+    changed_at = datetime(2026, 3, 16, 12, 0, tzinfo=timezone.utc)
+    record = Record(
+        field1="alpha",
+        field6="2.00",
+        field7="5.00",
+        last_numeric_changed_at=changed_at,
+        numeric_change_history=[
+            {
+                "field_name": "field7",
+                "from_value": 4.5,
+                "to_value": 5.0,
+                "changed_at": changed_at,
+            }
+        ],
+    )
+
+    data = record.to_dict()
+
+    assert data["field1"] == "Alpha"
+    assert datetime.fromisoformat(data["created_at"].replace("Z", "+00:00")).tzinfo is not None
+    assert datetime.fromisoformat(data["last_numeric_changed_at"].replace("Z", "+00:00")) == changed_at
+    assert data["gp"] == pytest.approx(0.52)
+    assert data["cash_margin"] == pytest.approx(2.6)
+    assert data["gp70"] == pytest.approx(8.0)
+    history = json.loads(data["numeric_change_history"])
+
+    assert len(history) == 1
+    assert history[0]["field_name"] == "field7"
+    assert history[0]["from_value"] == 4.5
+    assert history[0]["to_value"] == 5.0
+    assert datetime.fromisoformat(history[0]["changed_at"].replace("Z", "+00:00")) == changed_at

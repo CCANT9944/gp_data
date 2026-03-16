@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 import warnings
 from pathlib import Path
 from typing import Optional, Protocol
@@ -30,34 +31,44 @@ class DataBackend(Protocol):
     def restore_from_backup(self, backup: Path) -> Path: ...
 
 
+def _build_backend(path: Path) -> DataBackend:
+    return CSVDataManager(path) if path.suffix.lower() == ".csv" else SQLiteDataManager(path)
+
+
+def _default_storage_path() -> Path:
+    csv_exists = DEFAULT_CSV.exists()
+    db_needs_migration = False
+
+    if csv_exists and not DEFAULT_DB.exists():
+        db_needs_migration = True
+    elif csv_exists and DEFAULT_DB.exists():
+        db_needs_migration = _default_db_is_empty_or_unavailable(DEFAULT_DB)
+
+    if db_needs_migration and csv_exists:
+        warnings.warn("legacy CSV detected; migrating to SQLite database", UserWarning)
+        DataManager.migrate_from_csv(DEFAULT_CSV, DEFAULT_DB)
+
+    return DEFAULT_DB
+
+
+def _default_db_is_empty_or_unavailable(path: Path) -> bool:
+    backend = SQLiteDataManager(path)
+    try:
+        return len(backend.load_all()) == 0
+    except (sqlite3.DatabaseError, OSError, RuntimeError, ValueError):
+        LOGGER.warning("Unable to inspect existing SQLite database; falling back to CSV migration", exc_info=True)
+        return True
+    finally:
+        backend._reset_conn()
+
+
 class DataManager:
     """Stable app-facing API over the CSV and SQLite backends."""
 
     def __init__(self, path: Optional[Path] = None):
-        if path is None:
-            db_should_migrate = False
-            if not DEFAULT_DB.exists() and DEFAULT_CSV.exists():
-                db_should_migrate = True
-            elif DEFAULT_DB.exists() and DEFAULT_CSV.exists():
-                try:
-                    tmp = SQLiteDataManager(DEFAULT_DB)
-                    if len(tmp.load_all()) == 0:
-                        db_should_migrate = True
-                    tmp._reset_conn()
-                except Exception:
-                    LOGGER.warning("Unable to inspect existing SQLite database; falling back to CSV migration", exc_info=True)
-                    db_should_migrate = True
-            if db_should_migrate and DEFAULT_CSV.exists():
-                warnings.warn("legacy CSV detected; migrating to SQLite database", UserWarning)
-                DataManager.migrate_from_csv(DEFAULT_CSV, DEFAULT_DB)
-            path = DEFAULT_DB
-        else:
-            path = Path(path)
+        path = _default_storage_path() if path is None else Path(path)
 
-        if path.suffix.lower() == ".csv":
-            self._backend = CSVDataManager(path)
-        else:
-            self._backend = SQLiteDataManager(path)
+        self._backend = _build_backend(path)
         self._duplicate_detector = DuplicateDetector(self.load_all)
 
     @property

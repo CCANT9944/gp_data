@@ -1,6 +1,6 @@
 from __future__ import annotations
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 import uuid
 
@@ -10,6 +10,15 @@ from pydantic import BaseModel, Field, field_validator, ConfigDict
 # helper functions are kept at module level so both the model and the UI can
 # reuse the same business logic without duplicating formulas.  tests exercise
 # these helpers directly.
+
+
+def _normalize_title_text(value) -> Optional[str]:
+    if value is None:
+        return value
+    normalized = str(value).strip()
+    if normalized == "":
+        return normalized
+    return normalized.title()
 
 def calculate_gp(cost: Optional[float], menu_price: Optional[float]) -> Optional[float]:
     """Return GP fraction (e.g. 0.52 == 52%) or ``None`` if not computable."""
@@ -83,6 +92,33 @@ def _parse_optional_float(value, field_name: str) -> Optional[float]:
         raise ValueError(f"{field_name} must be a number or empty")
 
 
+def _safe_export_float(value) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_numeric_change_history(value) -> list:
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        return parsed if isinstance(parsed, list) else []
+    if isinstance(value, list):
+        return value
+    return []
+
+
+def _serialize_numeric_change_history(value) -> str:
+    return json.dumps(value or [], ensure_ascii=False)
+
+
 class NumericChange(BaseModel):
     field_name: str
     from_value: Optional[float] = None
@@ -110,66 +146,24 @@ class Record(BaseModel):
     field5: Optional[str] = None
     field6: Optional[float] = None
     field7: Optional[float] = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(__import__('datetime').timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     last_numeric_field: Optional[str] = None
     last_numeric_from: Optional[float] = None
     last_numeric_to: Optional[float] = None
     last_numeric_changed_at: Optional[datetime] = None
     numeric_change_history: list[NumericChange] = Field(default_factory=list)
 
-    @field_validator("field1", mode="before")
-    def _normalize_field1(cls, v):
-        if v is None:
-            return v
-        s = str(v).strip()
-        if s == "":
-            return s
-        # Title-case each word (e.g. "mary jane" -> "Mary Jane")
-        return s.title()
+    @field_validator("field1", "field2", mode="before")
+    def _normalize_title_fields(cls, v):
+        return _normalize_title_text(v)
 
-    @field_validator("field2", mode="before")
-    def _normalize_field2(cls, v):
-        if v is None:
-            return v
-        s = str(v).strip()
-        if s == "":
-            return s
-        # Title-case each word
-        return s.title()
-
-    @field_validator("field3", mode="before")
-    def _parse_field3(cls, v):
-        return _parse_optional_float(v, "field3")
-
-    @field_validator("field6", mode="before")
-    def _parse_field6(cls, v):
-        return _parse_optional_float(v, "field6")
-
-    @field_validator("field7", mode="before")
-    def _parse_field7(cls, v):
-        return _parse_optional_float(v, "field7")
-
-    @field_validator("last_numeric_from", mode="before")
-    def _parse_last_numeric_from(cls, v):
-        return _parse_optional_float(v, "last_numeric_from")
-
-    @field_validator("last_numeric_to", mode="before")
-    def _parse_last_numeric_to(cls, v):
-        return _parse_optional_float(v, "last_numeric_to")
+    @field_validator("field3", "field6", "field7", "last_numeric_from", "last_numeric_to", mode="before")
+    def _parse_optional_float_fields(cls, v, info):
+        return _parse_optional_float(v, info.field_name)
 
     @field_validator("numeric_change_history", mode="before")
     def _parse_numeric_change_history(cls, v):
-        if v is None or v == "":
-            return []
-        if isinstance(v, str):
-            try:
-                parsed = json.loads(v)
-            except json.JSONDecodeError:
-                return []
-            return parsed if isinstance(parsed, list) else []
-        if isinstance(v, list):
-            return v
-        return []
+        return _parse_numeric_change_history(v)
 
     @property
     def gp(self) -> float | None:
@@ -187,37 +181,12 @@ class Record(BaseModel):
         return calculate_gp70(self.field6)
 
     def to_dict(self) -> dict:
-        d = self.model_dump()
+        d = self.model_dump(mode="json")
         # include derived, read-only metrics so they can be exported to CSV
-        try:
-            d["gp"] = None if self.gp is None else float(self.gp)
-        except (TypeError, ValueError):
-            d["gp"] = None
-        try:
-            d["cash_margin"] = None if self.cash_margin is None else float(self.cash_margin)
-        except (TypeError, ValueError):
-            d["cash_margin"] = None
-        try:
-            d["gp70"] = None if self.gp70 is None else float(self.gp70)
-        except (TypeError, ValueError):
-            d["gp70"] = None
-        # ensure created_at is JSON-friendly (ISO string)
-        ca = d.get("created_at")
-        if isinstance(ca, datetime):
-            d["created_at"] = ca.isoformat()
-        last_changed = d.get("last_numeric_changed_at")
-        if isinstance(last_changed, datetime):
-            d["last_numeric_changed_at"] = last_changed.isoformat()
-        history = d.get("numeric_change_history") or []
-        d["numeric_change_history"] = json.dumps([
-            {
-                "field_name": entry["field_name"],
-                "from_value": entry.get("from_value"),
-                "to_value": entry.get("to_value"),
-                "changed_at": entry["changed_at"].isoformat() if isinstance(entry.get("changed_at"), datetime) else entry.get("changed_at"),
-            }
-            for entry in history
-        ], ensure_ascii=False)
+        d["gp"] = _safe_export_float(self.gp)
+        d["cash_margin"] = _safe_export_float(self.cash_margin)
+        d["gp70"] = _safe_export_float(self.gp70)
+        d["numeric_change_history"] = _serialize_numeric_change_history(d.get("numeric_change_history"))
         return d
 
     @classmethod

@@ -18,6 +18,11 @@ LOGGER = logging.getLogger(__name__)
 
 TRACKED_NUMERIC_FIELDS = ("field7", "field3", "field6")
 MAX_NUMERIC_CHANGE_HISTORY = 8
+CSV_COMPUTED_FIELD_LABELS = {
+    "gp": "GP",
+    "cash_margin": "CASH MARGIN",
+    "gp70": "WITH 70% GP",
+}
 SQLITE_COLUMN_DEFS = [
     ("id", "TEXT PRIMARY KEY"),
     ("field1", "TEXT"),
@@ -104,16 +109,41 @@ def _default_db_path() -> Path:
 
 
 def _record_from_sqlite_row(row: tuple) -> Record:
-    data = dict(zip(SQLITE_COLUMN_NAMES, row))
-    for key, val in data.items():
-        if val == "":
-            data[key] = None
-    return Record.from_dict(data)
+    return Record.from_dict(_normalize_storage_values(dict(zip(SQLITE_COLUMN_NAMES, row))))
 
 
 def _sqlite_record_params(record: Record) -> dict:
+    return _record_to_storage_row(record, SQLITE_COLUMN_NAMES)
+
+
+def _csv_header_labels(labels: list[str]) -> list[str]:
+    header_labels: list[str] = []
+    for field_name in FIELDNAMES:
+        if field_name.startswith("field") and field_name[5:].isdigit():
+            header_labels.append(labels[int(field_name[5:]) - 1])
+        else:
+            header_labels.append(CSV_COMPUTED_FIELD_LABELS.get(field_name, field_name))
+    return header_labels
+
+
+def _csv_label_to_field_map(csv_headers: list[str], header_labels: list[str]) -> dict[str, str]:
+    label_to_field: dict[str, str] = {}
+    for canonical, label in zip(FIELDNAMES, header_labels):
+        if label in csv_headers:
+            label_to_field[label] = canonical
+        if canonical in csv_headers:
+            label_to_field[canonical] = canonical
+    return label_to_field
+
+
+def _normalize_storage_values(data: dict) -> dict:
+    return {key: (None if value == "" else value) for key, value in data.items()}
+
+
+def _record_to_storage_row(record: Record, field_names: list[str] | None = None) -> dict:
+    field_names = field_names or FIELDNAMES
     data = record.to_dict()
-    return {name: data.get(name) for name in SQLITE_COLUMN_NAMES}
+    return {name: ("" if data.get(name) is None else data.get(name)) for name in field_names}
 
 
 class CSVDataManager:
@@ -124,21 +154,7 @@ class CSVDataManager:
         self.ensure_storage()
 
     def _header_labels(self) -> list[str]:
-        labels = load_labels()
-        out: list[str] = []
-        for fname in FIELDNAMES:
-            if fname.startswith("field") and fname[5:].isdigit():
-                idx = int(fname[5:]) - 1
-                out.append(labels[idx])
-            elif fname == "gp":
-                out.append("GP")
-            elif fname == "cash_margin":
-                out.append("CASH MARGIN")
-            elif fname == "gp70":
-                out.append("WITH 70% GP")
-            else:
-                out.append(fname)
-        return out
+        return _csv_header_labels(load_labels())
 
     def ensure_storage(self) -> None:
         if not self.path.exists():
@@ -154,24 +170,14 @@ class CSVDataManager:
             reader = csv.DictReader(handle)
             csv_headers = reader.fieldnames or []
             header_labels = self._header_labels()
-            label_to_field: dict[str, str] = {}
-            for canonical, label in zip(FIELDNAMES, header_labels):
-                if label in csv_headers:
-                    label_to_field[label] = canonical
-                if canonical in csv_headers:
-                    label_to_field[canonical] = canonical
+            label_to_field = _csv_label_to_field_map(csv_headers, header_labels)
 
             for row in reader:
-                normalized: dict = {}
-                for csv_key, val in row.items():
-                    if csv_key in label_to_field:
-                        normalized[label_to_field[csv_key]] = val
-                    else:
-                        normalized[csv_key] = val
-                for key, val in normalized.items():
-                    if val == "":
-                        normalized[key] = None
-                records.append(Record.from_dict(normalized))
+                normalized = {
+                    label_to_field.get(csv_key, csv_key): val
+                    for csv_key, val in row.items()
+                }
+                records.append(Record.from_dict(_normalize_storage_values(normalized)))
         return records
 
     def _write_all(self, records: List[Record]) -> None:
@@ -181,8 +187,7 @@ class CSVDataManager:
             header_writer.writerow(self._header_labels())
             writer = csv.DictWriter(handle, fieldnames=FIELDNAMES)
             for record in records:
-                row = {key: ("" if val is None else val) for key, val in record.to_dict().items()}
-                writer.writerow(row)
+                writer.writerow(_record_to_storage_row(record))
         shutil.move(str(tmp), str(self.path))
 
     def restore_backup(self) -> Path:

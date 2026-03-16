@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from gp_data.data_manager import backends
 from gp_data.data_manager import DataManager
 from gp_data.models import Record
 
@@ -84,3 +85,16 @@ def test_data_manager_exposes_explicit_public_api(tmp_path: Path):
 
     with pytest.raises(AttributeError):
         getattr(dm, "missing_attribute")
+
+
+def test_csv_data_manager_loads_records_with_custom_field_labels(tmp_path: Path, monkeypatch):
+    csv_path = tmp_path / "data.csv"
+    csv_path.write_text("Product,Category\nGin,Tonic\n", encoding="utf-8")
+    monkeypatch.setattr(backends, "load_labels", lambda: ["Product", "Category", "Field 3", "Field 4", "Field 5", "Field 6", "Field 7"])
+
+    dm = DataManager(csv_path)
+    rows = dm.load_all()
+
+    assert len(rows) == 1
+    assert rows[0].field1 == "Gin"
+    assert rows[0].field2 == "Tonic"
