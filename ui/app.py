@@ -123,7 +123,7 @@ class GPDataApp(tk.Tk):
 
         left = ttk.Frame(container)
         left.pack(side="left", fill="y", padx=(0, 8))
-        self.form = InputForm(left, labels=labels, on_rename=self.on_labels_changed, on_submit=self.on_add)
+        self.form = InputForm(left, labels=labels, on_rename=self.on_labels_changed, on_submit=self.on_form_submit)
         self.form.pack(fill="y", expand=False)
 
         right = ttk.Frame(container)
@@ -133,8 +133,8 @@ class GPDataApp(tk.Tk):
 
         controls = ttk.Frame(self)
         controls.pack(fill="x", padx=8, pady=6)
-        ttk.Button(controls, text="Add", command=self.on_add).pack(side="left", padx=4)
-        ttk.Button(controls, text="Edit selected", command=self.on_edit).pack(side="left", padx=4)
+        ttk.Button(controls, text="New item", command=self.on_new_item).pack(side="left", padx=4)
+        ttk.Button(controls, text="Save changes", command=self.on_save_changes).pack(side="left", padx=4)
         ttk.Button(controls, text="Delete selected", command=self.on_delete).pack(side="left", padx=4)
         ttk.Button(controls, text="Columns", command=self.on_manage_columns).pack(side="left", padx=4)
         ttk.Button(controls, text="Rename fields", command=self.form.rename_fields).pack(side="left", padx=4)
@@ -146,9 +146,10 @@ class GPDataApp(tk.Tk):
         self._search_entry.bind("<KeyRelease>", lambda e: self.on_search())
         ttk.Button(controls, text="Clear", command=self.on_clear_search).pack(side="right", padx=4)
         self._search_entry.pack(side="right", padx=4)
+        ttk.Label(controls, text="Search").pack(side="right", padx=(4, 0))
 
         self.row_menu = tk.Menu(self, tearoff=0)
-        self.row_menu.add_command(label="Edit", command=self.on_edit)
+        self.row_menu.add_command(label="Load into form", command=self.on_edit)
         self.row_menu.add_command(label="Delete", command=self.on_delete)
         self.row_menu.add_separator()
         self.row_menu.add_command(label="Copy ID", command=self._copy_selected_id_to_clipboard)
@@ -293,6 +294,29 @@ class GPDataApp(tk.Tk):
         self._search_entry.delete(0, "end")
         self.load_records()
 
+    def on_new_item(self) -> None:
+        self.form.clear()
+        try:
+            self.table.selection_remove(*self.table.selection())
+        except Exception:
+            pass
+        first_field = self.form.entries.get("field1")
+        if first_field is not None:
+            try:
+                first_field.focus_set()
+                first_field.focus_force()
+            except Exception:
+                try:
+                    first_field.focus_set()
+                except Exception:
+                    pass
+
+    def on_form_submit(self) -> None:
+        if self.form.current_record_id:
+            self.on_save_changes()
+            return
+        self.on_add()
+
     def on_add(self) -> None:
         try:
             self.form.recalc_field6()
@@ -314,7 +338,7 @@ class GPDataApp(tk.Tk):
             pass
         self.data_manager.save(rec)
         self.load_records()
-        self.form.clear()
+        self.on_new_item()
 
     def on_edit(self) -> None:
         sel_id = self.table.get_selected_id()
@@ -326,30 +350,41 @@ class GPDataApp(tk.Tk):
             messagebox.showerror("Error", "Record not found")
             return
         self.form.set_values(record.to_dict())
-
-        def apply_edit():
+        first_field = self.form.entries.get("field1")
+        if first_field is not None:
             try:
-                self.form.recalc_field6()
+                first_field.focus_set()
+                first_field.focus_force()
             except Exception:
-                pass
-            values = self.form.get_values()
-            try:
-                updated = Record(id=record.id, created_at=record.created_at, **values)
-            except Exception as exc:
-                messagebox.showerror("Validation error", str(exc))
-                return
-            if not self._confirm_duplicate_record(updated, exclude_id=record.id, action_text="save this edit"):
-                return
-            saved = self.data_manager.update(record.id, updated)
-            self.form.set_values(saved.to_dict())
-            self._refresh_saved_record(saved)
-            edit_win.destroy()
+                try:
+                    first_field.focus_set()
+                except Exception:
+                    pass
 
-        edit_win = tk.Toplevel(self)
-        edit_win.title("Edit record")
-        ttk.Label(edit_win, text="Make changes in the main form then press Apply.").pack(padx=8, pady=8)
-        ttk.Button(edit_win, text="Apply", command=apply_edit).pack(side="left", padx=8, pady=8)
-        ttk.Button(edit_win, text="Cancel", command=edit_win.destroy).pack(side="left", padx=8, pady=8)
+    def on_save_changes(self) -> None:
+        record_id = self.form.current_record_id or self.table.get_selected_id()
+        if not record_id:
+            messagebox.showinfo("Select", "Please select a record to edit.")
+            return
+        record = self._record_by_id(record_id)
+        if not record:
+            messagebox.showerror("Error", "Record not found")
+            return
+        try:
+            self.form.recalc_field6()
+        except Exception:
+            pass
+        values = self.form.get_values()
+        try:
+            updated = Record(id=record.id, created_at=record.created_at, **values)
+        except Exception as exc:
+            messagebox.showerror("Validation error", str(exc))
+            return
+        if not self._confirm_duplicate_record(updated, exclude_id=record.id, action_text="save this edit"):
+            return
+        saved = self.data_manager.update(record.id, updated)
+        self.form.set_values(saved.to_dict())
+        self._refresh_saved_record(saved)
 
     def on_delete(self) -> None:
         sel_id = self.table.get_selected_id()
@@ -574,6 +609,7 @@ class GPDataApp(tk.Tk):
             row = self.table.identify_row(event.y)
             if row:
                 self.table.selection_set(row)
+                self._on_table_select()
                 self.row_menu.post(event.x_root, event.y_root)
         except Exception:
             pass

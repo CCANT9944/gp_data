@@ -18,8 +18,9 @@ numeric change history per item.
 
 ### Desktop UI
 
-- Add records through the form on the left.
-- Edit records either through `Edit selected` or by double-clicking cells in the table.
+- Add records through the form on the left and press `Enter` in the last field to save.
+- Clicking a table row loads that record into the main form for editing.
+- Use `Save changes` to commit form edits, or press `Enter` in the last field while an item is loaded.
 - Add and edit flows warn when the same `Type + Name` already exists.
 - The table shows the newest saved items first.
 - Inline edits and form edits keep the edited row in place instead of moving it.

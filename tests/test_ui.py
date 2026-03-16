@@ -407,10 +407,6 @@ def test_form_shows_existing_last_numeric_change(tmp_path):
     assert '£4.00' in summary
     assert '£5.00' in summary
     assert '2026-03-14 12:30:00 UTC' in summary
-
-    for window in app.winfo_children():
-        if isinstance(window, tk.Toplevel):
-            window.destroy()
     app.destroy()
 
 
@@ -433,10 +429,6 @@ def test_form_shows_selected_item_when_no_changes_exist(tmp_path):
     assert app.form.labels[1] in summary
     assert 'House' in summary
     assert 'No changes recorded' in summary
-
-    for window in app.winfo_children():
-        if isinstance(window, tk.Toplevel):
-            window.destroy()
     app.destroy()
 
 
@@ -455,5 +447,100 @@ def test_app_shows_newest_records_first(tmp_path):
     app.load_records()
 
     assert app.table.get_children() == (newer.id, older.id)
+
+    app.destroy()
+
+
+def test_main_controls_hide_add_button_and_keep_new_item(tmp_path):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    button_labels = [
+        child.cget("text")
+        for child in app.winfo_children()
+        if isinstance(child, ttk.Frame)
+        for child in child.winfo_children()
+        if isinstance(child, ttk.Button)
+    ]
+
+    assert "New item" in button_labels
+    assert "Add" not in button_labels
+    assert "Save changes" in button_labels
+    assert "Edit selected" not in button_labels
+
+    app.destroy()
+
+
+def test_main_controls_show_search_label(tmp_path):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    label_texts = [
+        child.cget("text")
+        for child in app.winfo_children()
+        if isinstance(child, ttk.Frame)
+        for child in child.winfo_children()
+        if isinstance(child, ttk.Label)
+    ]
+
+    assert "Search" in label_texts
+
+    app.destroy()
+
+
+def test_new_item_clears_form_and_selection(tmp_path):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    record = Record(field1="gin", field2="house")
+    app.data_manager.save(record)
+    app.load_records()
+
+    app.table.selection_set(record.id)
+    app._on_table_select()
+
+    assert app.form.entries["field1"].get() == "Gin"
+    assert app.form.entries["field2"].get() == "House"
+    assert app.table.get_selected_id() == record.id
+
+    app.on_new_item()
+
+    assert app.form.current_record_id is None
+    assert app.form.entries["field1"].get() == ""
+    assert app.form.entries["field2"].get() == ""
+    assert app.table.get_selected_id() is None
+
+    app.destroy()
+
+
+def test_enter_in_last_field_saves_selected_record(tmp_path):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    record = Record(field1="gin", field2="house", field3=10.0, field5="5", field7=4.0)
+    app.data_manager.save(record)
+    app.load_records()
+
+    app.table.selection_set(record.id)
+    app.on_edit()
+    app.form.entries["field2"].delete(0, tk.END)
+    app.form.entries["field2"].insert(0, "updated")
+    app.form._on_enter(type("Event", (), {"widget": app.form.entries["field7"]})())
+
+    saved = app.data_manager.load_all()[0]
+    assert saved.field2 == "Updated"
+    assert app.form.current_record_id == record.id
 
     app.destroy()

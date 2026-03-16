@@ -19,25 +19,14 @@ def test_edit_commit_updates_storage(tmp_path):
     app.data_manager.save(r)
     app.load_records()
 
-    # select and open edit dialog
+    # select and load into the main form
     app.table.selection_set(r.id)
     app.on_edit()
 
     # change the name and price in the form
     app.form.entries['field2'].delete(0, tk.END); app.form.entries['field2'].insert(0, 'updated')
     app.form.entries['field3'].delete(0, tk.END); app.form.entries['field3'].insert(0, '12.00')
-
-    # find the Edit dialog's Apply button and invoke it
-    apply_btn = None
-    for w in app.winfo_children():
-        if isinstance(w, tk.Toplevel):
-            for child in w.winfo_children():
-                if getattr(child, 'cget', lambda x: '')('text') == 'Apply':
-                    apply_btn = child
-                    break
-
-    assert apply_btn is not None
-    apply_btn.invoke()
+    app.on_save_changes()
 
     # verify storage updated
     rows = app.data_manager.load_all()
@@ -79,17 +68,7 @@ def test_form_edit_preserves_row_position(tmp_path):
     app.on_edit()
     app.form.entries['field2'].delete(0, tk.END)
     app.form.entries['field2'].insert(0, 'updated')
-
-    apply_btn = None
-    for w in app.winfo_children():
-        if isinstance(w, tk.Toplevel):
-            for child in w.winfo_children():
-                if getattr(child, 'cget', lambda x: '')('text') == 'Apply':
-                    apply_btn = child
-                    break
-
-    assert apply_btn is not None
-    apply_btn.invoke()
+    app.on_save_changes()
 
     assert app.table.get_children() == (second.id, first.id)
 
@@ -122,17 +101,7 @@ def test_form_edit_duplicate_warning_can_cancel_edit(tmp_path, monkeypatch):
     app.on_edit()
     app.form.entries['field2'].delete(0, tk.END)
     app.form.entries['field2'].insert(0, 'second')
-
-    apply_btn = None
-    for w in app.winfo_children():
-        if isinstance(w, tk.Toplevel):
-            for child in w.winfo_children():
-                if getattr(child, 'cget', lambda x: '')('text') == 'Apply':
-                    apply_btn = child
-                    break
-
-    assert apply_btn is not None
-    apply_btn.invoke()
+    app.on_save_changes()
 
     rows = app.data_manager.load_all()
     first_row = next(row for row in rows if row.id == first.id)
@@ -141,7 +110,4 @@ def test_form_edit_duplicate_warning_can_cancel_edit(tmp_path, monkeypatch):
     assert "already exists" in asked["message"]
     assert app.table.get_selected_id() == second.id
 
-    for w in app.winfo_children():
-        if isinstance(w, tk.Toplevel):
-            w.destroy()
     app.destroy()

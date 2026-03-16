@@ -41,7 +41,9 @@ The newest saved items are shown first in the table.
 
 4. ADDING A RECORD
 
-Fill in the fields on the left and click Add.
+Click New item if you want a blank form.
+Fill in the fields on the left.
+When you finish the last field, press Enter to save the new record.
 
 Important notes:
 
@@ -56,12 +58,14 @@ Important notes:
 
 There are 2 ways to edit.
 
-Method A: Edit selected
+Method A: Main form edit
 
 1. Click a row in the table.
-2. Click Edit selected.
+2. The item loads into the main form automatically.
 3. Change the values in the form.
-4. Click Apply.
+4. Click Save changes or press Enter in the last field.
+
+If you want to stop editing that row and enter a completely new item instead, click New item to clear the form and remove the current selection.
 
 Method B: Inline edit
 
@@ -232,6 +236,6 @@ If you still see two items with the same Type and Name:
 
 1. Start the app with python main.py
 2. Search or select an item
-3. Edit inline or with Edit selected
+3. Edit inline or use Save changes from the main form
 4. Check the Changes box
 5. Export or manage backups when needed
