@@ -470,6 +470,7 @@ def test_main_controls_hide_add_button_and_keep_new_item(tmp_path):
     assert "Add" not in button_labels
     assert "Save changes" in button_labels
     assert "Edit selected" not in button_labels
+    assert str(app._save_changes_button.cget("state")) == "disabled"
 
     app.destroy()
 
@@ -511,6 +512,8 @@ def test_new_item_clears_form_and_selection(tmp_path):
     assert app.form.entries["field1"].get() == "Gin"
     assert app.form.entries["field2"].get() == "House"
     assert app.table.get_selected_id() == record.id
+    assert app._form_mode_var.get() == "Mode: Editing Gin / House"
+    assert str(app._save_changes_button.cget("state")) == "normal"
 
     app.on_new_item()
 
@@ -518,6 +521,31 @@ def test_new_item_clears_form_and_selection(tmp_path):
     assert app.form.entries["field1"].get() == ""
     assert app.form.entries["field2"].get() == ""
     assert app.table.get_selected_id() is None
+    assert app._form_mode_var.get() == "Mode: New item"
+    assert str(app._save_changes_button.cget("state")) == "disabled"
+
+    app.destroy()
+
+
+def test_selecting_row_updates_mode_label_and_enables_save(tmp_path):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    record = Record(field1="vodka", field2="house")
+    app.data_manager.save(record)
+    app.load_records()
+
+    assert app._form_mode_var.get() == "Mode: New item"
+    assert str(app._save_changes_button.cget("state")) == "disabled"
+
+    app.table.selection_set(record.id)
+    app._on_table_select()
+
+    assert app._form_mode_var.get() == "Mode: Editing Vodka / House"
+    assert str(app._save_changes_button.cget("state")) == "normal"
 
     app.destroy()
 

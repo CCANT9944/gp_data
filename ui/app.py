@@ -125,6 +125,9 @@ class GPDataApp(tk.Tk):
         left.pack(side="left", fill="y", padx=(0, 8))
         self.form = InputForm(left, labels=labels, on_rename=self.on_labels_changed, on_submit=self.on_form_submit)
         self.form.pack(fill="y", expand=False)
+        self._form_mode_var = tk.StringVar(value="Mode: New item")
+        self._form_mode_label = ttk.Label(left, textvariable=self._form_mode_var)
+        self._form_mode_label.pack(fill="x", pady=(6, 0))
 
         right = ttk.Frame(container)
         right.pack(side="left", fill="both", expand=True)
@@ -134,7 +137,8 @@ class GPDataApp(tk.Tk):
         controls = ttk.Frame(self)
         controls.pack(fill="x", padx=8, pady=6)
         ttk.Button(controls, text="New item", command=self.on_new_item).pack(side="left", padx=4)
-        ttk.Button(controls, text="Save changes", command=self.on_save_changes).pack(side="left", padx=4)
+        self._save_changes_button = ttk.Button(controls, text="Save changes", command=self.on_save_changes)
+        self._save_changes_button.pack(side="left", padx=4)
         ttk.Button(controls, text="Delete selected", command=self.on_delete).pack(side="left", padx=4)
         ttk.Button(controls, text="Columns", command=self.on_manage_columns).pack(side="left", padx=4)
         ttk.Button(controls, text="Rename fields", command=self.form.rename_fields).pack(side="left", padx=4)
@@ -156,6 +160,7 @@ class GPDataApp(tk.Tk):
         self.table.bind("<<TreeviewSelect>>", self._on_table_select)
         self.table.bind("<Button-3>", self._on_row_right_click)
 
+        self._update_form_mode_ui()
         self.load_records()
 
     def _record_by_id(self, record_id: str) -> Record | None:
@@ -212,6 +217,23 @@ class GPDataApp(tk.Tk):
         if record is None:
             return
         self.form.set_values(record.to_dict())
+        self._update_form_mode_ui(record)
+
+    def _update_form_mode_ui(self, record: Record | None = None) -> None:
+        current_record_id = self.form.current_record_id
+        if current_record_id is None:
+            self._save_changes_button.config(state="disabled")
+            self._form_mode_var.set("Mode: New item")
+            return
+        if record is None or record.id != current_record_id:
+            record = self._record_by_id(current_record_id)
+        self._save_changes_button.config(state="normal")
+        if record is None:
+            self._form_mode_var.set("Mode: Editing selected item")
+            return
+        left = (record.field1 or "").strip() or "(blank)"
+        right = (record.field2 or "").strip() or "(blank)"
+        self._form_mode_var.set(f"Mode: Editing {left} / {right}")
 
     def _current_search_query(self) -> str:
         return self._search_entry.get().strip().lower()
@@ -300,6 +322,7 @@ class GPDataApp(tk.Tk):
             self.table.selection_remove(*self.table.selection())
         except Exception:
             pass
+        self._update_form_mode_ui()
         first_field = self.form.entries.get("field1")
         if first_field is not None:
             try:
@@ -350,6 +373,7 @@ class GPDataApp(tk.Tk):
             messagebox.showerror("Error", "Record not found")
             return
         self.form.set_values(record.to_dict())
+        self._update_form_mode_ui(record)
         first_field = self.form.entries.get("field1")
         if first_field is not None:
             try:
@@ -384,6 +408,7 @@ class GPDataApp(tk.Tk):
             return
         saved = self.data_manager.update(record.id, updated)
         self.form.set_values(saved.to_dict())
+        self._update_form_mode_ui(saved)
         self._refresh_saved_record(saved)
 
     def on_delete(self) -> None:
@@ -394,6 +419,7 @@ class GPDataApp(tk.Tk):
         if messagebox.askyesno("Confirm", "Delete selected record?"):
             self.data_manager.delete(sel_id)
             self.load_records()
+            self.on_new_item()
 
     def on_export(self) -> None:
         path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files", "*.csv")])
