@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from gp_data.data_manager import SQLiteDataManager
 from gp_data.models import Record
 import shutil
@@ -98,6 +100,17 @@ def test_sqlite_restore_from_timestamped_backup(tmp_path: Path):
     rows = dm.load_all()
     assert any(r.field1.lower() == "one" for r in rows)
     assert not any(r.field1.lower() == "two" for r in rows)
+
+
+def test_sqlite_data_manager_rejects_corrupted_database_file(tmp_path: Path):
+    db = tmp_path / "data.db"
+    db.write_text("not a sqlite database", encoding="utf-8")
+
+    dm = SQLiteDataManager(db)
+
+    assert dm.load_all() == []
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        dm.save(Record(field1="one"))
 
 
 def test_sqlite_round_trips_all_persisted_fields(tmp_path: Path):
