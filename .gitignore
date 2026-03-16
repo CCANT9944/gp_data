@@ -8,6 +8,7 @@ __pycache__/
 # Local runtime data
 data.csv
 *.db
+settings.json
 
 # Generated backups
 backups/

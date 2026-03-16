@@ -38,7 +38,6 @@ The table is used for browsing, searching, selecting, and inline editing.
 
 The newest saved items are shown first in the table.
 
-
 4. ADDING A RECORD
 
 Click New item if you want a blank form.
@@ -195,6 +194,7 @@ python main.py export output.csv
 12. SETTINGS THAT ARE SAVED
 
 The program saves settings in settings.json.
+That file is local on your machine and is not meant to be pushed to Git.
 
 This includes:
 

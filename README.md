@@ -125,7 +125,7 @@ python main.py cleanup
 - `ui/`: Tkinter application code
 - `data_manager/`: CSV and SQLite persistence layer
 - `models.py`: record model and calculated fields
-- `settings.json`: saved labels and table layout preferences
+- `settings.json`: local saved labels and table layout preferences
 - `MANUAL.txt`: plain-language user guide
 
 ## Testing
@@ -142,7 +142,8 @@ GUI-related tests skip automatically if Tk is not available in the current envir
 ## Notes
 
 - The app stores recent numeric change history, not a full unlimited audit log.
-- Column order, visible columns, and widths are persisted in `settings.json`.
+- Column order, visible columns, and widths are persisted in the local `settings.json` file.
+- `settings.json` is intentionally ignored by Git so personal layout changes are not committed.
 - Duplicate warnings are advisory: the GUI can still allow a duplicate if the user explicitly confirms it.
 - Older duplicate rows already stored in the database are not merged automatically.
 - In the GUI, restore is available from `Manage backups` rather than from a separate main-window restore button.
