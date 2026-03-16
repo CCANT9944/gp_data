@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 import tkinter as tk
 import pytest
 
@@ -103,14 +105,14 @@ def test_inline_edit_preserves_row_position(tmp_path):
     except tk.TclError:
         pytest.skip("Tk not available in this environment")
 
-    first = Record(field1="lager", field2="first")
-    second = Record(field1="wine", field2="second")
+    first = Record(field1="lager", field2="first", created_at=datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc))
+    second = Record(field1="wine", field2="second", created_at=datetime(2026, 3, 15, 12, 1, tzinfo=timezone.utc))
     for record in (first, second):
         app.data_manager.save(record)
     app.load_records()
     app.update_idletasks()
 
-    assert app.table.get_children() == (first.id, second.id)
+    assert app.table.get_children() == (second.id, first.id)
 
     app.table.start_cell_edit(first.id, 'field2')
     editor = getattr(app.table, '_editor')
@@ -119,7 +121,7 @@ def test_inline_edit_preserves_row_position(tmp_path):
     editor.insert(0, 'updated')
     app.table._commit_edit()
 
-    assert app.table.get_children() == (first.id, second.id)
+    assert app.table.get_children() == (second.id, first.id)
 
     app.destroy()
 

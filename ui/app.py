@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 import tkinter as tk
 from datetime import datetime
@@ -139,7 +140,6 @@ class GPDataApp(tk.Tk):
         ttk.Button(controls, text="Rename fields", command=self.form.rename_fields).pack(side="left", padx=4)
 
         ttk.Button(controls, text="Manage backups", command=self.on_manage_backups).pack(side="right", padx=4)
-        ttk.Button(controls, text="Restore backup", command=self.on_restore_backup).pack(side="right", padx=4)
         ttk.Button(controls, text="Export CSV", command=self.on_export).pack(side="right", padx=4)
 
         self._search_entry = ttk.Entry(controls, width=20)
@@ -215,21 +215,43 @@ class GPDataApp(tk.Tk):
     def _current_search_query(self) -> str:
         return self._search_entry.get().strip().lower()
 
+    def _sort_records_for_display(self, records: list[Record]) -> list[Record]:
+        return sorted(
+            records,
+            key=lambda record: record.created_at.timestamp() if record.created_at is not None else 0.0,
+            reverse=True,
+        )
+
+    def _search_words(self, text: str) -> set[str]:
+        return set(re.findall(r"[a-z0-9]+", (text or "").lower()))
+
+    def _record_matches_substring_query(self, record: Record, query: str) -> bool:
+        return query in (record.field1 or "").lower() or query in (record.field2 or "").lower()
+
+    def _record_matches_exact_word_query(self, record: Record, query: str) -> bool:
+        return query in self._search_words(record.field1 or "") or query in self._search_words(record.field2 or "")
+
     def _filtered_records(self, records: list[Record]) -> list[Record]:
         query = self._current_search_query()
         if not query:
             return records
-        return [
-            record
-            for record in records
-            if (record.field1 or "").lower().find(query) != -1 or (record.field2 or "").lower().find(query) != -1
-        ]
+
+        exact_matches = [record for record in records if self._record_matches_exact_word_query(record, query)]
+        if exact_matches:
+            return exact_matches
+
+        return [record for record in records if self._record_matches_substring_query(record, query)]
 
     def _record_matches_current_filter(self, record: Record) -> bool:
         query = self._current_search_query()
         if not query:
             return True
-        return (record.field1 or "").lower().find(query) != -1 or (record.field2 or "").lower().find(query) != -1
+
+        records = self.data_manager.load_all()
+        if any(self._record_matches_exact_word_query(existing, query) for existing in records):
+            return self._record_matches_exact_word_query(record, query)
+
+        return self._record_matches_substring_query(record, query)
 
     def _refresh_saved_record(self, record: Record) -> None:
         still_visible = self._record_matches_current_filter(record)
@@ -260,7 +282,7 @@ class GPDataApp(tk.Tk):
 
     def load_records(self) -> None:
         records = self.data_manager.load_all()
-        displayed = self._filtered_records(records)
+        displayed = self._sort_records_for_display(self._filtered_records(records))
         self._displayed_records = displayed
         self.table.load(displayed)
 
@@ -352,26 +374,24 @@ class GPDataApp(tk.Tk):
         except Exception as exc:
             messagebox.showerror("Export failed", str(exc))
 
-    def on_restore_backup(self) -> None:
-        bak = self.data_manager.path.with_name(self.data_manager.path.name + ".bak")
-        if not bak.exists():
-            messagebox.showinfo("Restore", "No backup file found to restore.")
-            return
-        if not messagebox.askyesno("Confirm", f"Restore from backup ({bak})? This will overwrite the current storage and create a pre-restore backup."):
-            return
-        try:
-            pre = self.data_manager.restore_backup()
-            self.load_records()
-            messagebox.showinfo("Restore complete", f"Restored backup; pre-restore saved to {pre}")
-        except Exception as exc:
-            messagebox.showerror("Restore failed", str(exc))
-
     def on_manage_backups(self) -> None:
         win = tk.Toplevel(self)
         win.title("Manage Backups")
         win.geometry("720x360")
 
-        left = ttk.Frame(win)
+        btn_frame = ttk.Frame(win)
+        btn_frame.pack(side="bottom", fill="x", padx=8, pady=6)
+        btn_restore = ttk.Button(btn_frame, text="Restore", state="disabled")
+        btn_delete = ttk.Button(btn_frame, text="Delete", state="disabled")
+        btn_close = ttk.Button(btn_frame, text="Close", command=win.destroy)
+        btn_delete.pack(side="right", padx=4)
+        btn_restore.pack(side="right", padx=4)
+        btn_close.pack(side="right", padx=4)
+
+        content = ttk.Frame(win)
+        content.pack(fill="both", expand=True)
+
+        left = ttk.Frame(content)
         left.pack(side="left", fill="y", padx=8, pady=8)
         lb = tk.Listbox(left, width=48, height=18)
         lb.pack(side="top", fill="y", expand=True)
@@ -379,19 +399,10 @@ class GPDataApp(tk.Tk):
         info = ttk.Label(left, text="Select a backup to preview or restore")
         info.pack(side="top", pady=(6, 0))
 
-        right = ttk.Frame(win)
+        right = ttk.Frame(content)
         right.pack(side="left", fill="both", expand=True, padx=8, pady=8)
         preview = tk.Text(right, wrap="none", height=20)
         preview.pack(fill="both", expand=True)
-
-        btn_frame = ttk.Frame(win)
-        btn_frame.pack(fill="x", padx=8, pady=6)
-        btn_restore = ttk.Button(btn_frame, text="Restore", state="disabled")
-        btn_delete = ttk.Button(btn_frame, text="Delete", state="disabled")
-        btn_close = ttk.Button(btn_frame, text="Close", command=win.destroy)
-        btn_delete.pack(side="right", padx=4)
-        btn_restore.pack(side="right", padx=4)
-        btn_close.pack(side="right", padx=4)
 
         backup_paths: list[Path] = []
 

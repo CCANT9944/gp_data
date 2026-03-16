@@ -87,3 +87,37 @@ def test_export_filtered(tmp_path, monkeypatch):
 
     app.destroy()
     root.destroy()
+
+
+def test_search_prefers_exact_word_over_substring(tmp_path):
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("Tk not available")
+    root.withdraw()
+
+    app = GPDataApp(storage_path=tmp_path / "data.db")
+    records = [
+        Record(field1="gin", field2="beefeater"),
+        Record(field1="gin", field2="tanqueray"),
+        Record(field1="soft drink", field2="ginger beer"),
+    ]
+    for record in records:
+        app.data_manager.save(record)
+    app.load_records()
+
+    app._search_entry.insert(0, "gin")
+    app._search_entry.event_generate("<KeyRelease>")
+    app.on_search()
+
+    ids = app.table.get_children()
+    values = [app.table.item(item_id)["values"] for item_id in ids]
+    rendered = {" ".join(str(value).lower() for value in row) for row in values}
+
+    assert len(ids) == 2
+    assert any("beefeater" in row for row in rendered)
+    assert any("tanqueray" in row for row in rendered)
+    assert all("ginger beer" not in row for row in rendered)
+
+    app.destroy()
+    root.destroy()

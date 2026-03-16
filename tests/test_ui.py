@@ -438,3 +438,22 @@ def test_form_shows_selected_item_when_no_changes_exist(tmp_path):
         if isinstance(window, tk.Toplevel):
             window.destroy()
     app.destroy()
+
+
+def test_app_shows_newest_records_first(tmp_path):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    older = Record(field1="older", created_at=datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc))
+    newer = Record(field1="newer", created_at=datetime(2026, 3, 15, 12, 1, tzinfo=timezone.utc))
+    for record in (older, newer):
+        app.data_manager.save(record)
+
+    app.load_records()
+
+    assert app.table.get_children() == (newer.id, older.id)
+
+    app.destroy()

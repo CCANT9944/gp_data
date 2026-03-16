@@ -25,33 +25,30 @@ def test_data_manager_restore_backup(tmp_path: Path):
     assert any(r.field1.lower() == 'old' for r in rows)
 
 
-def test_gui_restore_button_restores_backup(tmp_path: Path):
+def test_main_window_uses_manage_backups_instead_of_restore_button(tmp_path: Path):
     try:
         probe = tk.Tk()
     except tk.TclError:
         pytest.skip("Tk not available in this environment")
     probe.destroy()
 
-    p = tmp_path / "data.db"
-    dm = DataManager(p)
-    # similar to non-GUI test: create two states
-    dm.save(Record(field1='old'))
-    bak = p.with_name(p.name + ".bak")
-    shutil.copyfile(str(p), str(bak))
-    dm.save(Record(field1='restored'))
-
-    app = GPDataApp(storage_path=p)
-    orig = mb.askyesno
-    mb.askyesno = lambda *a, **k: True
     try:
-        app.on_restore_backup()
-    finally:
-        mb.askyesno = orig
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not usable for GPDataApp in this environment")
 
-    # restored state should be reflected in DB
-    rows = dm.load_all()
-    assert any(r.field1.lower() == 'old' for r in rows)
-    # pre-restore backup should exist
-    assert p.with_name(p.name + ".pre_restore.bak").exists()
+    buttons = []
+    for child in app.winfo_children():
+        for grandchild in child.winfo_children():
+            if isinstance(grandchild, tk.Button):
+                buttons.append(grandchild.cget("text"))
+            else:
+                try:
+                    buttons.append(grandchild.cget("text"))
+                except Exception:
+                    pass
+
+    assert "Manage backups" in buttons
+    assert "Restore backup" not in buttons
 
     app.destroy()

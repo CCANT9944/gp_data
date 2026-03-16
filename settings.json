@@ -21,16 +21,16 @@
     "gp70"
   ],
   "column_widths": {
-    "field1": 67,
-    "field2": 122,
-    "field3": 90,
+    "field1": 68,
+    "field2": 124,
+    "field3": 92,
     "field4": 52,
     "field5": 56,
-    "field6": 82,
-    "field7": 88,
-    "gp": 62,
-    "cash_margin": 99,
-    "gp70": 110
+    "field6": 84,
+    "field7": 89,
+    "gp": 63,
+    "cash_margin": 100,
+    "gp70": 111
   },
   "visible_columns": [
     "field1",
@@ -39,7 +39,6 @@
     "field6",
     "field7",
     "gp",
-    "cash_margin",
-    "gp70"
+    "cash_margin"
   ]
 }

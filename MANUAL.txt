@@ -36,6 +36,8 @@ The window has 2 main parts:
 The form is used for adding and editing.
 The table is used for browsing, searching, selecting, and inline editing.
 
+The newest saved items are shown first in the table.
+
 
 4. ADDING A RECORD
 
@@ -81,6 +83,9 @@ Important notes about editing:
 Use the search box near the top.
 
 - Filtering happens live while you type.
+- Search checks Type and Name.
+- If there is an exact word match, the app prefers that over a loose substring match.
+- Example: searching for gin shows gin items first and avoids matching ginger beer when exact gin matches exist.
 - The table only shows matching rows.
 - Export uses the rows currently displayed in the table.
 
@@ -155,9 +160,8 @@ You can also manage backups from the UI:
 3. Preview it.
 4. Restore or delete it.
 
-Restore backup button:
-
-- restores from the latest simple backup when available
+There is no separate Restore backup button on the main window now.
+Restore is done from Manage backups.
 
 Important:
 

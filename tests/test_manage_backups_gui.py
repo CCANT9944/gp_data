@@ -44,6 +44,8 @@ def test_manage_backups_dialog_lists_and_allows_delete_and_restore(tmp_path):
 
     # open dialog
     dlg = app.on_manage_backups()
+    dlg.update_idletasks()
+
     # helper: find descendant widget by class
     def _find(root, cls):
         for w in root.winfo_children():
@@ -57,6 +59,25 @@ def test_manage_backups_dialog_lists_and_allows_delete_and_restore(tmp_path):
     lb = _find(dlg, tk.Listbox)
     assert lb is not None
 
+    buttons = []
+    def _collect_buttons(root):
+        for widget in root.winfo_children():
+            if getattr(widget, "cget", None):
+                try:
+                    if widget.cget("text") in ("Delete", "Restore", "Close"):
+                        buttons.append(widget)
+                except Exception:
+                    pass
+            _collect_buttons(widget)
+
+    _collect_buttons(dlg)
+    button_map = {button.cget('text'): button for button in buttons}
+    assert {"Delete", "Restore", "Close"}.issubset(button_map)
+
+    packed_children = dlg.pack_slaves()
+    assert len(packed_children) >= 2
+    assert any(button in packed_children[0].winfo_children() for button in button_map.values())
+
     # determine index for b1 in the listbox and select it
     names = lb.get(0, 'end')
     idx_b1 = _find_backup_index(names, _backup_label(b1))
@@ -69,19 +90,8 @@ def test_manage_backups_dialog_lists_and_allows_delete_and_restore(tmp_path):
     orig = mb.askyesno
     mb.askyesno = lambda *a, **k: True
     try:
-        # find Delete and Restore buttons by scanning for ttk.Button
-        flat_buttons = []
-        for c in dlg.winfo_children():
-            for ch in c.winfo_children():
-                if getattr(ch, 'cget', None):
-                    try:
-                        if ch.cget('text') in ('Delete', 'Restore'):
-                            flat_buttons.append(ch)
-                    except Exception:
-                        pass
-        btn_map = {b.cget('text'): b for b in flat_buttons}
-        delete_btn = btn_map['Delete']
-        restore_btn = btn_map['Restore']
+        delete_btn = button_map['Delete']
+        restore_btn = button_map['Restore']
 
         # ensure delete button is enabled then invoke
         assert str(delete_btn.cget('state')) in ('normal', 'active')

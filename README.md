@@ -21,10 +21,12 @@ numeric change history per item.
 - Add records through the form on the left.
 - Edit records either through `Edit selected` or by double-clicking cells in the table.
 - Add and edit flows warn when the same `Type + Name` already exists.
+- The table shows the newest saved items first.
 - Inline edits and form edits keep the edited row in place instead of moving it.
 - Live search filters rows as you type.
+- Search prefers exact whole-word matches when possible, so `gin` can match gin items without pulling in `ginger beer`.
 - Export writes the currently displayed rows.
-- Backup management includes preview, restore, and delete operations.
+- Restore from the UI is handled through `Manage backups`, which includes preview, restore, and delete operations.
 - Table layout is customizable:
   - drag headers to reorder columns
   - resize columns and keep the new widths
@@ -85,13 +87,13 @@ Add a record:
 python main.py add --field1 "Lager" --field2 "House" --field3 10 --field5 4 --field7 5.5
 ```
 
-Create a backup:
+Create a timestamped backup:
 
 ```powershell
 python main.py backup
 ```
 
-Restore from backup:
+Restore from the newest available backup:
 
 ```powershell
 python main.py restore
@@ -142,4 +144,5 @@ GUI-related tests skip automatically if Tk is not available in the current envir
 - Column order, visible columns, and widths are persisted in `settings.json`.
 - Duplicate warnings are advisory: the GUI can still allow a duplicate if the user explicitly confirms it.
 - Older duplicate rows already stored in the database are not merged automatically.
+- In the GUI, restore is available from `Manage backups` rather than from a separate main-window restore button.
 - The README is a technical overview. For normal day-to-day usage, see `MANUAL.txt`.
