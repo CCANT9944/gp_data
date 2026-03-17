@@ -931,6 +931,53 @@ def test_save_changes_without_selection_shows_edit_prompt(tmp_path, monkeypatch)
     app.destroy()
 
 
+def test_delete_without_selection_shows_delete_prompt(tmp_path, monkeypatch):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    seen: dict[str, str] = {}
+
+    def fake_showinfo(title, message):
+        seen["title"] = title
+        seen["message"] = message
+
+    monkeypatch.setattr("gp_data.ui.app.messagebox.showinfo", fake_showinfo)
+
+    app.on_delete()
+
+    assert seen["title"] == "Select"
+    assert seen["message"] == "Please select a record to delete."
+
+    app.destroy()
+
+
+def test_confirmed_delete_removes_record_and_resets_form(tmp_path, monkeypatch):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    record = Record(field1="lager", field2="house")
+    app.data_manager.save(record)
+    app.load_records()
+    app.table.selection_set(record.id)
+    app.on_edit()
+
+    monkeypatch.setattr("gp_data.ui.app.messagebox.askyesno", lambda title, message: True)
+
+    app.on_delete()
+
+    assert app.data_manager.load_all() == []
+    assert app.table.get_children() == ()
+    assert app.form.current_record_id is None
+
+    app.destroy()
+
+
 def test_rename_fields_shows_error_and_keeps_existing_labels_when_settings_save_fails(tmp_path, monkeypatch):
     try:
         app = GPDataApp(storage_path=tmp_path / "data.db")

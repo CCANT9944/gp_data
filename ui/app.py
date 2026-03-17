@@ -6,16 +6,16 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Sequence
 
-from pydantic import ValidationError
-
 from ..data_manager import CSVDataManager, DataManager
 from ..models import Record, calculate_field6
 from ..settings import load_settings, save_column_order, save_column_widths, save_gp_highlight_threshold, save_visible_columns
 from .backup_dialog import open_manage_backups_dialog
 from .form import InputForm
+from .record_actions import RecordActions
 from .record_logic import filtered_records, record_matches_query
 from .storage_feedback import describe_backup_failure, describe_startup_storage_issue, describe_storage_error
 from .table import METRIC_LABELS, RecordTable
+from .view_helpers import clear_table_selection, focus_record_in_table, focus_widget, recalc_form_field6, restore_table_selection
 
 
 NEW_MODE_BANNER_BG = "#e7f1ff"
@@ -39,6 +39,18 @@ class GPDataApp(tk.Tk):
         self._type_filter_value: str | None = None
         self._type_filter_menu_value = tk.StringVar(value="")
         self._settings_warning_keys: set[str] = set()
+        self._record_actions = RecordActions(
+            self.data_manager,
+            show_validation_error=lambda message: messagebox.showerror("Validation error", message),
+            show_selection_error=lambda message: messagebox.showinfo("Select", message),
+            show_missing_record_error=lambda: messagebox.showerror("Error", "Record not found"),
+            confirm_duplicate_record=self._confirm_duplicate_record,
+            create_safety_backup_or_confirm=self._create_safety_backup_or_confirm,
+            show_storage_error=lambda title, action, exc: self._show_storage_error(title, action, self.data_manager.path, exc),
+            apply_saved_record=self._apply_saved_record,
+            load_records=self.load_records,
+            reset_to_new_item=self._reset_to_new_item,
+        )
         app_settings = load_settings()
         labels = app_settings["labels"]
         column_order = app_settings["column_order"]
@@ -157,31 +169,6 @@ class GPDataApp(tk.Tk):
             LOGGER.warning("Unable to create a safety backup before %s", action, exc_info=True)
             return messagebox.askyesno("Backup unavailable", describe_backup_failure(action, self.data_manager.path, exc))
 
-    def _record_by_id(self, record_id: str) -> Record | None:
-        records = self.data_manager.load_all()
-        return next((record for record in records if record.id == record_id), None)
-
-    def _record_id_or_show_selection_error(self, record_id: str | None, message: str) -> str | None:
-        if record_id:
-            return record_id
-        messagebox.showinfo("Select", message)
-        return None
-
-    def _record_or_show_missing_error(self, record_id: str | None, *, selection_message: str | None = None) -> Record | None:
-        resolved_record_id = record_id
-        if selection_message is not None:
-            resolved_record_id = self._record_id_or_show_selection_error(record_id, selection_message)
-            if resolved_record_id is None:
-                return None
-        elif resolved_record_id is None:
-            return None
-
-        record = self._record_by_id(resolved_record_id)
-        if record is None:
-            messagebox.showerror("Error", "Record not found")
-            return None
-        return record
-
     def _confirm_duplicate_record(self, record: Record, exclude_id: str | None = None, action_text: str = "save") -> bool:
         duplicate = self.data_manager.find_duplicate_record(record, exclude_id=exclude_id)
         if duplicate is None:
@@ -191,60 +178,8 @@ class GPDataApp(tk.Tk):
             f"{record.field1} / {record.field2} already exists.\n\n{action_text.capitalize()} anyway?",
         )
         if not should_continue:
-            self._focus_record(duplicate.id)
+            focus_record_in_table(self.table, duplicate.id, self.load_records)
             return False
-        return True
-
-    def _focus_record(self, record_id: str) -> None:
-        if not self.table.exists(record_id):
-            self.load_records()
-        if not self.table.exists(record_id):
-            return
-        try:
-            self.table.selection_set(record_id)
-            self.table.see(record_id)
-        except tk.TclError:
-            LOGGER.debug("Unable to focus record %s in the table", record_id, exc_info=True)
-
-    def _focus_widget(self, widget: tk.Misc | None) -> None:
-        if widget is None:
-            return
-        try:
-            widget.focus_set()
-            widget.focus_force()
-        except tk.TclError:
-            try:
-                widget.focus_set()
-            except tk.TclError:
-                LOGGER.debug("Unable to focus widget", exc_info=True)
-
-    def _recalc_form_field6(self, context: str) -> None:
-        try:
-            self.form.recalc_field6()
-        except tk.TclError:
-            LOGGER.debug("Unable to recalculate field6 while %s", context, exc_info=True)
-
-    def _build_record_or_show_error(self, data: dict, *, record_id: str | None = None, created_at=None) -> Record | None:
-        payload = dict(data)
-        if record_id is not None:
-            payload["id"] = record_id
-            payload["created_at"] = created_at
-        try:
-            return Record(**payload)
-        except (ValidationError, ValueError, TypeError) as exc:
-            messagebox.showerror("Validation error", str(exc))
-            return None
-
-    def _save_new_record(self, record: Record) -> bool:
-        if not self._create_safety_backup_or_confirm("adding this record"):
-            return False
-        try:
-            self.data_manager.save(record)
-        except (OSError, RuntimeError, ValueError) as exc:
-            self._show_storage_error("Save failed", "save the new record", self.data_manager.path, exc)
-            return False
-        self.load_records()
-        self._reset_to_new_item()
         return True
 
     def _apply_saved_record(self, record: Record, *, refresh_form_mode: bool = True) -> None:
@@ -252,29 +187,6 @@ class GPDataApp(tk.Tk):
         if refresh_form_mode:
             self._update_form_mode_ui(record)
         self._refresh_saved_record(record)
-
-    def _save_existing_record(
-        self,
-        original_record: Record,
-        updated_record: Record,
-        *,
-        duplicate_action_text: str,
-        backup_action: str,
-        error_title: str,
-        error_action: str,
-        refresh_form_mode: bool = True,
-    ) -> Record | None:
-        if not self._confirm_duplicate_record(updated_record, exclude_id=original_record.id, action_text=duplicate_action_text):
-            return None
-        if not self._create_safety_backup_or_confirm(backup_action):
-            return None
-        try:
-            saved = self.data_manager.update(original_record.id, updated_record)
-        except (OSError, RuntimeError, ValueError) as exc:
-            self._show_storage_error(error_title, error_action, self.data_manager.path, exc)
-            return None
-        self._apply_saved_record(saved, refresh_form_mode=refresh_form_mode)
-        return saved
 
     def _on_table_select(self, event=None) -> None:
         if self._suspend_table_select:
@@ -285,25 +197,17 @@ class GPDataApp(tk.Tk):
         current_record_id = self.form.current_record_id
         if sel_id != current_record_id and self.form.is_dirty():
             if not self._confirm_discard_form_changes():
-                self._restore_table_selection(current_record_id)
+                self._suspend_table_select = True
+                try:
+                    restore_table_selection(self.table, current_record_id)
+                finally:
+                    self._suspend_table_select = False
                 return
-        record = self._record_by_id(sel_id)
+        record = self._record_actions.record_by_id(sel_id)
         if record is None:
             return
         self.form.set_values(record.to_dict())
         self._update_form_mode_ui(record)
-
-    def _restore_table_selection(self, record_id: str | None) -> None:
-        self._suspend_table_select = True
-        try:
-            selection = self.table.selection()
-            if selection:
-                self.table.selection_remove(*selection)
-            if record_id:
-                self.table.selection_set(record_id)
-                self.table.see(record_id)
-        finally:
-            self._suspend_table_select = False
 
     def _confirm_discard_form_changes(self) -> bool:
         if not self.form.is_dirty():
@@ -322,7 +226,7 @@ class GPDataApp(tk.Tk):
             self._set_form_mode_banner("NEW ITEM MODE", NEW_MODE_BANNER_BG, NEW_MODE_BANNER_FG)
             return
         if record is None or record.id != current_record_id:
-            record = self._record_by_id(current_record_id)
+            record = self._record_actions.record_by_id(current_record_id)
         self._save_changes_button.config(state="normal")
         if record is None:
             self._set_form_mode_banner("EDITING SELECTED ITEM", EDIT_MODE_BANNER_BG, EDIT_MODE_BANNER_FG)
@@ -518,13 +422,10 @@ class GPDataApp(tk.Tk):
 
     def _reset_to_new_item(self) -> None:
         self.form.clear()
-        try:
-            self.table.selection_remove(*self.table.selection())
-        except tk.TclError:
-            LOGGER.debug("Unable to clear table selection", exc_info=True)
+        clear_table_selection(self.table)
         self._update_form_mode_ui()
         first_field = self.form.entries.get("field1")
-        self._focus_widget(first_field)
+        focus_widget(first_field)
 
     def on_form_submit(self) -> None:
         if self.form.current_record_id:
@@ -533,18 +434,18 @@ class GPDataApp(tk.Tk):
         self.on_add()
 
     def on_add(self) -> None:
-        self._recalc_form_field6("adding a new item")
+        recalc_form_field6(self.form, "adding a new item")
         data = self.form.get_values()
-        rec = self._build_record_or_show_error(data)
+        rec = self._record_actions.build_record_or_show_error(data)
         if rec is None:
             return
 
         if not self._confirm_duplicate_record(rec, action_text="add another record"):
             return
-        self._save_new_record(rec)
+        self._record_actions.save_new_record(rec)
 
     def on_edit(self) -> None:
-        record = self._record_or_show_missing_error(
+        record = self._record_actions.record_or_show_missing_error(
             self.table.get_selected_id(),
             selection_message="Please select a record to edit.",
         )
@@ -553,21 +454,21 @@ class GPDataApp(tk.Tk):
         self.form.set_values(record.to_dict())
         self._update_form_mode_ui(record)
         first_field = self.form.entries.get("field1")
-        self._focus_widget(first_field)
+        focus_widget(first_field)
 
     def on_save_changes(self) -> None:
-        record = self._record_or_show_missing_error(
+        record = self._record_actions.record_or_show_missing_error(
             self.form.current_record_id or self.table.get_selected_id(),
             selection_message="Please select a record to edit.",
         )
         if record is None:
             return
-        self._recalc_form_field6("saving changes")
+        recalc_form_field6(self.form, "saving changes")
         values = self.form.get_values()
-        updated = self._build_record_or_show_error(values, record_id=record.id, created_at=record.created_at)
+        updated = self._record_actions.build_record_or_show_error(values, record_id=record.id, created_at=record.created_at)
         if updated is None:
             return
-        self._save_existing_record(
+        self._record_actions.save_existing_record(
             record,
             updated,
             duplicate_action_text="save this edit",
@@ -577,22 +478,19 @@ class GPDataApp(tk.Tk):
         )
 
     def on_delete(self) -> None:
-        sel_id = self._record_id_or_show_selection_error(
+        sel_id = self._record_actions.record_id_or_show_selection_error(
             self.table.get_selected_id(),
             "Please select a record to delete.",
         )
         if sel_id is None:
             return
         if messagebox.askyesno("Confirm", "Delete selected record?"):
-            if not self._create_safety_backup_or_confirm("deleting this record"):
-                return
-            try:
-                self.data_manager.delete(sel_id)
-            except (OSError, RuntimeError, ValueError) as exc:
-                self._show_storage_error("Delete failed", "delete the selected record", self.data_manager.path, exc)
-                return
-            self.load_records()
-            self._reset_to_new_item()
+            self._record_actions.delete_record(
+                sel_id,
+                backup_action="deleting this record",
+                error_title="Delete failed",
+                error_action="delete the selected record",
+            )
 
     def on_export(self) -> None:
         path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files", "*.csv")])
@@ -672,8 +570,7 @@ class GPDataApp(tk.Tk):
 
     def _on_table_commit(self, record_id: str, col: str, new_value: str) -> None:
         try:
-            records = self.data_manager.load_all()
-            record = next((r for r in records if r.id == record_id), None)
+            record = self._record_actions.record_by_id(record_id)
             if record is None:
                 messagebox.showerror("Error", "Record not found")
                 return
@@ -684,10 +581,10 @@ class GPDataApp(tk.Tk):
             if col in ("field3", "field5"):
                 data["field6"] = calculate_field6(data.get("field3"), data.get("field5"))
 
-            updated = self._build_record_or_show_error(data)
+            updated = self._record_actions.build_record_or_show_error(data)
             if updated is None:
                 return
-            self._save_existing_record(
+            self._record_actions.save_existing_record(
                 record,
                 updated,
                 duplicate_action_text="save this edit",

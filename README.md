@@ -38,6 +38,7 @@ numeric change history per item.
 - If layout or GP highlight settings cannot be saved, the app warns that the current change may not still be there after restart.
 - If an inline edit cannot be saved, the app shows an error and keeps the inline editor open with what you typed.
 - If form submission fails unexpectedly, the app shows an error instead of silently dropping the submit action.
+- If you confirm `Delete selected`, the row is removed and the form returns to new-item mode.
 - Export writes the currently displayed rows.
 - Restore from the UI is handled through `Manage backups`, which includes preview, restore, and delete operations.
 - Table layout is customizable:
@@ -134,7 +135,10 @@ python main.py cleanup
 
 - `main.py`: compatibility entrypoint
 - `cli.py`: command-line logic
-- `ui/`: Tkinter application code
+- `ui/app.py`: top-level Tkinter controller
+- `ui/record_actions.py`: record lookup and add/save/delete action flows
+- `ui/view_helpers.py`: shared UI focus, recalc, and table-selection helpers
+- `ui/`: the rest of the Tkinter application code
 - `data_manager/`: CSV and SQLite persistence layer
 - `models.py`: record model and calculated fields
 - `settings.json`: local saved labels and table layout preferences

@@ -72,6 +72,14 @@ Save changes is only active when a record is loaded into the form.
 If you changed something and then click another row or New item, the app now asks before throwing those unsaved changes away.
 Delete selected is only active when a table row is selected.
 
+Deleting a record:
+
+1. Click a row in the table.
+2. Click Delete selected.
+3. Confirm the delete.
+
+After a successful delete, the row is removed and the form returns to New item mode.
+
 Method B: Inline edit
 
 1. Double-click a table cell.
