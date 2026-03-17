@@ -29,6 +29,8 @@ class DataBackend(Protocol):
     def list_backups(self) -> list[Path]: ...
     def delete_backup(self, backup: Path) -> None: ...
     def restore_from_backup(self, backup: Path) -> Path: ...
+    def replace_all(self, records: list) -> None: ...
+    def storage_issue(self) -> Exception | None: ...
 
 
 def _build_backend(path: Path) -> DataBackend:
@@ -108,6 +110,12 @@ class DataManager:
     def restore_from_backup(self, backup: Path) -> Path:
         return self._backend.restore_from_backup(backup)
 
+    def replace_all(self, records: list) -> None:
+        self._backend.replace_all(records)
+
+    def storage_issue(self) -> Exception | None:
+        return self._backend.storage_issue()
+
     def duplicate_identity(self, record):
         return self._duplicate_detector.duplicate_identity(record)
 
@@ -121,7 +129,7 @@ class DataManager:
         csv_dm = CSVDataManager(src)
         rows = csv_dm.load_all()
         db_dm = SQLiteDataManager(dest)
-        db_dm._write_all(rows)
+        db_dm.replace_all(rows)
 
 
 __all__ = [

@@ -8,6 +8,8 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Callable
 
+from .storage_feedback import describe_storage_error
+
 
 LOGGER = logging.getLogger(__name__)
 
@@ -177,8 +179,8 @@ def open_manage_backups_dialog(parent: tk.Misc, data_manager, on_restored: Calla
                 on_restored()
             messagebox.showinfo("Restored", f"Restored {label}; pre-restore at {pre_restore}")
             _refresh_list()
-        except Exception as exc:
-            messagebox.showerror("Restore failed", str(exc))
+        except (OSError, RuntimeError, ValueError, sqlite3.DatabaseError) as exc:
+            messagebox.showerror("Restore failed", describe_storage_error("restore the selected backup", path, exc))
 
     def _do_delete() -> None:
         path = _selected_backup_path()
@@ -190,8 +192,8 @@ def open_manage_backups_dialog(parent: tk.Misc, data_manager, on_restored: Calla
         try:
             data_manager.delete_backup(path)
             _refresh_list()
-        except Exception as exc:
-            messagebox.showerror("Delete failed", str(exc))
+        except (OSError, RuntimeError, ValueError) as exc:
+            messagebox.showerror("Delete failed", describe_storage_error("delete the selected backup", path, exc))
 
     lb.bind("<<ListboxSelect>>", _on_select)
     btn_restore.config(command=_do_restore)

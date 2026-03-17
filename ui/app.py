@@ -12,6 +12,7 @@ from ..settings import load_settings, save_column_order, save_column_widths, sav
 from .backup_dialog import open_manage_backups_dialog
 from .form import InputForm
 from .record_logic import filtered_records, record_matches_query
+from .storage_feedback import describe_backup_failure, describe_startup_storage_issue, describe_storage_error
 from .table import METRIC_LABELS, RecordTable
 
 
@@ -20,6 +21,9 @@ NEW_MODE_BANNER_FG = "#0b4f8a"
 EDIT_MODE_BANNER_BG = "#fff1c9"
 EDIT_MODE_BANNER_FG = "#7a4b00"
 GP_HIGHLIGHT_PRESETS = (50.0, 60.0, 70.0, 80.0)
+DEFAULT_WINDOW_WIDTH = 1200
+DEFAULT_WINDOW_HEIGHT = 620
+WINDOW_SCREEN_MARGIN = 80
 LOGGER = logging.getLogger(__name__)
 
 
@@ -27,10 +31,11 @@ class GPDataApp(tk.Tk):
     def __init__(self, storage_path: Path | None = None):
         super().__init__()
         self.title("GP Data Manager")
-        self.geometry("1200x520")
 
         self.data_manager = DataManager(storage_path)
         self._displayed_records: list[Record] = []
+        self._type_filter_value: str | None = None
+        self._type_filter_menu_value = tk.StringVar(value="")
         app_settings = load_settings()
         labels = app_settings["labels"]
         column_order = app_settings["column_order"]
@@ -94,13 +99,49 @@ class GPDataApp(tk.Tk):
         self._gp_highlight_menu.add_separator()
         self._gp_highlight_menu.add_command(label="Custom...", command=self._prompt_custom_gp_highlight_threshold)
         self._gp_highlight_menu.add_command(label="Clear GP highlight", command=lambda: self._set_gp_highlight_threshold(None))
+        self._type_filter_menu = tk.Menu(self, tearoff=0)
         self.table.bind("<<TreeviewSelect>>", self._on_table_select)
         self.table.bind("<Button-3>", self._on_row_right_click)
 
         self._suspend_table_select = False
         self.table.set_gp_highlight_threshold(gp_highlight_threshold)
+        self._apply_initial_window_geometry()
         self._update_form_mode_ui()
         self.load_records()
+        self._warn_if_storage_issue()
+
+    def _apply_initial_window_geometry(self) -> None:
+        self.update_idletasks()
+        width = max(DEFAULT_WINDOW_WIDTH, self.winfo_reqwidth())
+        height = max(DEFAULT_WINDOW_HEIGHT, self.winfo_reqheight())
+
+        screen_width = max(DEFAULT_WINDOW_WIDTH, self.winfo_screenwidth() - WINDOW_SCREEN_MARGIN)
+        screen_height = max(DEFAULT_WINDOW_HEIGHT, self.winfo_screenheight() - WINDOW_SCREEN_MARGIN)
+        width = min(width, screen_width)
+        height = min(height, screen_height)
+
+        self.geometry(f"{width}x{height}")
+        self.minsize(width, height)
+
+    def _warn_if_storage_issue(self) -> None:
+        issue = self.data_manager.storage_issue()
+        if issue is None:
+            return
+        messagebox.showwarning("Storage issue", describe_startup_storage_issue(self.data_manager.path, issue))
+
+    def _show_storage_error(self, title: str, action: str, path: Path | None, exc: Exception, suffix: str | None = None) -> None:
+        message = describe_storage_error(action, path, exc)
+        if suffix:
+            message = f"{message}\n\n{suffix}"
+        messagebox.showerror(title, message)
+
+    def _create_safety_backup_or_confirm(self, action: str) -> bool:
+        try:
+            self.data_manager.create_timestamped_backup()
+            return True
+        except (OSError, RuntimeError) as exc:
+            LOGGER.warning("Unable to create a safety backup before %s", action, exc_info=True)
+            return messagebox.askyesno("Backup unavailable", describe_backup_failure(action, self.data_manager.path, exc))
 
     def _record_by_id(self, record_id: str) -> Record | None:
         records = self.data_manager.load_all()
@@ -210,6 +251,28 @@ class GPDataApp(tk.Tk):
     def _current_search_query(self) -> str:
         return self._search_entry.get().strip().lower()
 
+    def _normalized_type_value(self, value: str | None) -> str:
+        return (value or "").strip().lower()
+
+    def _record_type_options(self, records: list[Record]) -> list[str]:
+        return sorted(
+            {
+                (record.field1 or "").strip()
+                for record in records
+                if (record.field1 or "").strip()
+            },
+            key=str.lower,
+        )
+
+    def _apply_type_filter(self, records: list[Record]) -> list[Record]:
+        if not self._type_filter_value:
+            return records
+        return [
+            record
+            for record in records
+            if self._normalized_type_value(record.field1) == self._type_filter_value
+        ]
+
     def _sort_records_for_display(self, records: list[Record]) -> list[Record]:
         return sorted(
             records,
@@ -217,12 +280,50 @@ class GPDataApp(tk.Tk):
             reverse=True,
         )
 
+    def _set_type_filter(self, value: str | None) -> None:
+        self._type_filter_value = value
+        self._type_filter_menu_value.set(value or "")
+        self.load_records()
+
+    def _show_type_filter_menu(self) -> None:
+        records = self.data_manager.load_all()
+        type_options = self._record_type_options(records)
+
+        self._type_filter_menu.delete(0, "end")
+        if type_options:
+            for type_name in type_options:
+                normalized_value = self._normalized_type_value(type_name)
+                self._type_filter_menu.add_radiobutton(
+                    label=type_name,
+                    value=normalized_value,
+                    variable=self._type_filter_menu_value,
+                    command=lambda value=normalized_value: self._set_type_filter(value),
+                )
+        else:
+            self._type_filter_menu.add_command(label="No types available", state="disabled")
+
+        self._type_filter_menu.add_separator()
+        self._type_filter_menu.add_command(label="Remove type filter", command=lambda: self._set_type_filter(None))
+
+        try:
+            self._type_filter_menu.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
+        except tk.TclError:
+            LOGGER.debug("Unable to show type filter menu", exc_info=True)
+        finally:
+            try:
+                self._type_filter_menu.grab_release()
+            except tk.TclError:
+                LOGGER.debug("Unable to release type filter menu grab", exc_info=True)
+
     def _filtered_records(self, records: list[Record]) -> list[Record]:
-        return filtered_records(records, self._current_search_query())
+        return filtered_records(self._apply_type_filter(records), self._current_search_query())
 
     def _record_matches_current_filter(self, record: Record) -> bool:
         query = self._current_search_query()
-        return record_matches_query(record, query, self.data_manager.load_all())
+        filtered_records_for_query = self._apply_type_filter(self.data_manager.load_all())
+        if self._type_filter_value and self._normalized_type_value(record.field1) != self._type_filter_value:
+            return False
+        return record_matches_query(record, query, filtered_records_for_query)
 
     def _set_gp_highlight_threshold(self, threshold: float | None) -> None:
         self.table.set_gp_highlight_threshold(threshold)
@@ -266,9 +367,11 @@ class GPDataApp(tk.Tk):
                 LOGGER.debug("Unable to release GP highlight menu grab", exc_info=True)
 
     def _on_table_heading_click(self, column_name: str) -> None:
-        if column_name != "gp":
+        if column_name == "gp":
+            self._show_gp_highlight_menu()
             return
-        self._show_gp_highlight_menu()
+        if column_name == "field1":
+            self._show_type_filter_menu()
 
     def _refresh_saved_record(self, record: Record) -> None:
         still_visible = self._record_matches_current_filter(record)
@@ -299,7 +402,15 @@ class GPDataApp(tk.Tk):
                 self.load_records()
 
     def load_records(self) -> None:
-        records = self.data_manager.load_all()
+        try:
+            records = self.data_manager.load_all()
+        except (OSError, RuntimeError, ValueError) as exc:
+            LOGGER.warning("Unable to load records", exc_info=True)
+            self._displayed_records = []
+            self.table.load([])
+            self._update_form_mode_ui()
+            self._show_storage_error("Storage unavailable", "load records", self.data_manager.path, exc)
+            return
         displayed = self._sort_records_for_display(self._filtered_records(records))
         self._displayed_records = displayed
         self.table.load(displayed)
@@ -345,11 +456,13 @@ class GPDataApp(tk.Tk):
         if not self._confirm_duplicate_record(rec, action_text="add another record"):
             return
 
+        if not self._create_safety_backup_or_confirm("adding this record"):
+            return
         try:
-            self.data_manager.create_timestamped_backup()
-        except OSError:
-            LOGGER.warning("Unable to create a backup before adding a record", exc_info=True)
-        self.data_manager.save(rec)
+            self.data_manager.save(rec)
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._show_storage_error("Save failed", "save the new record", self.data_manager.path, exc)
+            return
         self.load_records()
         self._reset_to_new_item()
 
@@ -385,7 +498,13 @@ class GPDataApp(tk.Tk):
             return
         if not self._confirm_duplicate_record(updated, exclude_id=record.id, action_text="save this edit"):
             return
-        saved = self.data_manager.update(record.id, updated)
+        if not self._create_safety_backup_or_confirm("saving this edit"):
+            return
+        try:
+            saved = self.data_manager.update(record.id, updated)
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._show_storage_error("Save failed", "save the edited record", self.data_manager.path, exc)
+            return
         self.form.set_values(saved.to_dict())
         self._update_form_mode_ui(saved)
         self._refresh_saved_record(saved)
@@ -396,7 +515,13 @@ class GPDataApp(tk.Tk):
             messagebox.showinfo("Select", "Please select a record to delete.")
             return
         if messagebox.askyesno("Confirm", "Delete selected record?"):
-            self.data_manager.delete(sel_id)
+            if not self._create_safety_backup_or_confirm("deleting this record"):
+                return
+            try:
+                self.data_manager.delete(sel_id)
+            except (OSError, RuntimeError, ValueError) as exc:
+                self._show_storage_error("Delete failed", "delete the selected record", self.data_manager.path, exc)
+                return
             self.load_records()
             self._reset_to_new_item()
 
@@ -411,8 +536,8 @@ class GPDataApp(tk.Tk):
             else:
                 self.data_manager.export_csv(Path(path))
             messagebox.showinfo("Export", f"Exported to {path}")
-        except Exception as exc:
-            messagebox.showerror("Export failed", str(exc))
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._show_storage_error("Export failed", "export records", Path(path), exc)
 
     def on_manage_backups(self) -> None:
         return open_manage_backups_dialog(self, self.data_manager, on_restored=self.load_records)
@@ -498,16 +623,14 @@ class GPDataApp(tk.Tk):
             if not self._confirm_duplicate_record(updated, exclude_id=record_id, action_text="save this edit"):
                 return
 
-            try:
-                self.data_manager.create_timestamped_backup()
-            except OSError:
-                LOGGER.warning("Unable to create a backup before inline edit commit", exc_info=True)
+            if not self._create_safety_backup_or_confirm("saving this inline edit"):
+                return
 
             saved = self.data_manager.update(record_id, updated)
             self.form.set_values(saved.to_dict())
             self._refresh_saved_record(saved)
-        except Exception as exc:
-            messagebox.showerror("Error", str(exc))
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._show_storage_error("Edit failed", "save the inline edit", self.data_manager.path, exc)
 
     def _on_row_right_click(self, event) -> None:
         try:

@@ -39,6 +39,7 @@ class InputForm(ttk.Frame):
         self.on_submit = on_submit
         self.current_record_id: str | None = None
         self._clean_snapshot: dict | None = None
+        self._current_change_data: dict = {}
 
         label_padx = 3
         field_padx = 3
@@ -65,7 +66,7 @@ class InputForm(ttk.Frame):
 
         info_row = base_row + len(metrics)
         self.last_numeric_change_var = tk.StringVar(value="No changes recorded")
-        self.changes_box = ttk.LabelFrame(self, text="Changes")
+        self.changes_box = ttk.LabelFrame(self, text="Change history")
         self.changes_box.grid(row=info_row, column=0, columnspan=2, sticky="ew", padx=3, pady=(6, 2))
         self.changes_box.columnconfigure(0, weight=1)
         self.changes_box.rowconfigure(0, weight=1)
@@ -82,6 +83,8 @@ class InputForm(ttk.Frame):
         self.changes_text.configure(yscrollcommand=self.changes_scrollbar.set)
         self.changes_text.grid(row=0, column=0, sticky="nsew", padx=(6, 0), pady=4)
         self.changes_scrollbar.grid(row=0, column=1, sticky="ns", padx=(4, 6), pady=4)
+        self.history_button = ttk.Button(self.changes_box, text="View full history", command=self.open_change_history)
+        self.history_button.grid(row=1, column=0, columnspan=2, sticky="e", padx=6, pady=(0, 6))
         self._set_changes_text(self.last_numeric_change_var.get())
 
         if "field3" in self.entries and "field5" in self.entries:
@@ -120,6 +123,86 @@ class InputForm(ttk.Frame):
         self.changes_text.delete("1.0", tk.END)
         self.changes_text.insert("1.0", text)
         self.changes_text.config(state="disabled")
+
+    def _history_entries(self, data: dict) -> list[dict]:
+        history = data.get("numeric_change_history")
+        if isinstance(history, str):
+            try:
+                history = json.loads(history)
+            except json.JSONDecodeError:
+                history = []
+        return history if isinstance(history, list) else []
+
+    def _build_change_history_text(self, data: dict, limit: int | None = 4) -> str:
+        item_lines: list[str] = []
+        first_value = (data.get("field1") or "").strip()
+        second_value = (data.get("field2") or "").strip()
+        if first_value:
+            item_lines.append(f"{self.labels[0]}: {first_value}")
+        if second_value:
+            item_lines.append(f"{self.labels[1]}: {second_value}")
+
+        history = self._history_entries(data)
+        if limit is not None:
+            history = history[-limit:]
+
+        history_lines: list[str] = []
+        for entry in reversed(history):
+            field_name = entry.get("field_name") if isinstance(entry, dict) else None
+            if not field_name:
+                continue
+            label = self._field_label_for(field_name)
+            from_value = self._format_money(entry.get("from_value") if isinstance(entry, dict) else None)
+            to_value = self._format_money(entry.get("to_value") if isinstance(entry, dict) else None)
+            changed_at = self._format_changed_at(entry.get("changed_at") if isinstance(entry, dict) else None)
+            history_lines.extend([
+                f"{label} changed",
+                f"{from_value} -> {to_value}",
+                changed_at,
+                "",
+            ])
+        if history_lines and history_lines[-1] == "":
+            history_lines.pop()
+
+        field_name = data.get("last_numeric_field")
+        if not field_name and not history_lines:
+            lines = item_lines or []
+            if lines:
+                lines.append("")
+            lines.append("No changes recorded")
+            return "\n".join(lines)
+
+        lines = item_lines or []
+        if lines:
+            lines.append("")
+        if history_lines:
+            lines.extend(history_lines)
+        else:
+            label = self._field_label_for(field_name)
+            from_value = self._format_money(data.get("last_numeric_from"))
+            to_value = self._format_money(data.get("last_numeric_to"))
+            changed_at = self._format_changed_at(data.get("last_numeric_changed_at"))
+            lines.extend([
+                f"{label} changed",
+                f"{from_value} -> {to_value}",
+                changed_at,
+            ])
+        return "\n".join(lines)
+
+    def open_change_history(self) -> tk.Toplevel:
+        history_text = self._build_change_history_text(self._current_change_data, limit=None)
+
+        win = tk.Toplevel(self)
+        win.title("Full change history")
+        win.geometry("520x420")
+
+        text = tk.Text(win, wrap="word")
+        text.pack(fill="both", expand=True, padx=10, pady=10)
+        text.insert("1.0", history_text)
+        text.config(state="disabled")
+
+        ttk.Button(win, text="Close", command=win.destroy).pack(anchor="e", padx=10, pady=(0, 10))
+        return win
 
     def get_values(self, recalculate: bool = True) -> dict:
         if recalculate:
@@ -218,65 +301,8 @@ class InputForm(ttk.Frame):
         return str(value)
 
     def _set_last_numeric_change(self, data: dict) -> None:
-        item_lines: list[str] = []
-        first_value = (data.get("field1") or "").strip()
-        second_value = (data.get("field2") or "").strip()
-        if first_value:
-            item_lines.append(f"{self.labels[0]}: {first_value}")
-        if second_value:
-            item_lines.append(f"{self.labels[1]}: {second_value}")
-
-        history = data.get("numeric_change_history")
-        if isinstance(history, str):
-            try:
-                history = json.loads(history)
-            except json.JSONDecodeError:
-                history = []
-        if not isinstance(history, list):
-            history = []
-
-        history_lines: list[str] = []
-        for entry in reversed(history[-4:]):
-            field_name = entry.get("field_name") if isinstance(entry, dict) else None
-            if not field_name:
-                continue
-            label = self._field_label_for(field_name)
-            from_value = self._format_money(entry.get("from_value") if isinstance(entry, dict) else None)
-            to_value = self._format_money(entry.get("to_value") if isinstance(entry, dict) else None)
-            changed_at = self._format_changed_at(entry.get("changed_at") if isinstance(entry, dict) else None)
-            history_lines.extend([
-                f"{label} changed",
-                f"{from_value} -> {to_value}",
-                changed_at,
-                "",
-            ])
-        if history_lines and history_lines[-1] == "":
-            history_lines.pop()
-
-        field_name = data.get("last_numeric_field")
-        if not field_name and not history_lines:
-            lines = item_lines or []
-            if lines:
-                lines.append("")
-            lines.append("No changes recorded")
-            self._set_changes_text("\n".join(lines))
-            return
-        lines = item_lines or []
-        if lines:
-            lines.append("")
-        if history_lines:
-            lines.extend(history_lines)
-        else:
-            label = self._field_label_for(field_name)
-            from_value = self._format_money(data.get("last_numeric_from"))
-            to_value = self._format_money(data.get("last_numeric_to"))
-            changed_at = self._format_changed_at(data.get("last_numeric_changed_at"))
-            lines.extend([
-                f"{label} changed",
-                f"{from_value} -> {to_value}",
-                changed_at,
-            ])
-        self._set_changes_text("\n".join(lines))
+        self._current_change_data = dict(data)
+        self._set_changes_text(self._build_change_history_text(data))
 
     def set_values(self, data: dict) -> None:
         self.current_record_id = data.get("id")
@@ -396,6 +422,7 @@ class InputForm(ttk.Frame):
             entry.delete(0, tk.END)
         self._set_changes_text("No changes recorded")
         self._set_field6_text("")
+        self._current_change_data = {}
         self._mark_clean()
 
     def rename_fields(self) -> None:

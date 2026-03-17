@@ -83,6 +83,10 @@ def test_data_manager_exposes_explicit_public_api(tmp_path: Path):
     dm.ensure_storage()
     assert dm.load_all() == []
 
+    dm.replace_all([Record(field1="replaced")])
+    assert dm.load_all()[0].field1 == "Replaced"
+    assert dm.storage_issue() is None
+
     with pytest.raises(AttributeError):
         getattr(dm, "missing_attribute")
 

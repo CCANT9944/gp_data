@@ -324,6 +324,21 @@ def _menu_index_by_label(menu: tk.Menu, expected: str) -> int:
     raise AssertionError(f"Menu label not found: {expected}")
 
 
+def _find_descendant(root: tk.Misc, cls, text: str | None = None):
+    for widget in root.winfo_children():
+        if isinstance(widget, cls):
+            if text is None:
+                return widget
+            try:
+                if widget.cget("text") == text:
+                    return widget
+            except tk.TclError:
+                pass
+        found = _find_descendant(widget, cls, text=text)
+        if found is not None:
+            return found
+    return None
+
 def test_app_gp_heading_click_opens_menu(tmp_path):
     try:
         app = GPDataApp(storage_path=tmp_path / "data.db")
@@ -341,6 +356,24 @@ def test_app_gp_heading_click_opens_menu(tmp_path):
 
     app.destroy()
 
+
+def test_app_warns_when_storage_issue_detected_on_startup(tmp_path, monkeypatch):
+    broken_db = tmp_path / "broken.db"
+    broken_db.write_text("not a sqlite database", encoding="utf-8")
+
+    seen: dict[str, str] = {}
+    monkeypatch.setattr("gp_data.ui.app.messagebox.showwarning", lambda title, message: seen.update({"title": title, "message": message}))
+
+    try:
+        app = GPDataApp(storage_path=broken_db)
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    assert seen["title"] == "Storage issue"
+    assert "could not fully open" in seen["message"].lower()
+
+    app.destroy()
 
 def test_app_gp_heading_menu_sets_and_clears_highlight_threshold(tmp_path, monkeypatch):
     settings_path = tmp_path / "settings.json"
@@ -374,6 +407,33 @@ def test_app_gp_heading_menu_sets_and_clears_highlight_threshold(tmp_path, monke
     app.destroy()
 
 
+def test_add_can_cancel_when_safety_backup_fails(tmp_path, monkeypatch):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    asked: dict[str, str] = {}
+    monkeypatch.setattr(app.data_manager, "create_timestamped_backup", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("sharing violation")))
+
+    def fake_askyesno(title, message):
+        asked["title"] = title
+        asked["message"] = message
+        return False
+
+    monkeypatch.setattr("gp_data.ui.app.messagebox.askyesno", fake_askyesno)
+
+    app.form.entries["field1"].insert(0, "Soft Drink")
+    app.form.entries["field2"].insert(0, "Cola")
+    app.on_add()
+
+    assert app.data_manager.load_all() == []
+    assert asked["title"] == "Backup unavailable"
+    assert "continue adding this record without creating a backup" in asked["message"].lower()
+
+    app.destroy()
+
 def test_app_gp_heading_menu_custom_threshold(tmp_path, monkeypatch):
     settings_path = tmp_path / "settings.json"
     monkeypatch.setattr(settings_module, "DEFAULT_PATH", settings_path)
@@ -395,6 +455,45 @@ def test_app_gp_heading_menu_custom_threshold(tmp_path, monkeypatch):
     assert settings_module.load_gp_highlight_threshold(settings_path) == 55.0
     assert any(tag in (ROW_TAG_GP_LOW_ODD, ROW_TAG_GP_LOW_EVEN) for tag in app.table.item(low_gp.id)["tags"])
 
+    app.destroy()
+
+
+def test_form_can_open_full_change_history_dialog(tmp_path):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    record = Record(
+        field1="alpha",
+        field2="house",
+        numeric_change_history=[
+            NumericChange(field_name="field7", from_value=3.0, to_value=3.5, changed_at=datetime(2026, 3, 10, 12, 0, tzinfo=timezone.utc)),
+            NumericChange(field_name="field7", from_value=3.5, to_value=4.0, changed_at=datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)),
+            NumericChange(field_name="field7", from_value=4.0, to_value=4.5, changed_at=datetime(2026, 3, 12, 12, 0, tzinfo=timezone.utc)),
+            NumericChange(field_name="field7", from_value=4.5, to_value=5.0, changed_at=datetime(2026, 3, 13, 12, 0, tzinfo=timezone.utc)),
+            NumericChange(field_name="field7", from_value=5.0, to_value=5.5, changed_at=datetime(2026, 3, 14, 12, 0, tzinfo=timezone.utc)),
+        ],
+        last_numeric_field="field7",
+        last_numeric_from=5.0,
+        last_numeric_to=5.5,
+        last_numeric_changed_at=datetime(2026, 3, 14, 12, 0, tzinfo=timezone.utc),
+    )
+    app.data_manager.save(record)
+    app.load_records()
+    app.table.selection_set(record.id)
+    app.on_edit()
+
+    history_window = app.form.open_change_history()
+    history_text = _find_descendant(history_window, tk.Text)
+
+    assert history_text is not None
+    full_text = history_text.get("1.0", "end")
+    assert "2026-03-10 12:00:00 UTC" in full_text
+    assert "2026-03-14 12:00:00 UTC" in full_text
+
+    history_window.destroy()
     app.destroy()
 
 
@@ -606,6 +705,64 @@ def test_app_shows_newest_records_first(tmp_path):
     app.destroy()
 
 
+def test_app_type_heading_click_opens_type_filter_menu(tmp_path):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    for record in (
+        Record(field1="wine", field2="house"),
+        Record(field1="beer", field2="lager"),
+    ):
+        app.data_manager.save(record)
+
+    seen: list[tuple[int, int]] = []
+    app._type_filter_menu.tk_popup = lambda x, y: seen.append((x, y))  # type: ignore[method-assign]
+
+    app._on_table_heading_click("field1")
+
+    assert len(seen) == 1
+    assert app._type_filter_menu.index("end") is not None
+    assert app._type_filter_menu.entrycget(0, "label") == "Beer"
+    assert app._type_filter_menu.entrycget(1, "label") == "Wine"
+    assert app._type_filter_menu.entrycget(app._type_filter_menu.index("end"), "label") == "Remove type filter"
+
+    app.destroy()
+
+
+def test_app_type_filter_menu_can_apply_and_clear(tmp_path):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    gin = Record(field1="gin", field2="house", created_at=datetime(2026, 3, 15, 12, 2, tzinfo=timezone.utc))
+    vodka = Record(field1="vodka", field2="rail", created_at=datetime(2026, 3, 15, 12, 1, tzinfo=timezone.utc))
+    wine = Record(field1="wine", field2="glass", created_at=datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc))
+    for record in (gin, vodka, wine):
+        app.data_manager.save(record)
+
+    app.load_records()
+    assert app.table.get_children() == (gin.id, vodka.id, wine.id)
+
+    app._on_table_heading_click("field1")
+    gin_index = _menu_index_by_label(app._type_filter_menu, "Gin")
+    app._type_filter_menu.invoke(gin_index)
+
+    assert app.table.get_children() == (gin.id,)
+
+    app._on_table_heading_click("field1")
+    clear_index = _menu_index_by_label(app._type_filter_menu, "Remove type filter")
+    app._type_filter_menu.invoke(clear_index)
+
+    assert app.table.get_children() == (gin.id, vodka.id, wine.id)
+
+    app.destroy()
+
+
 def test_main_controls_hide_add_button_and_keep_new_item(tmp_path):
     try:
         app = GPDataApp(storage_path=tmp_path / "data.db")
@@ -627,6 +784,34 @@ def test_main_controls_hide_add_button_and_keep_new_item(tmp_path):
     assert "Edit selected" not in button_labels
     assert str(app._save_changes_button.cget("state")) == "disabled"
     assert str(app._delete_selected_button.cget("state")) == "disabled"
+
+    app.destroy()
+
+
+def test_app_opens_tall_enough_to_show_main_controls(tmp_path):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+
+    app.update_idletasks()
+    new_item_button = _find_descendant(app, ttk.Button, text="New item")
+
+    assert new_item_button is not None
+    controls = new_item_button.nametowidget(new_item_button.winfo_parent())
+    assert controls.winfo_y() + controls.winfo_height() <= app.winfo_height()
+
+    app.destroy()
+
+
+def test_main_controls_do_not_show_import_button(tmp_path):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    assert _find_descendant(app, ttk.Button, text="Import CSV") is None
 
     app.destroy()
 

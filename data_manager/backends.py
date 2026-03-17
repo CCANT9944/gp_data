@@ -153,6 +153,9 @@ class CSVDataManager:
         self.path = Path(path) if path else _default_csv_path()
         self.ensure_storage()
 
+    def storage_issue(self) -> Exception | None:
+        return None
+
     def _header_labels(self) -> list[str]:
         return _csv_header_labels(load_labels())
 
@@ -189,6 +192,9 @@ class CSVDataManager:
             for record in records:
                 writer.writerow(_record_to_storage_row(record))
         shutil.move(str(tmp), str(self.path))
+
+    def replace_all(self, records: List[Record]) -> None:
+        self._write_all(records)
 
     def restore_backup(self) -> Path:
         return backup_ops.restore_backup(self.path)
@@ -244,6 +250,7 @@ class SQLiteDataManager:
     def __init__(self, path: Optional[Path] = None):
         self.path = Path(path) if path else _default_db_path()
         self._conn: Optional[sqlite3.Connection] = None
+        self._last_error: Exception | None = None
         self._ensure_conn()
 
     def _ensure_conn(self) -> None:
@@ -254,8 +261,13 @@ class SQLiteDataManager:
             self._conn.execute(self.CREATE_TABLE)
             self._ensure_schema_columns()
             self._conn.commit()
-        except sqlite3.DatabaseError:
+            self._last_error = None
+        except sqlite3.DatabaseError as exc:
+            self._last_error = exc
             self._conn = None
+
+    def storage_issue(self) -> Exception | None:
+        return self._last_error
 
     def _ensure_schema_columns(self) -> None:
         if self._conn is None:
@@ -312,6 +324,9 @@ class SQLiteDataManager:
         for record in records:
             cur.execute(SQLITE_INSERT_SQL, _sqlite_record_params(record))
         self._conn.commit()
+
+    def replace_all(self, records: List[Record]) -> None:
+        self._write_all(records)
 
     def restore_backup(self) -> Path:
         return backup_ops.restore_backup(self.path, after_restore=self._reset_conn)

@@ -53,6 +53,7 @@ Important notes:
 - Some text fields are automatically title-cased.
 - If another item already has the same Type and Name, the program warns you before adding another one.
 - You can still continue and add the duplicate if you really mean to.
+- If the app cannot create a safety backup first, it warns you before continuing.
 
 
 5. EDITING A RECORD
@@ -84,6 +85,7 @@ Important notes about editing:
 - Edited rows now stay in the same position in the table instead of jumping to the bottom.
 - If an edit would make the item match another existing Type + Name, the program warns you first.
 - If you cancel that warning, the edit is not saved.
+- If the app cannot create a safety backup before an edit or delete, it asks before continuing.
 
 
 6. SEARCHING
@@ -94,6 +96,9 @@ Use the search box near the top.
 - Search checks Type and Name.
 - If there is an exact word match, the app prefers that over a loose substring match.
 - Example: searching for gin shows gin items first and avoids matching ginger beer when exact gin matches exist.
+- Click the Type column header if you want a small menu showing the saved types.
+- Click one type in that menu to show only that type.
+- Use Remove type filter at the bottom of that menu to clear the type filter again.
 - Click the GP column header if you want a small menu with preset highlight levels.
 - You can also pick Custom from that menu and type your own GP threshold.
 - Use Clear GP highlight from that same menu to remove the highlighting again.
@@ -102,9 +107,9 @@ Use the search box near the top.
 - Export uses the rows currently displayed in the table.
 
 
-7. CHANGES BOX
+7. CHANGE HISTORY
 
-The Changes box is on the form side.
+The Change history box is on the form side.
 
 It shows recent numeric changes for the selected item.
 
@@ -119,7 +124,7 @@ How to use it:
 1. Select an item.
 2. Change one of its numeric values.
 3. Select the item again if needed.
-4. Read the Changes box.
+4. Read the Change history box.
 
 What it shows:
 
@@ -130,6 +135,7 @@ What it shows:
 
 It now keeps multiple recent numeric changes for the same item.
 If there are several entries, use the scrollbar in the box.
+Click View full history if you want the whole stored numeric change history for that row.
 
 
 8. TABLE LAYOUT
@@ -185,7 +191,7 @@ Important:
 
 Click Export CSV.
 
-If the table is filtered by search, only the currently shown rows are exported.
+If the table is filtered by search or by the Type header menu, only the currently shown rows are exported.
 
 
 11. COMMAND LINE
@@ -218,8 +224,9 @@ This includes:
 If the table or form looks odd:
 
 - close the program and open it again
-- check that the item is selected before reading the Changes box
-- check the scrollbar in the Changes box if only one entry is visible
+- if the app warns that storage could not be opened fully, close other programs using the file and then reopen it
+- check that the item is selected before reading the Change history box
+- check the scrollbar in the Change history box if only one entry is visible
 
 If data looks wrong after an edit:
 
@@ -235,7 +242,7 @@ If you still see two items with the same Type and Name:
 
 14. CURRENT LIMITATIONS
 
-- The Changes box shows recent numeric changes, not an unlimited full audit log.
+- The main form shows recent numeric changes; full history is available from View full history.
 - At least one table column must stay visible.
 - Duplicate warnings are a safeguard, not a forced block. You can still continue if you explicitly choose to.
 - GUI tests may be skipped on systems without Tk support, but the app itself still targets Tkinter.
@@ -246,5 +253,5 @@ If you still see two items with the same Type and Name:
 1. Start the app with python main.py
 2. Search or select an item
 3. Edit inline or use Save changes from the main form
-4. Check the Changes box
+4. Check the Change history box or open View full history
 5. Export or manage backups when needed
