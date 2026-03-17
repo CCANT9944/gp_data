@@ -10,14 +10,8 @@ from gp_data.ui.table import ROW_TAG_EVEN, ROW_TAG_GP_LOW_EVEN, ROW_TAG_GP_LOW_O
 from gp_data.models import NumericChange, Record
 
 
-def test_record_table_hides_id_and_uses_iid():
-    try:
-        root = tk.Tk()
-    except tk.TclError:
-        pytest.skip("Tk not available in this environment")
-    root.withdraw()
-
-    table = RecordTable(root)
+def test_record_table_hides_id_and_uses_iid(tk_root):
+    table = RecordTable(tk_root)
 
     # `id` should not be a visible column
     assert "id" not in table["columns"]
@@ -61,17 +55,10 @@ def test_record_table_hides_id_and_uses_iid():
     assert separator_cols
     assert table.heading(separator_cols[0])["text"] == SEPARATOR_GLYPH
 
-    root.destroy()
 
 
-def test_record_table_applies_alternating_row_tags():
-    try:
-        root = tk.Tk()
-    except tk.TclError:
-        pytest.skip("Tk not available in this environment")
-    root.withdraw()
-
-    table = RecordTable(root)
+def test_record_table_applies_alternating_row_tags(tk_root):
+    table = RecordTable(tk_root)
     first = Record(field1="alpha")
     second = Record(field1="beta")
 
@@ -82,18 +69,11 @@ def test_record_table_applies_alternating_row_tags():
     assert ROW_TAG_EVEN in table.item(second_id)["tags"]
     assert SEPARATOR_GLYPH in table.item(first_id)["values"]
 
-    root.destroy()
 
 
-def test_record_table_reorders_columns_and_calls_callback():
-    try:
-        root = tk.Tk()
-    except tk.TclError:
-        pytest.skip("Tk not available in this environment")
-    root.withdraw()
-
+def test_record_table_reorders_columns_and_calls_callback(tk_root):
     seen: list[list[str]] = []
-    table = RecordTable(root, on_column_order_changed=lambda order: seen.append(list(order)))
+    table = RecordTable(tk_root, on_column_order_changed=lambda order: seen.append(list(order)))
 
     moved = table._move_data_column("field7", "field1")
 
@@ -101,18 +81,11 @@ def test_record_table_reorders_columns_and_calls_callback():
     assert table.get_column_order()[0] == "field7"
     assert seen[-1][0] == "field7"
 
-    root.destroy()
 
 
-def test_record_table_tracks_column_width_changes():
-    try:
-        root = tk.Tk()
-    except tk.TclError:
-        pytest.skip("Tk not available in this environment")
-    root.withdraw()
-
+def test_record_table_tracks_column_width_changes(tk_root):
     seen: list[dict[str, int]] = []
-    table = RecordTable(root, on_column_widths_changed=lambda widths: seen.append(dict(widths)))
+    table = RecordTable(tk_root, on_column_widths_changed=lambda widths: seen.append(dict(widths)))
 
     table.column("field1", width=210)
     table._notify_if_widths_changed()
@@ -121,18 +94,11 @@ def test_record_table_tracks_column_width_changes():
     assert seen[-1]["field1"] == 210
     assert table.get_column_widths()["field1"] == 210
 
-    root.destroy()
 
 
-def test_record_table_gp_header_click_calls_callback():
-    try:
-        root = tk.Tk()
-    except tk.TclError:
-        pytest.skip("Tk not available in this environment")
-    root.withdraw()
-
+def test_record_table_gp_header_click_calls_callback(tk_root):
     seen: list[str] = []
-    table = RecordTable(root, on_heading_click=lambda column: seen.append(column))
+    table = RecordTable(tk_root, on_heading_click=lambda column: seen.append(column))
     table._column_name_from_event = lambda event: "gp"  # type: ignore[method-assign]
 
     event = type("Event", (), {"x": 24, "y": 8})()
@@ -141,17 +107,10 @@ def test_record_table_gp_header_click_calls_callback():
 
     assert seen == ["gp"]
 
-    root.destroy()
 
 
-def test_record_table_can_highlight_rows_below_gp_threshold():
-    try:
-        root = tk.Tk()
-    except tk.TclError:
-        pytest.skip("Tk not available in this environment")
-    root.withdraw()
-
-    table = RecordTable(root)
+def test_record_table_can_highlight_rows_below_gp_threshold(tk_root):
+    table = RecordTable(tk_root)
     low_gp = Record(field1="low", field6=2.0, field7=5.0)
     high_gp = Record(field1="high", field6=1.0, field7=5.0)
     table.load([low_gp, high_gp])
@@ -165,18 +124,11 @@ def test_record_table_can_highlight_rows_below_gp_threshold():
 
     assert ROW_TAG_ODD in table.item(low_gp.id)["tags"]
 
-    root.destroy()
 
 
-def test_record_table_hides_columns_and_keeps_visible_order():
-    try:
-        root = tk.Tk()
-    except tk.TclError:
-        pytest.skip("Tk not available in this environment")
-    root.withdraw()
-
+def test_record_table_hides_columns_and_keeps_visible_order(tk_root):
     seen: list[list[str]] = []
-    table = RecordTable(root, on_visible_columns_changed=lambda columns: seen.append(list(columns)))
+    table = RecordTable(tk_root, on_visible_columns_changed=lambda columns: seen.append(list(columns)))
 
     table.set_visible_columns(["field1", "field3", "gp"])
 
@@ -184,18 +136,11 @@ def test_record_table_hides_columns_and_keeps_visible_order():
     assert list(table.cget("displaycolumns")) == ["field1", f"{SEPARATOR_PREFIX}0", "field3", f"{SEPARATOR_PREFIX}1", "gp"]
     assert seen[-1] == ["field1", "field3", "gp"]
 
-    root.destroy()
 
 
-def test_record_table_rolls_back_visible_columns_when_callback_fails(monkeypatch):
-    try:
-        root = tk.Tk()
-    except tk.TclError:
-        pytest.skip("Tk not available in this environment")
-    root.withdraw()
-
+def test_record_table_rolls_back_visible_columns_when_callback_fails(tk_root, monkeypatch):
     seen: dict[str, str] = {}
-    table = RecordTable(root, on_visible_columns_changed=lambda columns: (_ for _ in ()).throw(RuntimeError("visible callback failed")))
+    table = RecordTable(tk_root, on_visible_columns_changed=lambda columns: (_ for _ in ()).throw(RuntimeError("visible callback failed")))
     monkeypatch.setattr("gp_data.ui.table.messagebox.showerror", lambda title, message, parent=None: seen.update({"title": title, "message": message}))
 
     original_visible = table.get_visible_columns()
@@ -208,16 +153,10 @@ def test_record_table_rolls_back_visible_columns_when_callback_fails(monkeypatch
     assert seen["title"] == "Columns not updated"
     assert "visible callback failed" in seen["message"]
 
-    root.destroy()
 
 
-def test_double_click_uses_visible_column_mapping_when_columns_are_hidden():
-    try:
-        root = tk.Tk()
-    except tk.TclError:
-        pytest.skip("Tk not available in this environment")
-
-    table = RecordTable(root)
+def test_double_click_uses_visible_column_mapping_when_columns_are_hidden(tk_root):
+    table = RecordTable(tk_root)
     record = Record(field1="whisky", field2="woodford reserve", field3=31.99, field5="28", field6=1.14, field7=5.75)
     table.insert_record(record)
     table.set_visible_columns(["field1", "field2", "field3", "field6", "field7", "gp", "cash_margin", "gp70"])
@@ -236,18 +175,11 @@ def test_double_click_uses_visible_column_mapping_when_columns_are_hidden():
 
     assert seen == [(record.id, "field7")]
 
-    root.destroy()
 
 
-def test_record_table_rolls_back_column_widths_when_callback_fails(monkeypatch):
-    try:
-        root = tk.Tk()
-    except tk.TclError:
-        pytest.skip("Tk not available in this environment")
-    root.withdraw()
-
+def test_record_table_rolls_back_column_widths_when_callback_fails(tk_root, monkeypatch):
     seen: dict[str, str] = {}
-    table = RecordTable(root, on_column_widths_changed=lambda widths: (_ for _ in ()).throw(RuntimeError("width callback failed")))
+    table = RecordTable(tk_root, on_column_widths_changed=lambda widths: (_ for _ in ()).throw(RuntimeError("width callback failed")))
     monkeypatch.setattr("gp_data.ui.table.messagebox.showerror", lambda title, message, parent=None: seen.update({"title": title, "message": message}))
 
     original_width = int(table.column("field1", "width"))
@@ -259,18 +191,11 @@ def test_record_table_rolls_back_column_widths_when_callback_fails(monkeypatch):
     assert seen["title"] == "Column widths not updated"
     assert "width callback failed" in seen["message"]
 
-    root.destroy()
 
 
-def test_record_table_rolls_back_column_order_when_callback_fails(monkeypatch):
-    try:
-        root = tk.Tk()
-    except tk.TclError:
-        pytest.skip("Tk not available in this environment")
-    root.withdraw()
-
+def test_record_table_rolls_back_column_order_when_callback_fails(tk_root, monkeypatch):
     seen: dict[str, str] = {}
-    table = RecordTable(root, on_column_order_changed=lambda order: (_ for _ in ()).throw(RuntimeError("order callback failed")))
+    table = RecordTable(tk_root, on_column_order_changed=lambda order: (_ for _ in ()).throw(RuntimeError("order callback failed")))
     monkeypatch.setattr("gp_data.ui.table.messagebox.showerror", lambda title, message, parent=None: seen.update({"title": title, "message": message}))
 
     original_order = table.get_column_order()
@@ -282,18 +207,11 @@ def test_record_table_rolls_back_column_order_when_callback_fails(monkeypatch):
     assert seen["title"] == "Column order not updated"
     assert "order callback failed" in seen["message"]
 
-    root.destroy()
 
 
-def test_record_table_shows_error_when_heading_callback_fails(monkeypatch):
-    try:
-        root = tk.Tk()
-    except tk.TclError:
-        pytest.skip("Tk not available in this environment")
-    root.withdraw()
-
+def test_record_table_shows_error_when_heading_callback_fails(tk_root, monkeypatch):
     seen: dict[str, str] = {}
-    table = RecordTable(root, on_heading_click=lambda column: (_ for _ in ()).throw(RuntimeError("heading callback failed")))
+    table = RecordTable(tk_root, on_heading_click=lambda column: (_ for _ in ()).throw(RuntimeError("heading callback failed")))
     monkeypatch.setattr("gp_data.ui.table.messagebox.showerror", lambda title, message, parent=None: seen.update({"title": title, "message": message}))
     table._column_name_from_event = lambda event: "gp"  # type: ignore[method-assign]
 
@@ -304,7 +222,6 @@ def test_record_table_shows_error_when_heading_callback_fails(monkeypatch):
     assert seen["title"] == "Header action failed"
     assert "heading callback failed" in seen["message"]
 
-    root.destroy()
 
 
 def test_app_loads_saved_column_order(tmp_path, monkeypatch):

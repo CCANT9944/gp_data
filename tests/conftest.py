@@ -1,6 +1,9 @@
 import os
+import tkinter as tk
 
 import pytest
+
+from gp_data.ui import GPDataApp
 
 
 GUI_TEST_FILES = {
@@ -30,3 +33,46 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if item.fspath.basename in GUI_TEST_FILES:
             item.add_marker(skip_gui)
+
+
+@pytest.fixture
+def tk_root():
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    root.withdraw()
+    try:
+        yield root
+    finally:
+        try:
+            if root.winfo_exists():
+                root.destroy()
+        except tk.TclError:
+            pass
+
+
+@pytest.fixture
+def app_factory(tmp_path):
+    apps: list[GPDataApp] = []
+
+    def create_app(*, storage_path=None, withdraw=True, **kwargs):
+        path = storage_path or (tmp_path / "data.db")
+        try:
+            app = GPDataApp(storage_path=path, **kwargs)
+        except tk.TclError:
+            pytest.skip("Tk not available in this environment")
+        if withdraw:
+            app.withdraw()
+        apps.append(app)
+        return app
+
+    try:
+        yield create_app
+    finally:
+        for app in reversed(apps):
+            try:
+                if app.winfo_exists():
+                    app.destroy()
+            except tk.TclError:
+                pass

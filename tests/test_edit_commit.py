@@ -7,12 +7,8 @@ from gp_data.ui import GPDataApp
 from gp_data.models import Record
 
 
-def test_edit_commit_updates_storage(tmp_path):
-    try:
-        app = GPDataApp(storage_path=tmp_path / "data.db")
-    except tk.TclError:
-        pytest.skip("Tk not available in this environment")
-    app.withdraw()
+def test_edit_commit_updates_storage(app_factory):
+    app = app_factory()
 
     # add a record
     r = Record(field1="orig", field2="two", field3=10, field5="5", field6=2.0, field7=4.0)
@@ -46,15 +42,10 @@ def test_edit_commit_updates_storage(tmp_path):
     assert '£10.00' in summary
     assert '£12.00' in summary
 
-    app.destroy()
 
 
-def test_form_edit_preserves_row_position(tmp_path):
-    try:
-        app = GPDataApp(storage_path=tmp_path / "data.db")
-    except tk.TclError:
-        pytest.skip("Tk not available in this environment")
-    app.withdraw()
+def test_form_edit_preserves_row_position(app_factory):
+    app = app_factory()
 
     first = Record(field1="orig", field2="first", created_at=datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc))
     second = Record(field1="other", field2="second", created_at=datetime(2026, 3, 15, 12, 1, tzinfo=timezone.utc))
@@ -72,15 +63,10 @@ def test_form_edit_preserves_row_position(tmp_path):
 
     assert app.table.get_children() == (second.id, first.id)
 
-    app.destroy()
 
 
-def test_form_edit_duplicate_warning_can_cancel_edit(tmp_path, monkeypatch):
-    try:
-        app = GPDataApp(storage_path=tmp_path / "data.db")
-    except tk.TclError:
-        pytest.skip("Tk not available in this environment")
-    app.withdraw()
+def test_form_edit_duplicate_warning_can_cancel_edit(app_factory, monkeypatch):
+    app = app_factory()
 
     first = Record(field1="soft drink", field2="first")
     second = Record(field1="soft drink", field2="second")
@@ -110,4 +96,3 @@ def test_form_edit_duplicate_warning_can_cancel_edit(tmp_path, monkeypatch):
     assert "already exists" in asked["message"]
     assert app.table.get_selected_id() == second.id
 
-    app.destroy()

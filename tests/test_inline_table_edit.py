@@ -3,15 +3,12 @@ from datetime import datetime, timezone
 import tkinter as tk
 import pytest
 
-from gp_data.ui import GPDataApp
+from gp_data.ui import RecordTable
 from gp_data.models import Record
 
 
-def test_inline_edit_commit_updates_storage(tmp_path):
-    try:
-        app = GPDataApp(storage_path=tmp_path / "data.db")
-    except tk.TclError:
-        pytest.skip("Tk not available in this environment")
+def test_inline_edit_commit_updates_storage(app_factory, tmp_path):
+    app = app_factory(withdraw=False)
     # keep the app mapped so Treeview bbox() works for inline editor placement
 
     r = Record(field1="orig", field2="two", field3=10, field5="5", field6=2.0, field7=4.0)
@@ -62,14 +59,10 @@ def test_inline_edit_commit_updates_storage(tmp_path):
     assert '£10.00' in summary
     assert '£20.00' in summary
 
-    app.destroy()
 
 
-def test_inline_edit_preserves_active_search_filter(tmp_path):
-    try:
-        app = GPDataApp(storage_path=tmp_path / "data.db")
-    except tk.TclError:
-        pytest.skip("Tk not available in this environment")
+def test_inline_edit_preserves_active_search_filter(app_factory):
+    app = app_factory(withdraw=False)
 
     first = Record(field1="lager", field2="draught")
     second = Record(field1="wine", field2="bottle")
@@ -96,14 +89,10 @@ def test_inline_edit_preserves_active_search_filter(tmp_path):
     row = app.table.item(first.id)['values']
     assert 'draught premium' in [str(v).lower() for v in row]
 
-    app.destroy()
 
 
-def test_inline_edit_preserves_row_position(tmp_path):
-    try:
-        app = GPDataApp(storage_path=tmp_path / "data.db")
-    except tk.TclError:
-        pytest.skip("Tk not available in this environment")
+def test_inline_edit_preserves_row_position(app_factory):
+    app = app_factory(withdraw=False)
 
     first = Record(field1="lager", field2="first", created_at=datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc))
     second = Record(field1="wine", field2="second", created_at=datetime(2026, 3, 15, 12, 1, tzinfo=timezone.utc))
@@ -123,14 +112,10 @@ def test_inline_edit_preserves_row_position(tmp_path):
 
     assert app.table.get_children() == (second.id, first.id)
 
-    app.destroy()
 
 
-def test_inline_edit_field5_invalidates_field6_consistently(tmp_path):
-    try:
-        app = GPDataApp(storage_path=tmp_path / "data.db")
-    except tk.TclError:
-        pytest.skip("Tk not available in this environment")
+def test_inline_edit_field5_invalidates_field6_consistently(app_factory):
+    app = app_factory(withdraw=False)
 
     record = Record(field1="lager", field3=20, field5="5", field6=4.0, field7=7.0)
     app.data_manager.save(record)
@@ -148,14 +133,10 @@ def test_inline_edit_field5_invalidates_field6_consistently(tmp_path):
     assert rows[0].field5 == 'abc'
     assert rows[0].field6 is None
 
-    app.destroy()
 
 
-def test_inline_edit_duplicate_warning_can_cancel_edit(tmp_path, monkeypatch):
-    try:
-        app = GPDataApp(storage_path=tmp_path / "data.db")
-    except tk.TclError:
-        pytest.skip("Tk not available in this environment")
+def test_inline_edit_duplicate_warning_can_cancel_edit(app_factory, monkeypatch):
+    app = app_factory(withdraw=False)
 
     first = Record(field1="soft drink", field2="first")
     second = Record(field1="soft drink", field2="second")
@@ -187,14 +168,10 @@ def test_inline_edit_duplicate_warning_can_cancel_edit(tmp_path, monkeypatch):
     assert "already exists" in asked["message"]
     assert app.table.get_selected_id() == second.id
 
-    app.destroy()
 
 
-def test_inline_edit_commit_failure_keeps_editor_open_and_preserves_value(tmp_path, monkeypatch):
-    try:
-        app = GPDataApp(storage_path=tmp_path / "data.db")
-    except tk.TclError:
-        pytest.skip("Tk not available in this environment")
+def test_inline_edit_commit_failure_keeps_editor_open_and_preserves_value(app_factory, monkeypatch):
+    app = app_factory(withdraw=False)
 
     record = Record(field1="lager", field2="house")
     app.data_manager.save(record)
@@ -226,14 +203,10 @@ def test_inline_edit_commit_failure_keeps_editor_open_and_preserves_value(tmp_pa
     rows = app.data_manager.load_all()
     assert rows[0].field2 == 'House'
 
-    app.destroy()
 
 
-def test_inline_edit_cancel_clears_state_when_destroy_fails(tmp_path, monkeypatch):
-    try:
-        app = GPDataApp(storage_path=tmp_path / "data.db")
-    except tk.TclError:
-        pytest.skip("Tk not available in this environment")
+def test_inline_edit_cancel_clears_state_when_destroy_fails(app_factory, monkeypatch):
+    app = app_factory(withdraw=False)
 
     record = Record(field1="lager", field2="house")
     app.data_manager.save(record)
@@ -254,19 +227,10 @@ def test_inline_edit_cancel_clears_state_when_destroy_fails(tmp_path, monkeypatc
 
     monkeypatch.setattr(editor, 'destroy', original_destroy)
 
-    app.destroy()
 
 
-def test_inline_edit_without_callback_clears_state_when_local_apply_fails(monkeypatch):
-    try:
-        root = tk.Tk()
-    except tk.TclError:
-        pytest.skip("Tk not available in this environment")
-    root.withdraw()
-
-    from gp_data.ui import RecordTable
-
-    table = RecordTable(root)
+def test_inline_edit_without_callback_clears_state_when_local_apply_fails(tk_root, monkeypatch):
+    table = RecordTable(tk_root)
     record = Record(field1="lager", field2="house")
     table.insert_record(record)
     table.update_idletasks()
@@ -291,4 +255,3 @@ def test_inline_edit_without_callback_clears_state_when_local_apply_fails(monkey
     assert getattr(table, '_editor') is None
     assert getattr(table, '_editing') is None
 
-    root.destroy()
