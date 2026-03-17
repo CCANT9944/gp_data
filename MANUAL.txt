@@ -86,6 +86,9 @@ Important notes about editing:
 - If an edit would make the item match another existing Type + Name, the program warns you first.
 - If you cancel that warning, the edit is not saved.
 - If the app cannot create a safety backup before an edit or delete, it asks before continuing.
+- If renamed field labels cannot be saved or applied, the app shows an error and keeps the old labels.
+- If an inline edit fails to save, the app shows an error and keeps the inline editor open with your typed value.
+- If pressing Enter to submit from the form fails unexpectedly, the app shows an error instead of silently doing nothing.
 
 
 6. SEARCHING
@@ -217,6 +220,11 @@ This includes:
 - column order
 - column widths
 - visible columns
+
+Important:
+
+- if renamed field labels cannot be saved or applied, the app keeps the old labels and shows an error
+- if saving column layout or GP highlight settings fails, the app warns that the change may not still be there after restart
 
 
 13. IF SOMETHING LOOKS WRONG

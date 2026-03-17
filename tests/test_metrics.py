@@ -71,3 +71,24 @@ def test_gp_empty_when_menu_missing_or_zero():
     assert inp.metrics_entries['gp'].get() == ''
 
     root.destroy()
+
+
+def test_get_values_tolerates_recalc_field6_tclerror(monkeypatch):
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    root.withdraw()
+
+    frm = tk.Frame(root)
+    frm.pack()
+    inp = InputForm(frm)
+    inp.entries['field1'].insert(0, 'beer')
+
+    monkeypatch.setattr(inp, 'recalc_field6', lambda: (_ for _ in ()).throw(tk.TclError('widget unavailable')))
+
+    values = inp.get_values()
+
+    assert values['field1'] == 'beer'
+
+    root.destroy()

@@ -34,6 +34,10 @@ numeric change history per item.
 - The GP highlight threshold is saved in your local `settings.json` and comes back after restart.
 - The app warns at startup if the current storage file looks unreadable and points you toward backup restore or other recovery steps.
 - Add, edit, and delete flows now ask before continuing if a safety backup cannot be created first.
+- If renamed field labels cannot be saved or applied, the app shows an error and keeps the existing labels.
+- If layout or GP highlight settings cannot be saved, the app warns that the current change may not still be there after restart.
+- If an inline edit cannot be saved, the app shows an error and keeps the inline editor open with what you typed.
+- If form submission fails unexpectedly, the app shows an error instead of silently dropping the submit action.
 - Export writes the currently displayed rows.
 - Restore from the UI is handled through `Manage backups`, which includes preview, restore, and delete operations.
 - Table layout is customizable:

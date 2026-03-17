@@ -6,6 +6,8 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Sequence
 
+from pydantic import ValidationError
+
 from ..data_manager import CSVDataManager, DataManager
 from ..models import Record, calculate_field6
 from ..settings import load_settings, save_column_order, save_column_widths, save_gp_highlight_threshold, save_visible_columns
@@ -36,6 +38,7 @@ class GPDataApp(tk.Tk):
         self._displayed_records: list[Record] = []
         self._type_filter_value: str | None = None
         self._type_filter_menu_value = tk.StringVar(value="")
+        self._settings_warning_keys: set[str] = set()
         app_settings = load_settings()
         labels = app_settings["labels"]
         column_order = app_settings["column_order"]
@@ -135,6 +138,17 @@ class GPDataApp(tk.Tk):
             message = f"{message}\n\n{suffix}"
         messagebox.showerror(title, message)
 
+    def _warn_settings_save_failure(self, action: str, exc: Exception) -> None:
+        reason = str(exc).strip() or exc.__class__.__name__
+        warning_key = f"{action}:{exc.__class__.__name__}:{reason}"
+        if warning_key in self._settings_warning_keys:
+            return
+        self._settings_warning_keys.add(warning_key)
+        messagebox.showwarning(
+            "Settings not saved",
+            f"Could not save {action} to settings.json.\n\nReason: {reason}\n\nThe change is visible now, but it may not still be there after restart.",
+        )
+
     def _create_safety_backup_or_confirm(self, action: str) -> bool:
         try:
             self.data_manager.create_timestamped_backup()
@@ -146,6 +160,27 @@ class GPDataApp(tk.Tk):
     def _record_by_id(self, record_id: str) -> Record | None:
         records = self.data_manager.load_all()
         return next((record for record in records if record.id == record_id), None)
+
+    def _record_id_or_show_selection_error(self, record_id: str | None, message: str) -> str | None:
+        if record_id:
+            return record_id
+        messagebox.showinfo("Select", message)
+        return None
+
+    def _record_or_show_missing_error(self, record_id: str | None, *, selection_message: str | None = None) -> Record | None:
+        resolved_record_id = record_id
+        if selection_message is not None:
+            resolved_record_id = self._record_id_or_show_selection_error(record_id, selection_message)
+            if resolved_record_id is None:
+                return None
+        elif resolved_record_id is None:
+            return None
+
+        record = self._record_by_id(resolved_record_id)
+        if record is None:
+            messagebox.showerror("Error", "Record not found")
+            return None
+        return record
 
     def _confirm_duplicate_record(self, record: Record, exclude_id: str | None = None, action_text: str = "save") -> bool:
         duplicate = self.data_manager.find_duplicate_record(record, exclude_id=exclude_id)
@@ -188,6 +223,58 @@ class GPDataApp(tk.Tk):
             self.form.recalc_field6()
         except tk.TclError:
             LOGGER.debug("Unable to recalculate field6 while %s", context, exc_info=True)
+
+    def _build_record_or_show_error(self, data: dict, *, record_id: str | None = None, created_at=None) -> Record | None:
+        payload = dict(data)
+        if record_id is not None:
+            payload["id"] = record_id
+            payload["created_at"] = created_at
+        try:
+            return Record(**payload)
+        except (ValidationError, ValueError, TypeError) as exc:
+            messagebox.showerror("Validation error", str(exc))
+            return None
+
+    def _save_new_record(self, record: Record) -> bool:
+        if not self._create_safety_backup_or_confirm("adding this record"):
+            return False
+        try:
+            self.data_manager.save(record)
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._show_storage_error("Save failed", "save the new record", self.data_manager.path, exc)
+            return False
+        self.load_records()
+        self._reset_to_new_item()
+        return True
+
+    def _apply_saved_record(self, record: Record, *, refresh_form_mode: bool = True) -> None:
+        self.form.set_values(record.to_dict())
+        if refresh_form_mode:
+            self._update_form_mode_ui(record)
+        self._refresh_saved_record(record)
+
+    def _save_existing_record(
+        self,
+        original_record: Record,
+        updated_record: Record,
+        *,
+        duplicate_action_text: str,
+        backup_action: str,
+        error_title: str,
+        error_action: str,
+        refresh_form_mode: bool = True,
+    ) -> Record | None:
+        if not self._confirm_duplicate_record(updated_record, exclude_id=original_record.id, action_text=duplicate_action_text):
+            return None
+        if not self._create_safety_backup_or_confirm(backup_action):
+            return None
+        try:
+            saved = self.data_manager.update(original_record.id, updated_record)
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._show_storage_error(error_title, error_action, self.data_manager.path, exc)
+            return None
+        self._apply_saved_record(saved, refresh_form_mode=refresh_form_mode)
+        return saved
 
     def _on_table_select(self, event=None) -> None:
         if self._suspend_table_select:
@@ -329,8 +416,9 @@ class GPDataApp(tk.Tk):
         self.table.set_gp_highlight_threshold(threshold)
         try:
             save_gp_highlight_threshold(threshold)
-        except (OSError, TypeError, ValueError):
+        except (OSError, TypeError, ValueError) as exc:
             LOGGER.warning("Unable to persist GP highlight threshold", exc_info=True)
+            self._warn_settings_save_failure("the GP highlight preference", exc)
 
     def _prompt_custom_gp_highlight_threshold(self) -> None:
         current_threshold = self.table.get_gp_highlight_threshold()
@@ -447,33 +535,20 @@ class GPDataApp(tk.Tk):
     def on_add(self) -> None:
         self._recalc_form_field6("adding a new item")
         data = self.form.get_values()
-        try:
-            rec = Record(**data)
-        except Exception as exc:
-            messagebox.showerror("Validation error", str(exc))
+        rec = self._build_record_or_show_error(data)
+        if rec is None:
             return
 
         if not self._confirm_duplicate_record(rec, action_text="add another record"):
             return
-
-        if not self._create_safety_backup_or_confirm("adding this record"):
-            return
-        try:
-            self.data_manager.save(rec)
-        except (OSError, RuntimeError, ValueError) as exc:
-            self._show_storage_error("Save failed", "save the new record", self.data_manager.path, exc)
-            return
-        self.load_records()
-        self._reset_to_new_item()
+        self._save_new_record(rec)
 
     def on_edit(self) -> None:
-        sel_id = self.table.get_selected_id()
-        if not sel_id:
-            messagebox.showinfo("Select", "Please select a record to edit.")
-            return
-        record = self._record_by_id(sel_id)
-        if not record:
-            messagebox.showerror("Error", "Record not found")
+        record = self._record_or_show_missing_error(
+            self.table.get_selected_id(),
+            selection_message="Please select a record to edit.",
+        )
+        if record is None:
             return
         self.form.set_values(record.to_dict())
         self._update_form_mode_ui(record)
@@ -481,38 +556,32 @@ class GPDataApp(tk.Tk):
         self._focus_widget(first_field)
 
     def on_save_changes(self) -> None:
-        record_id = self.form.current_record_id or self.table.get_selected_id()
-        if not record_id:
-            messagebox.showinfo("Select", "Please select a record to edit.")
-            return
-        record = self._record_by_id(record_id)
-        if not record:
-            messagebox.showerror("Error", "Record not found")
+        record = self._record_or_show_missing_error(
+            self.form.current_record_id or self.table.get_selected_id(),
+            selection_message="Please select a record to edit.",
+        )
+        if record is None:
             return
         self._recalc_form_field6("saving changes")
         values = self.form.get_values()
-        try:
-            updated = Record(id=record.id, created_at=record.created_at, **values)
-        except Exception as exc:
-            messagebox.showerror("Validation error", str(exc))
+        updated = self._build_record_or_show_error(values, record_id=record.id, created_at=record.created_at)
+        if updated is None:
             return
-        if not self._confirm_duplicate_record(updated, exclude_id=record.id, action_text="save this edit"):
-            return
-        if not self._create_safety_backup_or_confirm("saving this edit"):
-            return
-        try:
-            saved = self.data_manager.update(record.id, updated)
-        except (OSError, RuntimeError, ValueError) as exc:
-            self._show_storage_error("Save failed", "save the edited record", self.data_manager.path, exc)
-            return
-        self.form.set_values(saved.to_dict())
-        self._update_form_mode_ui(saved)
-        self._refresh_saved_record(saved)
+        self._save_existing_record(
+            record,
+            updated,
+            duplicate_action_text="save this edit",
+            backup_action="saving this edit",
+            error_title="Save failed",
+            error_action="save the edited record",
+        )
 
     def on_delete(self) -> None:
-        sel_id = self.table.get_selected_id()
-        if not sel_id:
-            messagebox.showinfo("Select", "Please select a record to delete.")
+        sel_id = self._record_id_or_show_selection_error(
+            self.table.get_selected_id(),
+            "Please select a record to delete.",
+        )
+        if sel_id is None:
             return
         if messagebox.askyesno("Confirm", "Delete selected record?"):
             if not self._create_safety_backup_or_confirm("deleting this record"):
@@ -543,28 +612,28 @@ class GPDataApp(tk.Tk):
         return open_manage_backups_dialog(self, self.data_manager, on_restored=self.load_records)
 
     def on_labels_changed(self, labels: Sequence[str]) -> None:
-        try:
-            self.table.update_column_labels(labels)
-        except tk.TclError:
-            LOGGER.debug("Unable to update table column labels", exc_info=True)
+        self.table.update_column_labels(labels)
 
     def on_column_order_changed(self, columns: Sequence[str]) -> None:
         try:
             save_column_order(list(columns))
-        except (OSError, TypeError, ValueError):
+        except (OSError, TypeError, ValueError) as exc:
             LOGGER.warning("Unable to persist column order", exc_info=True)
+            self._warn_settings_save_failure("the column order", exc)
 
     def on_column_widths_changed(self, column_widths: dict[str, int]) -> None:
         try:
             save_column_widths(column_widths)
-        except (OSError, TypeError, ValueError):
+        except (OSError, TypeError, ValueError) as exc:
             LOGGER.warning("Unable to persist column widths", exc_info=True)
+            self._warn_settings_save_failure("the column widths", exc)
 
     def on_visible_columns_changed(self, visible_columns: Sequence[str]) -> None:
         try:
             save_visible_columns(list(visible_columns))
-        except (OSError, TypeError, ValueError):
+        except (OSError, TypeError, ValueError) as exc:
             LOGGER.warning("Unable to persist visible columns", exc_info=True)
+            self._warn_settings_save_failure("the visible columns", exc)
 
     def _column_label(self, column: str) -> str:
         if column.startswith("field") and column[5:].isdigit():
@@ -615,20 +684,18 @@ class GPDataApp(tk.Tk):
             if col in ("field3", "field5"):
                 data["field6"] = calculate_field6(data.get("field3"), data.get("field5"))
 
-            try:
-                updated = Record(**data)
-            except Exception as exc:
-                messagebox.showerror("Validation error", str(exc))
+            updated = self._build_record_or_show_error(data)
+            if updated is None:
                 return
-            if not self._confirm_duplicate_record(updated, exclude_id=record_id, action_text="save this edit"):
-                return
-
-            if not self._create_safety_backup_or_confirm("saving this inline edit"):
-                return
-
-            saved = self.data_manager.update(record_id, updated)
-            self.form.set_values(saved.to_dict())
-            self._refresh_saved_record(saved)
+            self._save_existing_record(
+                record,
+                updated,
+                duplicate_action_text="save this edit",
+                backup_action="saving this inline edit",
+                error_title="Edit failed",
+                error_action="save the inline edit",
+                refresh_form_mode=False,
+            )
         except (OSError, RuntimeError, ValueError) as exc:
             self._show_storage_error("Edit failed", "save the inline edit", self.data_manager.path, exc)
 

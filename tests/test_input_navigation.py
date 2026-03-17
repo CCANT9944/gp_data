@@ -50,3 +50,25 @@ def test_enter_triggers_field6_recalc():
     assert f.entries['field6'].get() == '£2.00'
 
     root.destroy()
+
+
+def test_enter_still_tracks_focus_when_cursor_move_fails(monkeypatch):
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    root.withdraw()
+
+    frame = tk.Frame(root)
+    frame.pack()
+    f = InputForm(frame)
+
+    monkeypatch.setattr(f.entries['field2'], 'icursor', lambda position: (_ for _ in ()).throw(tk.TclError('cursor unavailable')))
+
+    evt = type('E', (), {'widget': f.entries['field1']})()
+    result = f._on_enter(evt)
+
+    assert result == 'break'
+    assert getattr(f, '_last_focused', None) == f.entries['field2']
+
+    root.destroy()

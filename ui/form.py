@@ -4,7 +4,7 @@ import logging
 
 import tkinter as tk
 from datetime import datetime, timezone
-from tkinter import ttk
+from tkinter import messagebox, ttk
 from typing import Callable, Sequence
 
 from ..models import calculate_field6
@@ -204,12 +204,42 @@ class InputForm(ttk.Frame):
         ttk.Button(win, text="Close", command=win.destroy).pack(anchor="e", padx=10, pady=(0, 10))
         return win
 
+    def _safe_recalc_field6(self, context: str) -> None:
+        try:
+            self.recalc_field6()
+        except tk.TclError:
+            LOGGER.debug("Unable to recalculate field6 while %s", context, exc_info=True)
+
+    def _safe_get_values_for_metrics(self) -> dict:
+        try:
+            return self.get_values(recalculate=False)
+        except tk.TclError:
+            LOGGER.debug("Unable to read values while recalculating metrics", exc_info=True)
+            return {}
+
+    def _safe_recalc_metrics(self) -> None:
+        try:
+            self.recalc_metrics()
+        except tk.TclError:
+            LOGGER.debug("Unable to refresh derived metrics", exc_info=True)
+
+    def _cursor_index_or_fallback(self, entry: ttk.Entry, fallback: int, *, field_name: str | None = None) -> int:
+        try:
+            return int(entry.index(tk.INSERT))
+        except tk.TclError:
+            if field_name is not None:
+                LOGGER.debug("Unable to read cursor position while capitalizing %s", field_name, exc_info=True)
+            return fallback
+
+    def _set_cursor_safely(self, entry: ttk.Entry, position, *, context: str) -> None:
+        try:
+            entry.icursor(position)
+        except tk.TclError:
+            LOGGER.debug("Unable to %s", context, exc_info=True)
+
     def get_values(self, recalculate: bool = True) -> dict:
         if recalculate:
-            try:
-                self.recalc_field6()
-            except tk.TclError:
-                LOGGER.debug("Unable to recalculate field6 while reading form values", exc_info=True)
+            self._safe_recalc_field6("reading form values")
 
         out: dict = {}
         for key, entry in self.entries.items():
@@ -255,16 +285,14 @@ class InputForm(ttk.Frame):
         if stripped != titlecased:
             start_ws = len(txt) - len(stripped)
             new = txt[:start_ws] + titlecased
-            try:
-                pos = ent.index(tk.INSERT)
-            except tk.TclError:
-                pos = len(new)
+            pos = self._cursor_index_or_fallback(ent, len(new), field_name=field_name)
             ent.delete(0, tk.END)
             ent.insert(0, new)
-            try:
-                ent.icursor(min(pos, len(new)))
-            except tk.TclError:
-                LOGGER.debug("Unable to restore cursor position while capitalizing %s", field_name, exc_info=True)
+            self._set_cursor_safely(
+                ent,
+                min(pos, len(new)),
+                context=f"restore cursor position while capitalizing {field_name}",
+            )
 
     def _field_label_for(self, field_name: str | None) -> str:
         if not field_name or not field_name.startswith("field"):
@@ -314,10 +342,7 @@ class InputForm(ttk.Frame):
                     val = val.strip().title()
                 entry.insert(0, str(val))
         self._set_last_numeric_change(data)
-        try:
-            self.recalc_field6()
-        except tk.TclError:
-            LOGGER.debug("Unable to recalculate field6 after loading record values", exc_info=True)
+        self._safe_recalc_field6("loading record values")
         self._mark_clean()
 
     def recalc_field6(self) -> None:
@@ -331,17 +356,10 @@ class InputForm(ttk.Frame):
             self._set_field6_text("N/A")
         else:
             self._set_field6_text(f"\u00A3{value:.2f}")
-        try:
-            self.recalc_metrics()
-        except tk.TclError:
-            LOGGER.debug("Unable to refresh derived metrics", exc_info=True)
+        self._safe_recalc_metrics()
 
     def recalc_metrics(self) -> None:
-        try:
-            vals = self.get_values(recalculate=False)
-        except tk.TclError:
-            LOGGER.debug("Unable to read values while recalculating metrics", exc_info=True)
-            vals = {}
+        vals = self._safe_get_values_for_metrics()
 
         def as_float(key):
             val = vals.get(key)
@@ -383,10 +401,7 @@ class InputForm(ttk.Frame):
         _update_entry("gp70", gp70_text)
 
     def _on_enter(self, event) -> None:
-        try:
-            self.recalc_field6()
-        except tk.TclError:
-            LOGGER.debug("Unable to recalculate field6 on Enter key", exc_info=True)
+        self._safe_recalc_field6("handling the Enter key")
 
         widget = getattr(event, "widget", None)
         if widget is None:
@@ -403,17 +418,22 @@ class InputForm(ttk.Frame):
         if next_idx == 0 and callable(getattr(self, "on_submit", None)):
             try:
                 self.on_submit()
-            except Exception:
+            except (RuntimeError, tk.TclError) as exc:
                 LOGGER.exception("Form submit callback failed")
+                messagebox.showerror(
+                    "Submit failed",
+                    f"Could not submit the form.\n\nReason: {exc}",
+                    parent=self.winfo_toplevel(),
+                )
+                _focus_widget(widget)
+                self._last_focused = widget
+                return "break"
         nxt = self.entries.get(next_key)
         if nxt is None:
             return "break"
         _focus_widget(nxt)
         self._last_focused = nxt
-        try:
-            nxt.icursor("end")
-        except tk.TclError:
-            LOGGER.debug("Unable to move cursor to the end of %s", next_key, exc_info=True)
+        self._set_cursor_safely(nxt, "end", context=f"move cursor to the end of {next_key}")
         return "break"
 
     def clear(self) -> None:
@@ -425,7 +445,11 @@ class InputForm(ttk.Frame):
         self._current_change_data = {}
         self._mark_clean()
 
-    def rename_fields(self) -> None:
+    def _apply_field_labels_to_form(self, labels: Sequence[str]) -> None:
+        for index, label in enumerate(labels):
+            self.grid_slaves(row=index, column=0)[0].config(text=label)
+
+    def rename_fields(self) -> tk.Toplevel:
         win = tk.Toplevel(self)
         win.title("Rename fields")
         edits: list[ttk.Entry] = []
@@ -437,23 +461,40 @@ class InputForm(ttk.Frame):
             edits.append(ent)
 
         def apply():
-            for i, ent in enumerate(edits):
-                new = ent.get().strip() or self.labels[i]
-                self.labels[i] = new
-                self.grid_slaves(row=i, column=0)[0].config(text=new)
+            original_labels = list(self.labels)
+            updated_labels = [ent.get().strip() or self.labels[i] for i, ent in enumerate(edits)]
+
             try:
-                save_labels(self.labels)
-            except (OSError, TypeError, ValueError):
+                save_labels(updated_labels)
+            except (OSError, TypeError, ValueError) as exc:
                 LOGGER.warning("Unable to persist renamed field labels", exc_info=True)
+                messagebox.showerror(
+                    "Rename failed",
+                    f"Could not save renamed field labels.\n\nReason: {exc}",
+                    parent=win,
+                )
+                return
+
             if callable(self.on_rename):
                 try:
-                    self.on_rename(self.labels)
-                except Exception:
+                    self.on_rename(updated_labels)
+                except Exception as exc:
                     LOGGER.exception("Rename callback failed")
-            try:
-                self.recalc_field6()
-            except tk.TclError:
-                LOGGER.debug("Unable to recalculate field6 after renaming labels", exc_info=True)
+                    try:
+                        save_labels(original_labels)
+                    except (OSError, TypeError, ValueError):
+                        LOGGER.warning("Unable to roll back renamed field labels after callback failure", exc_info=True)
+                    messagebox.showerror(
+                        "Rename failed",
+                        f"Could not apply renamed field labels.\n\nReason: {exc}",
+                        parent=win,
+                    )
+                    return
+
+            self.labels = list(updated_labels)
+            self._apply_field_labels_to_form(self.labels)
+            self._safe_recalc_field6("renaming labels")
             win.destroy()
 
         ttk.Button(win, text="Apply", command=apply).grid(row=len(edits), column=0, columnspan=2, pady=6)
+        return win

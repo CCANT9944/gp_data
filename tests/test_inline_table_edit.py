@@ -188,3 +188,107 @@ def test_inline_edit_duplicate_warning_can_cancel_edit(tmp_path, monkeypatch):
     assert app.table.get_selected_id() == second.id
 
     app.destroy()
+
+
+def test_inline_edit_commit_failure_keeps_editor_open_and_preserves_value(tmp_path, monkeypatch):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+
+    record = Record(field1="lager", field2="house")
+    app.data_manager.save(record)
+    app.load_records()
+    app.update_idletasks()
+
+    seen: dict[str, str] = {}
+
+    def fake_showerror(title, message, parent=None):
+        seen["title"] = title
+        seen["message"] = message
+
+    monkeypatch.setattr(app.table, "_on_commit", lambda iid, col, value: (_ for _ in ()).throw(RuntimeError("write failed")))
+    monkeypatch.setattr("gp_data.ui.table.messagebox.showerror", fake_showerror)
+
+    app.table.start_cell_edit(record.id, 'field2')
+    editor = getattr(app.table, '_editor')
+    assert editor is not None
+    editor.delete(0, tk.END)
+    editor.insert(0, 'updated')
+
+    app.table._commit_edit()
+
+    assert seen["title"] == "Edit failed"
+    assert "write failed" in seen["message"]
+    assert getattr(app.table, '_editor') is editor
+    assert getattr(app.table, '_editing') == (record.id, 'field2')
+    assert editor.get() == 'updated'
+    rows = app.data_manager.load_all()
+    assert rows[0].field2 == 'House'
+
+    app.destroy()
+
+
+def test_inline_edit_cancel_clears_state_when_destroy_fails(tmp_path, monkeypatch):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+
+    record = Record(field1="lager", field2="house")
+    app.data_manager.save(record)
+    app.load_records()
+    app.update_idletasks()
+
+    app.table.start_cell_edit(record.id, 'field2')
+    editor = getattr(app.table, '_editor')
+    assert editor is not None
+
+    original_destroy = editor.destroy
+    monkeypatch.setattr(editor, 'destroy', lambda: (_ for _ in ()).throw(tk.TclError('destroy failed')))
+
+    app.table._cancel_edit()
+
+    assert getattr(app.table, '_editor') is None
+    assert getattr(app.table, '_editing') is None
+
+    monkeypatch.setattr(editor, 'destroy', original_destroy)
+
+    app.destroy()
+
+
+def test_inline_edit_without_callback_clears_state_when_local_apply_fails(monkeypatch):
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    root.withdraw()
+
+    from gp_data.ui import RecordTable
+
+    table = RecordTable(root)
+    record = Record(field1="lager", field2="house")
+    table.insert_record(record)
+    table.update_idletasks()
+    table.start_cell_edit(record.id, 'field2')
+
+    editor = getattr(table, '_editor')
+    assert editor is not None
+    editor.delete(0, tk.END)
+    editor.insert(0, 'updated')
+
+    original_item = table.item
+
+    def fake_item(iid, **kwargs):
+        if kwargs:
+            raise tk.TclError('row update failed')
+        return original_item(iid)
+
+    monkeypatch.setattr(table, 'item', fake_item)
+
+    table._commit_edit()
+
+    assert getattr(table, '_editor') is None
+    assert getattr(table, '_editing') is None
+
+    root.destroy()

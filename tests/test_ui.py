@@ -187,6 +187,30 @@ def test_record_table_hides_columns_and_keeps_visible_order():
     root.destroy()
 
 
+def test_record_table_rolls_back_visible_columns_when_callback_fails(monkeypatch):
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    root.withdraw()
+
+    seen: dict[str, str] = {}
+    table = RecordTable(root, on_visible_columns_changed=lambda columns: (_ for _ in ()).throw(RuntimeError("visible callback failed")))
+    monkeypatch.setattr("gp_data.ui.table.messagebox.showerror", lambda title, message, parent=None: seen.update({"title": title, "message": message}))
+
+    original_visible = table.get_visible_columns()
+    original_display = list(table.cget("displaycolumns"))
+
+    table.set_visible_columns(["field1", "field3", "gp"])
+
+    assert table.get_visible_columns() == original_visible
+    assert list(table.cget("displaycolumns")) == original_display
+    assert seen["title"] == "Columns not updated"
+    assert "visible callback failed" in seen["message"]
+
+    root.destroy()
+
+
 def test_double_click_uses_visible_column_mapping_when_columns_are_hidden():
     try:
         root = tk.Tk()
@@ -211,6 +235,74 @@ def test_double_click_uses_visible_column_mapping_when_columns_are_hidden():
     table._on_double_click(event)
 
     assert seen == [(record.id, "field7")]
+
+    root.destroy()
+
+
+def test_record_table_rolls_back_column_widths_when_callback_fails(monkeypatch):
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    root.withdraw()
+
+    seen: dict[str, str] = {}
+    table = RecordTable(root, on_column_widths_changed=lambda widths: (_ for _ in ()).throw(RuntimeError("width callback failed")))
+    monkeypatch.setattr("gp_data.ui.table.messagebox.showerror", lambda title, message, parent=None: seen.update({"title": title, "message": message}))
+
+    original_width = int(table.column("field1", "width"))
+    table.column("field1", width=210)
+
+    table._notify_if_widths_changed()
+
+    assert int(table.column("field1", "width")) == original_width
+    assert seen["title"] == "Column widths not updated"
+    assert "width callback failed" in seen["message"]
+
+    root.destroy()
+
+
+def test_record_table_rolls_back_column_order_when_callback_fails(monkeypatch):
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    root.withdraw()
+
+    seen: dict[str, str] = {}
+    table = RecordTable(root, on_column_order_changed=lambda order: (_ for _ in ()).throw(RuntimeError("order callback failed")))
+    monkeypatch.setattr("gp_data.ui.table.messagebox.showerror", lambda title, message, parent=None: seen.update({"title": title, "message": message}))
+
+    original_order = table.get_column_order()
+
+    moved = table._move_data_column("field7", "field1")
+
+    assert moved is False
+    assert table.get_column_order() == original_order
+    assert seen["title"] == "Column order not updated"
+    assert "order callback failed" in seen["message"]
+
+    root.destroy()
+
+
+def test_record_table_shows_error_when_heading_callback_fails(monkeypatch):
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    root.withdraw()
+
+    seen: dict[str, str] = {}
+    table = RecordTable(root, on_heading_click=lambda column: (_ for _ in ()).throw(RuntimeError("heading callback failed")))
+    monkeypatch.setattr("gp_data.ui.table.messagebox.showerror", lambda title, message, parent=None: seen.update({"title": title, "message": message}))
+    table._column_name_from_event = lambda event: "gp"  # type: ignore[method-assign]
+
+    event = type("Event", (), {"x": 24, "y": 8})()
+    table._on_button_press(event)
+    table._on_button_release(event)
+
+    assert seen["title"] == "Header action failed"
+    assert "heading callback failed" in seen["message"]
 
     root.destroy()
 
@@ -812,6 +904,134 @@ def test_main_controls_do_not_show_import_button(tmp_path):
     app.withdraw()
 
     assert _find_descendant(app, ttk.Button, text="Import CSV") is None
+
+    app.destroy()
+
+
+def test_save_changes_without_selection_shows_edit_prompt(tmp_path, monkeypatch):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    seen: dict[str, str] = {}
+
+    def fake_showinfo(title, message):
+        seen["title"] = title
+        seen["message"] = message
+
+    monkeypatch.setattr("gp_data.ui.app.messagebox.showinfo", fake_showinfo)
+
+    app.on_save_changes()
+
+    assert seen["title"] == "Select"
+    assert seen["message"] == "Please select a record to edit."
+
+    app.destroy()
+
+
+def test_rename_fields_shows_error_and_keeps_existing_labels_when_settings_save_fails(tmp_path, monkeypatch):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    original_label = app.form.labels[0]
+    seen: dict[str, str] = {}
+
+    def fake_showerror(title, message, parent=None):
+        seen["title"] = title
+        seen["message"] = message
+
+    monkeypatch.setattr("gp_data.ui.form.save_labels", lambda labels: (_ for _ in ()).throw(OSError("settings locked")))
+    monkeypatch.setattr("gp_data.ui.form.messagebox.showerror", fake_showerror)
+
+    rename_window = app.form.rename_fields()
+    entries = [widget for widget in rename_window.winfo_children() if isinstance(widget, ttk.Entry)]
+    apply_button = _find_descendant(rename_window, ttk.Button, text="Apply")
+
+    assert entries
+    assert apply_button is not None
+
+    entries[0].delete(0, tk.END)
+    entries[0].insert(0, "Product")
+    apply_button.invoke()
+
+    assert seen["title"] == "Rename failed"
+    assert "settings locked" in seen["message"]
+    assert app.form.labels[0] == original_label
+    assert app.form.grid_slaves(row=0, column=0)[0].cget("text") == original_label
+    assert app.table.heading("field1")["text"] == original_label
+    assert rename_window.winfo_exists() == 1
+
+    rename_window.destroy()
+    app.destroy()
+
+
+def test_rename_fields_rolls_back_when_table_label_update_fails(tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setattr(settings_module, "DEFAULT_PATH", settings_path)
+
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    original_label = app.form.labels[0]
+    seen: dict[str, str] = {}
+
+    def fake_showerror(title, message, parent=None):
+        seen["title"] = title
+        seen["message"] = message
+
+    monkeypatch.setattr(app.table, "update_column_labels", lambda labels: (_ for _ in ()).throw(tk.TclError("table unavailable")))
+    monkeypatch.setattr("gp_data.ui.form.messagebox.showerror", fake_showerror)
+
+    rename_window = app.form.rename_fields()
+    entries = [widget for widget in rename_window.winfo_children() if isinstance(widget, ttk.Entry)]
+    apply_button = _find_descendant(rename_window, ttk.Button, text="Apply")
+
+    assert entries
+    assert apply_button is not None
+
+    entries[0].delete(0, tk.END)
+    entries[0].insert(0, "Product")
+    apply_button.invoke()
+
+    assert seen["title"] == "Rename failed"
+    assert "table unavailable" in seen["message"]
+    assert app.form.labels[0] == original_label
+    assert app.form.grid_slaves(row=0, column=0)[0].cget("text") == original_label
+    assert app.table.heading("field1")["text"] == original_label
+    assert settings_module.load_labels(settings_path)[0] == original_label
+    assert rename_window.winfo_exists() == 1
+
+    rename_window.destroy()
+    app.destroy()
+
+
+def test_app_warns_once_when_visible_columns_settings_cannot_be_saved(tmp_path, monkeypatch):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    seen: list[tuple[str, str]] = []
+
+    monkeypatch.setattr("gp_data.ui.app.save_visible_columns", lambda columns: (_ for _ in ()).throw(OSError("settings locked")))
+    monkeypatch.setattr("gp_data.ui.app.messagebox.showwarning", lambda title, message: seen.append((title, message)))
+
+    app.on_visible_columns_changed(["field1", "field2"])
+    app.on_visible_columns_changed(["field1", "field3"])
+
+    assert len(seen) == 1
+    assert seen[0][0] == "Settings not saved"
+    assert "visible columns" in seen[0][1].lower()
+    assert "settings locked" in seen[0][1].lower()
 
     app.destroy()
 

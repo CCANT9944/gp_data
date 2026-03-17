@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 from typing import Callable, Sequence
 
 from ..models import Record
@@ -118,6 +118,82 @@ class RecordTable(ttk.Treeview):
     def get_gp_highlight_threshold(self) -> float | None:
         return self._gp_highlight_threshold
 
+    def _show_error_dialog(self, title: str, message: str, *, log_context: str) -> None:
+        try:
+            messagebox.showerror(title, message, parent=self.winfo_toplevel())
+        except tk.TclError:
+            LOGGER.debug(log_context, exc_info=True)
+
+    def _show_callback_error(self, title: str, message: str) -> None:
+        self._show_error_dialog(title, message, log_context="Unable to show callback failure dialog")
+
+    def _copy_text_to_clipboard_safely(self, text: str) -> None:
+        try:
+            top = self.winfo_toplevel()
+            top.clipboard_clear()
+            top.clipboard_append(text)
+        except tk.TclError:
+            LOGGER.debug("Unable to copy record id to clipboard", exc_info=True)
+
+    def _focus_editor_safely(self, editor: ttk.Entry, *, context: str, select_text: bool = False) -> None:
+        try:
+            editor.focus_set()
+            if select_text:
+                editor.select_range(0, "end")
+        except tk.TclError:
+            LOGGER.debug("Unable to %s", context, exc_info=True)
+
+    def _destroy_editor_safely(self, *, context: str) -> None:
+        editor = getattr(self, "_editor", None)
+        if editor is None:
+            return
+        try:
+            editor.destroy()
+        except tk.TclError:
+            LOGGER.debug("Unable to destroy inline editor while %s", context, exc_info=True)
+
+    def _clear_editor_state(self) -> None:
+        self._editor = None
+        self._editing = None
+
+    def _editable_cell_from_event(self, event) -> tuple[str, str] | None:
+        try:
+            row = self.identify_row(event.y)
+            col_id = self.identify_column(event.x)
+            if not row or not col_id:
+                return None
+            col_index = int(col_id.lstrip("#")) - 1
+            visible_display_cols = self._visible_display_columns()
+            if col_index < 0 or col_index >= len(visible_display_cols):
+                return None
+            col_name = visible_display_cols[col_index]
+        except (tk.TclError, ValueError):
+            LOGGER.debug("Unable to start inline cell edit from double click", exc_info=True)
+            return None
+
+        if _is_separator_column(col_name) or col_name == "field6":
+            return None
+        return row, col_name
+
+    def _normalized_editor_value(self, col: str, value):
+        if col not in ("field3", "field6", "field7") or not isinstance(value, str):
+            return value
+        stripped = value.replace("£", "").replace(",", "").strip()
+        try:
+            return str(float(stripped))
+        except (TypeError, ValueError):
+            LOGGER.debug("Unable to normalize editor value for %s", col, exc_info=True)
+            return value
+
+    def _apply_inline_edit_locally(self, iid: str, col: str, new_value: str) -> None:
+        try:
+            cur_vals = list(self.item(iid)["values"])
+            idx = self._display_cols.index(col)
+            cur_vals[idx] = new_value
+            self.item(iid, values=cur_vals)
+        except (tk.TclError, ValueError):
+            LOGGER.debug("Unable to apply inline edit locally", exc_info=True)
+
     def set_gp_highlight_threshold(self, threshold_percent: float | None) -> None:
         self._gp_highlight_threshold = threshold_percent
         self._refresh_row_tags()
@@ -128,13 +204,17 @@ class RecordTable(ttk.Treeview):
             visible = [self._cols[0]]
         if visible == self.get_visible_columns():
             return
+        original_visible = list(self._visible_cols)
         self._visible_cols = visible
         self._apply_column_layout(reload_rows=False)
         if callable(self._on_visible_columns_changed):
             try:
                 self._on_visible_columns_changed(self.get_visible_columns())
-            except Exception:
+            except Exception as exc:
                 LOGGER.exception("Visible-columns callback failed")
+                self._visible_cols = original_visible
+                self._apply_column_layout(reload_rows=False)
+                self._show_callback_error("Columns not updated", f"Could not apply the visible column change.\n\nReason: {exc}")
 
     def set_column_order(self, columns: Sequence[str]) -> None:
         new_order = [column for column in columns if column in self._cols]
@@ -188,13 +268,18 @@ class RecordTable(ttk.Treeview):
         widths = self.get_column_widths()
         if widths == self._last_known_widths:
             return
+        original_widths = dict(self._last_known_widths)
         self._last_known_widths = dict(widths)
         self._column_widths = dict(widths)
         if callable(self._on_column_widths_changed):
             try:
                 self._on_column_widths_changed(widths)
-            except Exception:
+            except Exception as exc:
                 LOGGER.exception("Column-width callback failed")
+                self._column_widths = dict(original_widths)
+                self._last_known_widths = dict(original_widths)
+                self._apply_column_layout(reload_rows=False)
+                self._show_callback_error("Column widths not updated", f"Could not apply the column width change.\n\nReason: {exc}")
 
     def _apply_column_layout(self, reload_rows: bool = False) -> None:
         records = list(self._records)
@@ -254,13 +339,21 @@ class RecordTable(ttk.Treeview):
         new_order.insert(target_index, dragged)
         if new_order == self._cols:
             return False
+        original_order = list(self._cols)
+        original_visible = list(self._visible_cols)
         self.set_column_order(new_order)
         self._visible_cols = [column for column in self._cols if column in self._visible_cols]
         if callable(self._on_column_order_changed):
             try:
                 self._on_column_order_changed(self.get_column_order())
-            except Exception:
+            except Exception as exc:
                 LOGGER.exception("Column-order callback failed")
+                self._cols = list(original_order)
+                self._display_cols = _build_display_columns(self._cols)
+                self._visible_cols = list(original_visible)
+                self._apply_column_layout(reload_rows=True)
+                self._show_callback_error("Column order not updated", f"Could not apply the column order change.\n\nReason: {exc}")
+                return False
         return True
 
     def _row_tag_for_record(self, record: Record, row_index: int) -> str:
@@ -297,8 +390,9 @@ class RecordTable(ttk.Treeview):
         if is_click and callable(self._on_heading_click):
             try:
                 self._on_heading_click(target)
-            except Exception:
+            except Exception as exc:
                 LOGGER.exception("Heading-click callback failed")
+                self._show_callback_error("Header action failed", f"Could not open the header action.\n\nReason: {exc}")
             return
         if target is None or _is_separator_column(target) or target == dragged:
             return
@@ -310,38 +404,18 @@ class RecordTable(ttk.Treeview):
         sel = self.get_selected_id()
         if not sel:
             return
-        try:
-            top = self.winfo_toplevel()
-            top.clipboard_clear()
-            top.clipboard_append(sel)
-        except tk.TclError:
-            LOGGER.debug("Unable to copy record id to clipboard", exc_info=True)
+        self._copy_text_to_clipboard_safely(sel)
 
     def _on_double_click(self, event) -> None:
-        try:
-            row = self.identify_row(event.y)
-            col_id = self.identify_column(event.x)
-            if not row or not col_id:
-                return
-            col_index = int(col_id.lstrip("#")) - 1
-            visible_display_cols = self._visible_display_columns()
-            if col_index < 0 or col_index >= len(visible_display_cols):
-                return
-            col_name = visible_display_cols[col_index]
-            if _is_separator_column(col_name):
-                return
-            if col_name == "field6":
-                return
-            self.start_cell_edit(row, col_name)
-        except (tk.TclError, ValueError):
-            LOGGER.debug("Unable to start inline cell edit from double click", exc_info=True)
+        cell = self._editable_cell_from_event(event)
+        if cell is None:
+            return
+        row, col_name = cell
+        self.start_cell_edit(row, col_name)
 
     def start_cell_edit(self, iid: str, col: str) -> None:
-        try:
-            if getattr(self, "_editor", None):
-                self._editor.destroy()
-        except tk.TclError:
-            LOGGER.debug("Unable to destroy previous cell editor", exc_info=True)
+        self._destroy_editor_safely(context="starting a new inline edit")
+        self._clear_editor_state()
 
         if col == "field6":
             return
@@ -356,12 +430,7 @@ class RecordTable(ttk.Treeview):
         else:
             x, y, w, h = bbox
         cur = self.item(iid)["values"][col_index]
-        if col in ("field3", "field6", "field7") and isinstance(cur, str):
-            s = cur.replace("£", "").replace(",", "").strip()
-            try:
-                cur = str(float(s))
-            except (TypeError, ValueError):
-                LOGGER.debug("Unable to normalize editor value for %s", col, exc_info=True)
+        cur = self._normalized_editor_value(col, cur)
 
         editor = ttk.Entry(self)
         try:
@@ -369,8 +438,7 @@ class RecordTable(ttk.Treeview):
         except tk.TclError:
             editor.pack()
         editor.insert(0, cur)
-        editor.focus_set()
-        editor.select_range(0, "end")
+        self._focus_editor_safely(editor, context="focus the inline editor", select_text=True)
         editor.bind("<Return>", lambda e: self._commit_edit())
         editor.bind("<Escape>", lambda e: self._cancel_edit())
         editor.bind("<FocusOut>", lambda e: self._cancel_edit())
@@ -381,35 +449,30 @@ class RecordTable(ttk.Treeview):
         if not getattr(self, "_editor", None) or not getattr(self, "_editing", None):
             return
         iid, col = self._editing
-        new_val = self._editor.get()
-        try:
-            self._editor.destroy()
-        except tk.TclError:
-            LOGGER.debug("Unable to destroy inline editor during commit", exc_info=True)
-        self._editor = None
-        self._editing = None
+        editor = self._editor
+        new_val = editor.get()
         if callable(self._on_commit):
             try:
                 self._on_commit(iid, col, new_val)
-            except Exception:
+            except Exception as exc:
                 LOGGER.exception("Inline edit commit callback failed")
+                self._focus_editor_safely(editor, context="refocus inline editor after commit failure", select_text=True)
+                self._show_error_dialog(
+                    "Edit failed",
+                    f"Could not save the inline edit.\n\nReason: {exc}",
+                    log_context="Unable to show inline edit failure dialog",
+                )
+                return
+            self._destroy_editor_safely(context="committing an inline edit")
+            self._clear_editor_state()
             return
-        try:
-            cur_vals = list(self.item(iid)["values"])
-            idx = self._display_cols.index(col)
-            cur_vals[idx] = new_val
-            self.item(iid, values=cur_vals)
-        except tk.TclError:
-            LOGGER.debug("Unable to apply inline edit locally", exc_info=True)
+        self._destroy_editor_safely(context="committing an inline edit")
+        self._clear_editor_state()
+        self._apply_inline_edit_locally(iid, col, new_val)
 
     def _cancel_edit(self, event=None) -> None:
-        try:
-            if getattr(self, "_editor", None):
-                self._editor.destroy()
-        except tk.TclError:
-            LOGGER.debug("Unable to destroy inline editor during cancel", exc_info=True)
-        self._editor = None
-        self._editing = None
+        self._destroy_editor_safely(context="canceling an inline edit")
+        self._clear_editor_state()
 
     def load(self, records: Sequence[Record]) -> None:
         self._records = list(records)

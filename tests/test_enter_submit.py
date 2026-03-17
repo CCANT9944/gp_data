@@ -34,3 +34,56 @@ def test_enter_on_last_field_submits(tmp_path):
     assert rows[0].field1 == 'Beer'  # normalized/title-cased by model
 
     app.destroy()
+
+
+def test_enter_on_last_field_shows_error_when_submit_callback_fails(tmp_path, monkeypatch):
+    try:
+        probe = tk.Tk()
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    probe.destroy()
+
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+
+    seen: dict[str, str] = {}
+
+    def fake_showerror(title, message, parent=None):
+        seen["title"] = title
+        seen["message"] = message
+
+    monkeypatch.setattr(app.form, "on_submit", lambda: (_ for _ in ()).throw(RuntimeError("submit callback failed")))
+    monkeypatch.setattr("gp_data.ui.form.messagebox.showerror", fake_showerror)
+
+    evt = type('E', (), {'widget': app.form.entries['field7']})()
+    result = app.form._on_enter(evt)
+
+    assert result == "break"
+    assert seen["title"] == "Submit failed"
+    assert "submit callback failed" in seen["message"]
+    assert app.data_manager.load_all() == []
+
+    app.destroy()
+
+
+def test_enter_on_last_field_does_not_hide_unexpected_submit_errors(tmp_path, monkeypatch):
+    try:
+        probe = tk.Tk()
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    probe.destroy()
+
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+
+    monkeypatch.setattr(app.form, "on_submit", lambda: (_ for _ in ()).throw(ValueError("unexpected submit bug")))
+
+    evt = type('E', (), {'widget': app.form.entries['field7']})()
+    with pytest.raises(ValueError, match="unexpected submit bug"):
+        app.form._on_enter(evt)
+
+    app.destroy()
