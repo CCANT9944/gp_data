@@ -5,7 +5,7 @@ import pytest
 
 from gp_data import settings as settings_module
 from gp_data.ui import RecordTable, GPDataApp
-from gp_data.ui.app import EDIT_MODE_BANNER_BG, NEW_MODE_BANNER_BG
+from gp_data.ui.app import DIRTY_MODE_BANNER_BG, EDIT_MODE_BANNER_BG, NEW_MODE_BANNER_BG
 from gp_data.ui.table import ROW_TAG_EVEN, ROW_TAG_GP_LOW_EVEN, ROW_TAG_GP_LOW_ODD, ROW_TAG_ODD, SEPARATOR_GLYPH, SEPARATOR_PREFIX, TABLE_HEADING_STYLE, TABLE_STYLE
 from gp_data.models import NumericChange, Record
 
@@ -909,7 +909,7 @@ def test_rename_fields_shows_error_and_keeps_existing_labels_when_settings_save_
         seen["title"] = title
         seen["message"] = message
 
-    monkeypatch.setattr("gp_data.ui.form.save_labels", lambda labels: (_ for _ in ()).throw(OSError("settings locked")))
+    monkeypatch.setattr(app.form, "_save_labels", lambda labels: (_ for _ in ()).throw(OSError("settings locked")))
     monkeypatch.setattr("gp_data.ui.form.messagebox.showerror", fake_showerror)
 
     rename_window = app.form.rename_fields()
@@ -986,7 +986,7 @@ def test_app_warns_once_when_visible_columns_settings_cannot_be_saved(tmp_path, 
 
     seen: list[tuple[str, str]] = []
 
-    monkeypatch.setattr("gp_data.ui.app.save_visible_columns", lambda columns: (_ for _ in ()).throw(OSError("settings locked")))
+    monkeypatch.setattr(app._settings, "save_visible_columns", lambda columns: (_ for _ in ()).throw(OSError("settings locked")))
     monkeypatch.setattr("gp_data.ui.app.messagebox.showwarning", lambda title, message: seen.append((title, message)))
 
     app.on_visible_columns_changed(["field1", "field2"])
@@ -1087,6 +1087,22 @@ def test_new_item_can_cancel_discarding_unsaved_changes(tmp_path, monkeypatch):
     app.destroy()
 
 
+def test_new_item_dirty_state_updates_mode_banner(tmp_path):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    app.form.entries["field1"].insert(0, "Gin")
+    app.form._notify_dirty_state()
+
+    assert app._form_mode_var.get() == "NEW ITEM MODE (UNSAVED CHANGES)"
+    assert app._form_mode_label.cget("bg") == DIRTY_MODE_BANNER_BG
+
+    app.destroy()
+
+
 def test_selecting_row_updates_mode_label_and_enables_save(tmp_path):
     try:
         app = GPDataApp(storage_path=tmp_path / "data.db")
@@ -1140,6 +1156,7 @@ def test_selecting_new_row_can_cancel_discarding_unsaved_changes(tmp_path, monke
     app._on_table_select()
     app.form.entries["field2"].delete(0, tk.END)
     app.form.entries["field2"].insert(0, "changed")
+    app.form._notify_dirty_state()
 
     app.table.selection_set(second.id)
     app._on_table_select()
@@ -1147,10 +1164,94 @@ def test_selecting_new_row_can_cancel_discarding_unsaved_changes(tmp_path, monke
     assert app.table.get_selected_id() == first.id
     assert app.form.current_record_id == first.id
     assert app.form.entries["field2"].get() == "changed"
-    assert app._form_mode_var.get() == "EDITING: Gin / House"
+    assert app._form_mode_var.get() == "EDITING: Gin / House (UNSAVED CHANGES)"
     assert asked["title"] == "Discard changes"
     assert "unsaved changes" in asked["message"]
 
+    app.destroy()
+
+
+def test_editing_dirty_state_updates_mode_banner(tmp_path):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    record = Record(field1="gin", field2="house")
+    app.data_manager.save(record)
+    app.load_records()
+
+    app.table.selection_set(record.id)
+    app._on_table_select()
+    app.form.entries["field2"].delete(0, tk.END)
+    app.form.entries["field2"].insert(0, "changed")
+    app.form._notify_dirty_state()
+
+    assert app._form_mode_var.get() == "EDITING: Gin / House (UNSAVED CHANGES)"
+    assert app._form_mode_label.cget("bg") == DIRTY_MODE_BANNER_BG
+
+    app.destroy()
+
+
+def test_delete_can_cancel_discarding_unsaved_changes(tmp_path, monkeypatch):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    record = Record(field1="gin", field2="house")
+    app.data_manager.save(record)
+    app.load_records()
+    app.table.selection_set(record.id)
+    app.on_edit()
+    app.form.entries["field2"].delete(0, tk.END)
+    app.form.entries["field2"].insert(0, "changed")
+
+    asked: list[tuple[str, str]] = []
+
+    def fake_askyesno(title, message):
+        asked.append((title, message))
+        return False
+
+    monkeypatch.setattr("gp_data.ui.app.messagebox.askyesno", fake_askyesno)
+
+    app.on_delete()
+
+    assert app.data_manager.load_all()[0].field2 == "House"
+    assert asked == [("Discard changes", "You have unsaved changes in the form.\n\nDiscard them?")]
+
+    app.destroy()
+
+
+def test_close_can_cancel_discarding_unsaved_changes(tmp_path, monkeypatch):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    app.form.entries["field1"].insert(0, "Gin")
+    asked: dict[str, str] = {}
+    destroyed = {"called": False}
+    original_destroy = app.destroy
+
+    def fake_askyesno(title, message):
+        asked["title"] = title
+        asked["message"] = message
+        return False
+
+    monkeypatch.setattr("gp_data.ui.app.messagebox.askyesno", fake_askyesno)
+    monkeypatch.setattr(app, "destroy", lambda: destroyed.update({"called": True}))
+
+    app.on_close()
+
+    assert asked["title"] == "Discard changes"
+    assert "unsaved changes" in asked["message"]
+    assert destroyed["called"] is False
+
+    monkeypatch.setattr(app, "destroy", original_destroy)
     app.destroy()
 
 

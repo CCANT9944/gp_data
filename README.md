@@ -22,7 +22,8 @@ numeric change history per item.
 - Clicking a table row loads that record into the main form for editing.
 - Use `Save changes` to commit form edits, or press `Enter` in the last field while an item is loaded.
 - The form shows a highlighted mode banner so edit mode stands out clearly from new-item mode.
-- Switching rows or returning to `New item` asks before discarding unsaved form changes.
+- If the form has unsaved edits, the mode banner switches to an `UNSAVED CHANGES` state.
+- Switching rows, returning to `New item`, deleting the selected row, or closing the window asks before discarding unsaved form changes.
 - `Delete selected` is only active when a table row is selected.
 - Add and edit flows warn when the same `Type + Name` already exists.
 - The table shows the newest saved items first.
@@ -38,6 +39,7 @@ numeric change history per item.
 - If layout or GP highlight settings cannot be saved, the app warns that the current change may not still be there after restart.
 - If an inline edit cannot be saved, the app shows an error and keeps the inline editor open with what you typed.
 - If form submission fails unexpectedly, the app shows an error instead of silently dropping the submit action.
+- If you try to delete a selected row while the main form has unsaved edits, the app asks whether those form edits should be discarded first.
 - If you confirm `Delete selected`, the row is removed and the form returns to new-item mode.
 - Export writes the currently displayed rows.
 - Restore from the UI is handled through `Manage backups`, which includes preview, restore, and delete operations.

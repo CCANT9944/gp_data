@@ -8,7 +8,7 @@ from typing import Sequence
 
 from ..data_manager import CSVDataManager, DataManager
 from ..models import Record, calculate_field6
-from ..settings import load_settings, save_column_order, save_column_widths, save_gp_highlight_threshold, save_visible_columns
+from ..settings import SettingsStore
 from .backup_dialog import open_manage_backups_dialog
 from .form import InputForm
 from .record_actions import RecordActions
@@ -22,6 +22,8 @@ NEW_MODE_BANNER_BG = "#e7f1ff"
 NEW_MODE_BANNER_FG = "#0b4f8a"
 EDIT_MODE_BANNER_BG = "#fff1c9"
 EDIT_MODE_BANNER_FG = "#7a4b00"
+DIRTY_MODE_BANNER_BG = "#ffe2bf"
+DIRTY_MODE_BANNER_FG = "#8a3d00"
 GP_HIGHLIGHT_PRESETS = (50.0, 60.0, 70.0, 80.0)
 DEFAULT_WINDOW_WIDTH = 1200
 DEFAULT_WINDOW_HEIGHT = 620
@@ -35,6 +37,7 @@ class GPDataApp(tk.Tk):
         self.title("GP Data Manager")
 
         self.data_manager = DataManager(storage_path)
+        self._settings = SettingsStore()
         self._displayed_records: list[Record] = []
         self._type_filter_value: str | None = None
         self._type_filter_menu_value = tk.StringVar(value="")
@@ -51,19 +54,26 @@ class GPDataApp(tk.Tk):
             load_records=self.load_records,
             reset_to_new_item=self._reset_to_new_item,
         )
-        app_settings = load_settings()
-        labels = app_settings["labels"]
-        column_order = app_settings["column_order"]
-        column_widths = app_settings["column_widths"]
-        visible_columns = app_settings["visible_columns"]
-        gp_highlight_threshold = app_settings["gp_highlight_threshold"]
+        app_settings = self._settings.load()
+        labels = app_settings.labels
+        column_order = app_settings.column_order
+        column_widths = app_settings.column_widths
+        visible_columns = app_settings.visible_columns
+        gp_highlight_threshold = app_settings.gp_highlight_threshold
 
         container = ttk.Frame(self)
         container.pack(fill="both", expand=True, padx=8, pady=8)
 
         left = ttk.Frame(container)
         left.pack(side="left", fill="y", padx=(0, 8))
-        self.form = InputForm(left, labels=labels, on_rename=self.on_labels_changed, on_submit=self.on_form_submit)
+        self.form = InputForm(
+            left,
+            labels=labels,
+            on_rename=self.on_labels_changed,
+            on_submit=self.on_form_submit,
+            save_labels_callback=self._settings.save_labels,
+            on_dirty_change=self._on_form_dirty_change,
+        )
         self.form.pack(fill="y", expand=False)
         self._form_mode_var = tk.StringVar(value="NEW ITEM MODE")
         self._form_mode_label = tk.Label(
@@ -117,6 +127,7 @@ class GPDataApp(tk.Tk):
         self._type_filter_menu = tk.Menu(self, tearoff=0)
         self.table.bind("<<TreeviewSelect>>", self._on_table_select)
         self.table.bind("<Button-3>", self._on_row_right_click)
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self._suspend_table_select = False
         self.table.set_gp_highlight_threshold(gp_highlight_threshold)
@@ -217,23 +228,48 @@ class GPDataApp(tk.Tk):
             "You have unsaved changes in the form.\n\nDiscard them?",
         )
 
+    def _on_form_dirty_change(self, is_dirty: bool) -> None:
+        self._update_form_mode_ui()
+
     def _update_form_mode_ui(self, record: Record | None = None) -> None:
         current_record_id = self.form.current_record_id
         selected_record_id = self.table.get_selected_id()
+        dirty = self.form.is_dirty()
         self._delete_selected_button.config(state="normal" if selected_record_id else "disabled")
         if current_record_id is None:
             self._save_changes_button.config(state="disabled")
-            self._set_form_mode_banner("NEW ITEM MODE", NEW_MODE_BANNER_BG, NEW_MODE_BANNER_FG)
+            text = "NEW ITEM MODE"
+            bg = NEW_MODE_BANNER_BG
+            fg = NEW_MODE_BANNER_FG
+            if dirty:
+                text = "NEW ITEM MODE (UNSAVED CHANGES)"
+                bg = DIRTY_MODE_BANNER_BG
+                fg = DIRTY_MODE_BANNER_FG
+            self._set_form_mode_banner(text, bg, fg)
             return
         if record is None or record.id != current_record_id:
             record = self._record_actions.record_by_id(current_record_id)
         self._save_changes_button.config(state="normal")
         if record is None:
-            self._set_form_mode_banner("EDITING SELECTED ITEM", EDIT_MODE_BANNER_BG, EDIT_MODE_BANNER_FG)
+            text = "EDITING SELECTED ITEM"
+            bg = EDIT_MODE_BANNER_BG
+            fg = EDIT_MODE_BANNER_FG
+            if dirty:
+                text = f"{text} (UNSAVED CHANGES)"
+                bg = DIRTY_MODE_BANNER_BG
+                fg = DIRTY_MODE_BANNER_FG
+            self._set_form_mode_banner(text, bg, fg)
             return
         left = (record.field1 or "").strip() or "(blank)"
         right = (record.field2 or "").strip() or "(blank)"
-        self._set_form_mode_banner(f"EDITING: {left} / {right}", EDIT_MODE_BANNER_BG, EDIT_MODE_BANNER_FG)
+        text = f"EDITING: {left} / {right}"
+        bg = EDIT_MODE_BANNER_BG
+        fg = EDIT_MODE_BANNER_FG
+        if dirty:
+            text = f"{text} (UNSAVED CHANGES)"
+            bg = DIRTY_MODE_BANNER_BG
+            fg = DIRTY_MODE_BANNER_FG
+        self._set_form_mode_banner(text, bg, fg)
 
     def _set_form_mode_banner(self, text: str, bg: str, fg: str) -> None:
         self._form_mode_var.set(text)
@@ -319,7 +355,7 @@ class GPDataApp(tk.Tk):
     def _set_gp_highlight_threshold(self, threshold: float | None) -> None:
         self.table.set_gp_highlight_threshold(threshold)
         try:
-            save_gp_highlight_threshold(threshold)
+            self._settings.save_gp_highlight_threshold(threshold)
         except (OSError, TypeError, ValueError) as exc:
             LOGGER.warning("Unable to persist GP highlight threshold", exc_info=True)
             self._warn_settings_save_failure("the GP highlight preference", exc)
@@ -484,6 +520,8 @@ class GPDataApp(tk.Tk):
         )
         if sel_id is None:
             return
+        if self.form.is_dirty() and not self._confirm_discard_form_changes():
+            return
         if messagebox.askyesno("Confirm", "Delete selected record?"):
             self._record_actions.delete_record(
                 sel_id,
@@ -491,6 +529,11 @@ class GPDataApp(tk.Tk):
                 error_title="Delete failed",
                 error_action="delete the selected record",
             )
+
+    def on_close(self) -> None:
+        if not self._confirm_discard_form_changes():
+            return
+        self.destroy()
 
     def on_export(self) -> None:
         path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files", "*.csv")])
@@ -514,21 +557,21 @@ class GPDataApp(tk.Tk):
 
     def on_column_order_changed(self, columns: Sequence[str]) -> None:
         try:
-            save_column_order(list(columns))
+            self._settings.save_column_order(list(columns))
         except (OSError, TypeError, ValueError) as exc:
             LOGGER.warning("Unable to persist column order", exc_info=True)
             self._warn_settings_save_failure("the column order", exc)
 
     def on_column_widths_changed(self, column_widths: dict[str, int]) -> None:
         try:
-            save_column_widths(column_widths)
+            self._settings.save_column_widths(column_widths)
         except (OSError, TypeError, ValueError) as exc:
             LOGGER.warning("Unable to persist column widths", exc_info=True)
             self._warn_settings_save_failure("the column widths", exc)
 
     def on_visible_columns_changed(self, visible_columns: Sequence[str]) -> None:
         try:
-            save_visible_columns(list(visible_columns))
+            self._settings.save_visible_columns(list(visible_columns))
         except (OSError, TypeError, ValueError) as exc:
             LOGGER.warning("Unable to persist visible columns", exc_info=True)
             self._warn_settings_save_failure("the visible columns", exc)

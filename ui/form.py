@@ -8,7 +8,7 @@ from tkinter import messagebox, ttk
 from typing import Callable, Sequence
 
 from ..models import calculate_field6
-from ..settings import save_labels
+from ..settings import save_labels as save_labels_to_settings
 
 
 LOGGER = logging.getLogger(__name__)
@@ -30,13 +30,15 @@ def _focus_widget(widget: tk.Misc | None) -> None:
 class InputForm(ttk.Frame):
     """Encapsulates seven input fields. Labels can be renamed at runtime."""
 
-    def __init__(self, parent, labels: Sequence[str] | None = None, on_rename: Callable[[list[str]], None] | None = None, on_submit: Callable[[], None] | None = None, **kwargs):
+    def __init__(self, parent, labels: Sequence[str] | None = None, on_rename: Callable[[list[str]], None] | None = None, on_submit: Callable[[], None] | None = None, save_labels_callback: Callable[[list[str]], object] | None = None, on_dirty_change: Callable[[bool], None] | None = None, **kwargs):
         super().__init__(parent, **kwargs)
         default = ["Field 1", "Field 2", "Field 3", "Field 4", "Field 5", "Field 6", "Field 7"]
         self.labels = list(labels or default)
         self.entries: dict[str, ttk.Entry] = {}
         self.on_rename = on_rename
         self.on_submit = on_submit
+        self._save_labels = save_labels_callback or save_labels_to_settings
+        self.on_dirty_change = on_dirty_change
         self.current_record_id: str | None = None
         self._clean_snapshot: dict | None = None
         self._current_change_data: dict = {}
@@ -103,6 +105,11 @@ class InputForm(ttk.Frame):
         if "field2" in self.entries:
             self.entries["field2"].bind("<KeyRelease>", lambda e: self._capitalize_field("field2"))
 
+        for key, ent in self.entries.items():
+            if key == "field6":
+                continue
+            ent.bind("<KeyRelease>", lambda e: self._notify_dirty_state(), add="+")
+
         self.columnconfigure(1, weight=1)
         self._mark_clean()
 
@@ -116,6 +123,10 @@ class InputForm(ttk.Frame):
         if self._clean_snapshot is None:
             return False
         return self._snapshot_values() != self._clean_snapshot
+
+    def _notify_dirty_state(self) -> None:
+        if callable(self.on_dirty_change):
+            self.on_dirty_change(self.is_dirty())
 
     def _set_changes_text(self, text: str) -> None:
         self.last_numeric_change_var.set(text)
@@ -344,6 +355,7 @@ class InputForm(ttk.Frame):
         self._set_last_numeric_change(data)
         self._safe_recalc_field6("loading record values")
         self._mark_clean()
+        self._notify_dirty_state()
 
     def recalc_field6(self) -> None:
         v3 = self.entries.get("field3").get() if self.entries.get("field3") else None
@@ -444,6 +456,7 @@ class InputForm(ttk.Frame):
         self._set_field6_text("")
         self._current_change_data = {}
         self._mark_clean()
+        self._notify_dirty_state()
 
     def _apply_field_labels_to_form(self, labels: Sequence[str]) -> None:
         for index, label in enumerate(labels):
@@ -465,7 +478,7 @@ class InputForm(ttk.Frame):
             updated_labels = [ent.get().strip() or self.labels[i] for i, ent in enumerate(edits)]
 
             try:
-                save_labels(updated_labels)
+                self._save_labels(updated_labels)
             except (OSError, TypeError, ValueError) as exc:
                 LOGGER.warning("Unable to persist renamed field labels", exc_info=True)
                 messagebox.showerror(
@@ -481,7 +494,7 @@ class InputForm(ttk.Frame):
                 except Exception as exc:
                     LOGGER.exception("Rename callback failed")
                     try:
-                        save_labels(original_labels)
+                        self._save_labels(original_labels)
                     except (OSError, TypeError, ValueError):
                         LOGGER.warning("Unable to roll back renamed field labels after callback failure", exc_info=True)
                     messagebox.showerror(

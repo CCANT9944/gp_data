@@ -88,3 +88,43 @@ def test_load_settings_invalid_gp_highlight_threshold_defaults_to_none(tmp_path:
     loaded = settings.load_settings(p)
 
     assert loaded["gp_highlight_threshold"] is None
+
+
+def test_settings_store_save_normalizes_values_before_writing(tmp_path: Path):
+    store = settings.SettingsStore(tmp_path / "settings.json")
+
+    saved = store.save(
+        {
+            "labels": ["A", "B"],
+            "column_order": ["field3", "field3", "field1", "bad"],
+            "column_widths": {"field1": "210", "field2": 20, "bad": 999},
+            "visible_columns": ["field7", "field7", "nope"],
+            "gp_highlight_threshold": "61.5",
+        }
+    )
+
+    assert saved.labels == ["A", "B", "Field 3", "Field 4", "Field 5", "Field 6", "Field 7"]
+    assert saved.column_order[:2] == ["field3", "field1"]
+    assert saved.column_widths["field1"] == 210
+    assert saved.column_widths["field2"] == settings.DEFAULT_COLUMN_WIDTHS["field2"]
+    assert saved.visible_columns == ["field7"]
+    assert saved.gp_highlight_threshold == 61.5
+    assert settings.load_settings(store.path)["visible_columns"] == ["field7"]
+
+
+def test_settings_store_update_preserves_existing_keys(tmp_path: Path):
+    store = settings.SettingsStore(tmp_path / "settings.json")
+    store.save({
+        "labels": ["Type", "Name", "Price", "Qty", "Units", "Cost", "Sale"],
+        "column_order": settings.DEFAULT_COLUMN_ORDER,
+        "column_widths": {"field1": 222},
+        "visible_columns": ["field1", "field3"],
+        "gp_highlight_threshold": 70.0,
+    })
+
+    updated = store.save_visible_columns(["field1", "field7", "gp"])
+
+    assert updated.visible_columns == ["field1", "field7", "gp"]
+    assert updated.labels[0] == "Type"
+    assert updated.column_widths["field1"] == 222
+    assert updated.gp_highlight_threshold == 70.0

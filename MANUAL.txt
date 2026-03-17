@@ -39,6 +39,7 @@ The table is used for browsing, searching, selecting, and inline editing.
 The newest saved items are shown first in the table.
 
 The highlighted banner under the form tells you whether you are in New item mode or editing a selected record.
+If the form has unsaved edits, that banner changes to show UNSAVED CHANGES.
 
 4. ADDING A RECORD
 
@@ -69,7 +70,7 @@ Method A: Main form edit
 
 If you want to stop editing that row and enter a completely new item instead, click New item to clear the form and remove the current selection.
 Save changes is only active when a record is loaded into the form.
-If you changed something and then click another row or New item, the app now asks before throwing those unsaved changes away.
+If you changed something and then click another row, click New item, click Delete selected, or close the window, the app asks before throwing those unsaved changes away.
 Delete selected is only active when a table row is selected.
 
 Deleting a record:
@@ -94,6 +95,7 @@ Important notes about editing:
 - If an edit would make the item match another existing Type + Name, the program warns you first.
 - If you cancel that warning, the edit is not saved.
 - If the app cannot create a safety backup before an edit or delete, it asks before continuing.
+- If the form has unsaved edits, Delete selected asks whether those edits should be discarded before the delete continues.
 - If renamed field labels cannot be saved or applied, the app shows an error and keeps the old labels.
 - If an inline edit fails to save, the app shows an error and keeps the inline editor open with your typed value.
 - If pressing Enter to submit from the form fails unexpectedly, the app shows an error instead of silently doing nothing.
@@ -233,6 +235,7 @@ Important:
 
 - if renamed field labels cannot be saved or applied, the app keeps the old labels and shows an error
 - if saving column layout or GP highlight settings fails, the app warns that the change may not still be there after restart
+- if you try to close the window with unsaved form edits, the app asks before discarding them
 
 
 13. IF SOMETHING LOOKS WRONG
