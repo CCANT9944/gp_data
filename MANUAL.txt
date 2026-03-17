@@ -41,6 +41,10 @@ The newest saved items are shown first in the table.
 The highlighted banner under the form tells you whether you are in New item mode or editing a selected record.
 If the form has unsaved edits, that banner changes to show UNSAVED CHANGES.
 
+There is also an Open CSV button for viewing a raw CSV in a separate window.
+That CSV viewer is read-only and shows all rows and all columns from the file you opened.
+There is a Last CSV button beside it that reopens the most recently viewed CSV path if that file still exists.
+
 4. ADDING A RECORD
 
 Click New item if you want a blank form.
@@ -207,7 +211,28 @@ Click Export CSV.
 If the table is filtered by search or by the Type header menu, only the currently shown rows are exported.
 
 
-11. COMMAND LINE
+11. RAW CSV VIEWER
+
+Use Open CSV if you want to inspect a raw CSV file without importing it into the main app data.
+
+What it does:
+
+- opens the CSV in a separate window
+- shows all columns from the file
+- shows all rows from the file
+- keeps the viewer read-only
+- lets you scroll across wide files and down long files
+
+Use Last CSV if you want to reopen the same file again quickly.
+
+Important notes:
+
+- the raw CSV viewer does not import anything into the main product table yet
+- the app remembers the last CSV path locally so you do not need to browse to it every time
+- reopening the same unchanged CSV is faster while the app is still open
+
+
+12. COMMAND LINE
 
 The program also has CLI commands.
 
@@ -219,7 +244,7 @@ python main.py restore
 python main.py export output.csv
 
 
-12. SETTINGS THAT ARE SAVED
+13. SETTINGS THAT ARE SAVED
 
 The program saves settings in settings.json.
 That file is local on your machine and is not meant to be pushed to Git.
@@ -230,6 +255,7 @@ This includes:
 - column order
 - column widths
 - visible columns
+- the last CSV preview path used by Last CSV
 
 Important:
 
@@ -238,7 +264,7 @@ Important:
 - if you try to close the window with unsaved form edits, the app asks before discarding them
 
 
-13. IF SOMETHING LOOKS WRONG
+14. IF SOMETHING LOOKS WRONG
 
 If the table or form looks odd:
 
@@ -257,6 +283,12 @@ If you still see two items with the same Type and Name:
 
 - that usually means both rows already existed in saved data
 - the new warning stops accidental new duplicates, but it does not automatically merge old ones
+
+If the CSV viewer does not reopen the file you expect:
+
+- use Open CSV to pick the file again
+- check that the old CSV still exists at the remembered path
+- if the file changed on disk, the app reloads it again instead of reusing the old preview
 
 
 14. CURRENT LIMITATIONS

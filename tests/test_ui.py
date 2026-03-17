@@ -322,6 +322,103 @@ def test_app_loads_saved_gp_highlight_threshold(tmp_path, monkeypatch):
     app.destroy()
 
 
+def test_main_controls_show_open_csv_button(app_factory, tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setattr(settings_module, "DEFAULT_PATH", settings_path)
+    app = app_factory()
+
+    assert _find_descendant(app, ttk.Button, text="Open CSV") is not None
+    assert _find_descendant(app, ttk.Button, text="Last CSV") is not None
+    assert str(app._open_last_csv_button.cget("state")) == "disabled"
+
+
+def test_open_csv_preview_launches_dialog(app_factory, tmp_path, monkeypatch):
+    app = app_factory()
+    csv_path = tmp_path / "raw.csv"
+    csv_path.write_text("A,B,C\n1,2,3\n", encoding="utf-8")
+
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr("gp_data.ui.app.filedialog.askopenfilename", lambda **kwargs: str(csv_path))
+
+    def fake_open(parent, csv_path, *, width, height):
+        seen["parent"] = parent
+        seen["path"] = csv_path
+        seen["width"] = width
+        seen["height"] = height
+        return None
+
+    monkeypatch.setattr("gp_data.ui.app.open_csv_preview_dialog", fake_open)
+
+    app.on_open_csv_preview()
+
+    assert seen["parent"] is app
+    assert seen["path"] == csv_path
+    assert int(seen["width"]) >= app.table.winfo_width()
+    assert int(seen["height"]) >= app.table.winfo_height()
+    assert app._settings.load_csv_preview_last_path() == str(csv_path)
+    assert str(app._open_last_csv_button.cget("state")) == "normal"
+
+
+def test_open_csv_preview_cancel_does_not_launch_dialog(app_factory, monkeypatch):
+    app = app_factory()
+
+    monkeypatch.setattr("gp_data.ui.app.filedialog.askopenfilename", lambda **kwargs: "")
+    monkeypatch.setattr("gp_data.ui.app.open_csv_preview_dialog", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("dialog should not open")))
+
+    app.on_open_csv_preview()
+
+
+def test_open_last_csv_button_enabled_from_saved_settings(tmp_path, monkeypatch):
+    csv_path = tmp_path / "saved.csv"
+    csv_path.write_text("A,B\n1,2\n", encoding="utf-8")
+    settings_path = tmp_path / "settings.json"
+    settings_module.save_settings(
+        {
+            "labels": settings_module.DEFAULT_LABELS,
+            "column_order": settings_module.DEFAULT_COLUMN_ORDER,
+            "column_widths": settings_module.DEFAULT_COLUMN_WIDTHS,
+            "visible_columns": settings_module.DEFAULT_VISIBLE_COLUMNS,
+            "gp_highlight_threshold": None,
+            "csv_preview_last_path": str(csv_path),
+        },
+        settings_path,
+    )
+    monkeypatch.setattr(settings_module, "DEFAULT_PATH", settings_path)
+
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    assert str(app._open_last_csv_button.cget("state")) == "normal"
+
+    app.destroy()
+
+
+def test_open_last_csv_preview_launches_saved_path(app_factory, tmp_path, monkeypatch):
+    app = app_factory()
+    csv_path = tmp_path / "saved.csv"
+    csv_path.write_text("A,B\n1,2\n", encoding="utf-8")
+    app._settings.save_csv_preview_last_path(str(csv_path))
+    app._update_open_last_csv_button_state()
+
+    seen: dict[str, object] = {}
+
+    def fake_open(parent, csv_path, *, width, height):
+        seen["parent"] = parent
+        seen["path"] = csv_path
+        return None
+
+    monkeypatch.setattr("gp_data.ui.app.open_csv_preview_dialog", fake_open)
+
+    app.on_open_last_csv_preview()
+
+    assert seen["parent"] is app
+    assert seen["path"] == csv_path
+
+
 def _menu_index_by_label(menu: tk.Menu, expected: str) -> int:
     end_index = menu.index("end")
     assert end_index is not None

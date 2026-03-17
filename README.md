@@ -33,6 +33,9 @@ numeric change history per item.
 - Click the `Type` column header to open a small filter menu listing the saved types, then use `Remove type filter` at the bottom to clear it.
 - Click the `GP` column header to open a small menu with highlight presets, a custom threshold option, and a clear option.
 - The GP highlight threshold is saved in your local `settings.json` and comes back after restart.
+- `Open CSV` opens a separate read-only raw CSV viewer that shows all columns and all rows from the selected file.
+- `Last CSV` reopens the most recently viewed CSV from a remembered local path so you do not need to browse for the same file every time.
+- Reopening the same unchanged CSV is faster because the preview data is reused while the app is still open.
 - The app warns at startup if the current storage file looks unreadable and points you toward backup restore or other recovery steps.
 - Add, edit, and delete flows now ask before continuing if a safety backup cannot be created first.
 - If renamed field labels cannot be saved or applied, the app shows an error and keeps the existing labels.
@@ -138,6 +141,7 @@ python main.py cleanup
 - `main.py`: compatibility entrypoint
 - `cli.py`: command-line logic
 - `ui/app.py`: top-level Tkinter controller
+- `ui/csv_preview/`: raw CSV preview package for loading and showing external CSV files in a separate window
 - `ui/record_actions.py`: record lookup and add/save/delete action flows
 - `ui/view_helpers.py`: shared UI focus, recalc, and table-selection helpers
 - `ui/`: the rest of the Tkinter application code
@@ -162,6 +166,7 @@ GUI-related tests skip automatically if Tk is not available in the current envir
 
 - The app stores recent numeric change history, not a full unlimited audit log.
 - Column order, visible columns, and widths are persisted in the local `settings.json` file.
+- The last CSV preview path is also persisted in `settings.json` for the `Last CSV` button.
 - `settings.json` is intentionally ignored by Git so personal layout changes are not committed.
 - Duplicate warnings are advisory: the GUI can still allow a duplicate if the user explicitly confirms it.
 - Older duplicate rows already stored in the database are not merged automatically.

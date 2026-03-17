@@ -10,6 +10,7 @@ from ..data_manager import CSVDataManager, DataManager
 from ..models import Record, calculate_field6
 from ..settings import SettingsStore
 from .backup_dialog import open_manage_backups_dialog
+from .csv_preview import CsvPreviewError, open_csv_preview_dialog
 from .form import InputForm
 from .record_actions import RecordActions
 from .record_logic import filtered_records, record_matches_query
@@ -102,6 +103,9 @@ class GPDataApp(tk.Tk):
         self._delete_selected_button.pack(side="left", padx=4)
         ttk.Button(controls, text="Columns", command=self.on_manage_columns).pack(side="left", padx=4)
         ttk.Button(controls, text="Rename fields", command=self.form.rename_fields).pack(side="left", padx=4)
+        ttk.Button(controls, text="Open CSV", command=self.on_open_csv_preview).pack(side="left", padx=4)
+        self._open_last_csv_button = ttk.Button(controls, text="Last CSV", command=self.on_open_last_csv_preview)
+        self._open_last_csv_button.pack(side="left", padx=4)
 
         ttk.Button(controls, text="Manage backups", command=self.on_manage_backups).pack(side="right", padx=4)
         ttk.Button(controls, text="Export CSV", command=self.on_export).pack(side="right", padx=4)
@@ -130,6 +134,7 @@ class GPDataApp(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self._suspend_table_select = False
+        self._update_open_last_csv_button_state()
         self.table.set_gp_highlight_threshold(gp_highlight_threshold)
         self._apply_initial_window_geometry()
         self._update_form_mode_ui()
@@ -534,6 +539,61 @@ class GPDataApp(tk.Tk):
         if not self._confirm_discard_form_changes():
             return
         self.destroy()
+
+    def _csv_preview_geometry(self) -> tuple[int, int]:
+        self.update_idletasks()
+        return max(self.table.winfo_width(), 900), max(self.table.winfo_height(), 500)
+
+    def _update_open_last_csv_button_state(self) -> None:
+        saved_path = self._settings.load_csv_preview_last_path()
+        state = "normal" if saved_path and Path(saved_path).exists() else "disabled"
+        self._open_last_csv_button.config(state=state)
+
+    def _open_csv_preview_path(self, csv_path: Path, *, remember: bool) -> None:
+        width, height = self._csv_preview_geometry()
+        try:
+            open_csv_preview_dialog(self, csv_path, width=width, height=height)
+        except CsvPreviewError as exc:
+            messagebox.showerror("CSV preview unavailable", str(exc))
+            if remember:
+                try:
+                    self._settings.save_csv_preview_last_path(None)
+                except (OSError, TypeError, ValueError):
+                    LOGGER.warning("Unable to clear remembered CSV preview path", exc_info=True)
+                self._update_open_last_csv_button_state()
+            return
+        if remember:
+            try:
+                self._settings.save_csv_preview_last_path(str(csv_path))
+            except (OSError, TypeError, ValueError) as exc:
+                LOGGER.warning("Unable to persist last CSV preview path", exc_info=True)
+                self._warn_settings_save_failure("the last CSV preview path", exc)
+            self._update_open_last_csv_button_state()
+
+    def on_open_csv_preview(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Open CSV",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        self._open_csv_preview_path(Path(path), remember=True)
+
+    def on_open_last_csv_preview(self) -> None:
+        saved_path = self._settings.load_csv_preview_last_path()
+        if not saved_path:
+            self._update_open_last_csv_button_state()
+            return
+        csv_path = Path(saved_path)
+        if not csv_path.exists():
+            messagebox.showerror("CSV preview unavailable", "The remembered CSV file could not be found.")
+            try:
+                self._settings.save_csv_preview_last_path(None)
+            except (OSError, TypeError, ValueError):
+                LOGGER.warning("Unable to clear missing remembered CSV preview path", exc_info=True)
+            self._update_open_last_csv_button_state()
+            return
+        self._open_csv_preview_path(csv_path, remember=True)
 
     def on_export(self) -> None:
         path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files", "*.csv")])

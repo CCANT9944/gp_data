@@ -128,3 +128,20 @@ def test_settings_store_update_preserves_existing_keys(tmp_path: Path):
     assert updated.labels[0] == "Type"
     assert updated.column_widths["field1"] == 222
     assert updated.gp_highlight_threshold == 70.0
+
+
+def test_save_and_load_csv_preview_last_path(tmp_path: Path):
+    p = tmp_path / "settings.json"
+
+    settings.save_csv_preview_last_path(r"C:\data\sales.csv", p)
+
+    assert settings.load_csv_preview_last_path(p) == r"C:\data\sales.csv"
+
+
+def test_settings_store_preserves_csv_preview_last_path_during_other_updates(tmp_path: Path):
+    store = settings.SettingsStore(tmp_path / "settings.json")
+    store.save_csv_preview_last_path(r"C:\data\sales.csv")
+
+    updated = store.save_visible_columns(["field1", "field2"])
+
+    assert updated.csv_preview_last_path == r"C:\data\sales.csv"

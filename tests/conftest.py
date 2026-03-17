@@ -9,6 +9,7 @@ from gp_data.ui import GPDataApp
 GUI_TEST_FILES = {
     "test_edit_commit.py",
     "test_enter_submit.py",
+    "test_csv_preview.py",
     "test_field1_capitalize.py",
     "test_field1_titlecase_extra.py",
     "test_inline_table_edit.py",

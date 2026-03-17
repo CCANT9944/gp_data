@@ -36,6 +36,7 @@ DEFAULT_SETTINGS = {
     "column_widths": DEFAULT_COLUMN_WIDTHS,
     "visible_columns": DEFAULT_VISIBLE_COLUMNS,
     "gp_highlight_threshold": None,
+    "csv_preview_last_path": None,
 }
 DEFAULT_PATH = Path(__file__).parent / "settings.json"
 
@@ -47,6 +48,7 @@ class AppSettings:
     column_widths: dict[str, int]
     visible_columns: list[str]
     gp_highlight_threshold: float | None
+    csv_preview_last_path: str | None
 
     def to_dict(self) -> dict:
         return {
@@ -55,6 +57,7 @@ class AppSettings:
             "column_widths": dict(self.column_widths),
             "visible_columns": list(self.visible_columns),
             "gp_highlight_threshold": self.gp_highlight_threshold,
+            "csv_preview_last_path": self.csv_preview_last_path,
         }
 
 
@@ -65,6 +68,7 @@ def _default_settings() -> dict:
         "column_widths": dict(DEFAULT_COLUMN_WIDTHS),
         "visible_columns": DEFAULT_VISIBLE_COLUMNS.copy(),
         "gp_highlight_threshold": None,
+        "csv_preview_last_path": None,
     }
 
 
@@ -75,6 +79,7 @@ def _default_app_settings() -> AppSettings:
         column_widths=dict(DEFAULT_COLUMN_WIDTHS),
         visible_columns=DEFAULT_VISIBLE_COLUMNS.copy(),
         gp_highlight_threshold=None,
+        csv_preview_last_path=None,
     )
 
 
@@ -154,6 +159,13 @@ def _normalized_gp_highlight_threshold(raw_threshold) -> float | None:
     return threshold
 
 
+def _normalized_csv_preview_last_path(raw_path) -> str | None:
+    if raw_path is None:
+        return None
+    text = str(raw_path).strip()
+    return text or None
+
+
 def _normalized_app_settings(raw_data: Mapping[str, object] | None) -> AppSettings:
     data = raw_data if isinstance(raw_data, Mapping) else {}
     return AppSettings(
@@ -162,6 +174,7 @@ def _normalized_app_settings(raw_data: Mapping[str, object] | None) -> AppSettin
         column_widths=_normalized_column_widths(data.get("column_widths", DEFAULT_COLUMN_WIDTHS)),
         visible_columns=_normalized_visible_columns(data.get("visible_columns", DEFAULT_VISIBLE_COLUMNS)),
         gp_highlight_threshold=_normalized_gp_highlight_threshold(data.get("gp_highlight_threshold")),
+        csv_preview_last_path=_normalized_csv_preview_last_path(data.get("csv_preview_last_path")),
     )
 
 
@@ -223,6 +236,12 @@ class SettingsStore:
     def save_gp_highlight_threshold(self, threshold: float | None) -> AppSettings:
         return self.update(gp_highlight_threshold=threshold)
 
+    def load_csv_preview_last_path(self) -> str | None:
+        return self.load().csv_preview_last_path
+
+    def save_csv_preview_last_path(self, csv_preview_last_path: str | None) -> AppSettings:
+        return self.update(csv_preview_last_path=csv_preview_last_path)
+
 
 def load_settings(path: Optional[Path] = None) -> dict:
     return SettingsStore(path).load().to_dict()
@@ -270,3 +289,11 @@ def load_gp_highlight_threshold(path: Optional[Path] = None) -> float | None:
 
 def save_gp_highlight_threshold(threshold: float | None, path: Optional[Path] = None) -> None:
     SettingsStore(path).save_gp_highlight_threshold(threshold)
+
+
+def load_csv_preview_last_path(path: Optional[Path] = None) -> str | None:
+    return SettingsStore(path).load_csv_preview_last_path()
+
+
+def save_csv_preview_last_path(csv_preview_last_path: str | None, path: Optional[Path] = None) -> None:
+    SettingsStore(path).save_csv_preview_last_path(csv_preview_last_path)
