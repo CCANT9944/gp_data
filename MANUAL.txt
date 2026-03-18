@@ -221,7 +221,7 @@ What it does:
 - opens the CSV in a separate window
 - shows all columns from the file
 - shows the first preview rows immediately for large files so the window opens faster
-- lets you search the shown rows by text
+- lets you type a text search and press Enter when you are ready to run it
 - lets you choose which columns stay visible
 - lets you click a column header and open a compact popup with a search box and scrollable value list so you can pick one exact value to view, such as one ClassName
 - lets you sort text columns A-to-Z or Z-to-A and sort numeric columns low-to-high or high-to-low from that same popup using the real values for that column type
@@ -237,10 +237,13 @@ Use Recent CSVs if you want to reopen one of several recently viewed files.
 Important notes:
 
 - the raw CSV viewer does not import anything into the main product table yet
+- the raw CSV viewer search does not run while you are typing; it starts after you press Enter, and then the viewer shows Loading while the search is being applied
 - the app remembers the last CSV path and a short recent-files list locally so you do not need to browse to it every time
 - the app also remembers which preview columns you left visible for each CSV path and restores them by column header when possible if the same file is reordered later
 - the app remembers the active preview sort for each CSV path and shows that active sort in the preview summary line
 - reopening the same unchanged CSV is faster while the app is still open
+- reopening the same unchanged CSV after restarting the app is also faster because the viewer can reuse stored preview rows, and some moderate-sized files can also reuse a stored full-row cache for later searches
+- repeated searches on larger CSVs can also speed up after the viewer builds a temporary in-memory search index when the file size is still reasonable for your machine
 - after the app has fully scanned a large unchanged CSV once, reopening it later is also faster because the viewer can reuse a small metadata sidecar for row counts, encoding, and late columns
 - Clear filters resets the preview back to all rows and removes the active search, combine, column filters, and sort, but it does not change which columns you chose to keep visible
 - Columns opens a small chooser so you can hide columns you do not want to look at

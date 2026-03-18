@@ -9,6 +9,7 @@ __pycache__/
 data.csv
 *.db
 settings.json
+csv_preview_debug.log
 
 # Generated backups
 backups/

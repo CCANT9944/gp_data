@@ -10,6 +10,7 @@ import gp_data.ui.csv_preview.dialog as dialog_module
 import gp_data.ui.csv_preview.loader as loader_module
 from gp_data.ui.csv_preview import CsvPreviewError, load_csv_preview, open_csv_preview_dialog
 from gp_data.ui.csv_preview.dialog import (
+    CSV_PREVIEW_LOADING_ROW_TEXT,
     HEADER_FILTER_POPUP_LABEL_MAX_LENGTH,
     HEADER_FILTER_POPUP_LIST_HEIGHT,
     MAX_RENDERED_PREVIEW_ROWS,
@@ -76,6 +77,39 @@ def _wait_for_rows(window: tk.Misc, tree: ttk.Treeview, expected_count: int) -> 
             return
         time.sleep(0.02)
     assert len(tree.get_children()) == expected_count
+
+
+def _wait_for_first_column_values(window: tk.Misc, tree: ttk.Treeview, expected_values: list[str]) -> None:
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        window.update()
+        values = [tree.item(item_id)["values"][0] for item_id in tree.get_children()]
+        if values == expected_values:
+            return
+        time.sleep(0.02)
+    assert [tree.item(item_id)["values"][0] for item_id in tree.get_children()] == expected_values
+
+
+def _wait_for_tree_values(window: tk.Misc, tree: ttk.Treeview, expected_values: list[list[object]]) -> None:
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        window.update()
+        values = [list(tree.item(item_id)["values"]) for item_id in tree.get_children()]
+        if values == expected_values:
+            return
+        time.sleep(0.02)
+    assert [list(tree.item(item_id)["values"]) for item_id in tree.get_children()] == expected_values
+
+
+def _wait_for_listbox_values(window: tk.Misc, listbox: tk.Listbox, expected_values: list[str]) -> None:
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        window.update()
+        values = _listbox_values(listbox)
+        if values == expected_values:
+            return
+        time.sleep(0.02)
+    assert _listbox_values(listbox) == expected_values
 
 
 def _wait_for_columns(window: tk.Misc, tree: ttk.Treeview, expected_count: int) -> None:
@@ -207,6 +241,30 @@ def test_load_large_csv_preview_reuses_sidecar_metadata_on_reopen(tmp_path):
     assert reopened.fully_cached is False
 
 
+def test_load_large_csv_preview_reuses_persisted_preview_rows_without_rereading_csv(tmp_path, monkeypatch):
+    csv_path = tmp_path / "reopen_preview_rows.csv"
+    rows = ["A,B"]
+    rows.extend(f"item{index},value{index}" for index in range(PREVIEW_ROW_SAMPLE_SIZE + 25))
+    csv_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    data = load_csv_preview(csv_path)
+    resolve_csv_preview_metadata(data)
+
+    loader_module._PREVIEW_CACHE.clear()
+
+    def fail_iter_csv_file_rows(*args, **kwargs):
+        raise AssertionError("CSV file should not be reread when persisted preview rows are available")
+
+    monkeypatch.setattr(loader_module, "_iter_csv_file_rows", fail_iter_csv_file_rows)
+
+    reopened = load_csv_preview(csv_path)
+
+    assert reopened.row_count == PREVIEW_ROW_SAMPLE_SIZE + 25
+    assert len(reopened.rows) == PREVIEW_ROW_SAMPLE_SIZE
+    assert reopened.rows[0] == ("item0", "value0")
+    assert reopened.fully_cached is False
+
+
 def test_load_large_csv_preview_ignores_stale_sidecar_metadata_after_file_change(tmp_path):
     csv_path = tmp_path / "late_wide.csv"
     original_rows = ["A,B"]
@@ -257,18 +315,18 @@ def test_open_csv_preview_dialog_combines_sessions_when_numeric_export_values_ap
     tree = _find_descendant(dialog, ttk.Treeview)
     combine_toggle = _find_descendant(dialog, ttk.Checkbutton)
     query_entry = _find_descendant(dialog, ttk.Entry)
+    controller = getattr(dialog, "_csv_preview_controller", None)
 
     assert tree is not None
     assert combine_toggle is not None
     assert query_entry is not None
+    assert controller is not None
 
     query_entry.insert(0, "target")
+    controller.trigger_refresh_now()
     _wait_for_rows(dialog, tree, 2)
     combine_toggle.invoke()
-    _wait_for_rows(dialog, tree, 1)
-
-    first_row = tree.get_children()[0]
-    assert tree.item(first_row)["values"] == ["Target", "Lunch + Dinner", 5, 12]
+    _wait_for_tree_values(dialog, tree, [["Target", "Lunch + Dinner", 5, 12]])
 
     dialog.destroy()
 
@@ -283,18 +341,157 @@ def test_open_csv_preview_dialog_filters_rows_by_search_text(tk_root, tmp_path):
     dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
     tree = _find_descendant(dialog, ttk.Treeview)
     query_entry = _find_descendant(dialog, ttk.Entry)
+    controller = getattr(dialog, "_csv_preview_controller", None)
 
     assert tree is not None
     assert query_entry is not None
+    assert controller is not None
 
     _wait_for_rows(dialog, tree, 3)
     query_entry.insert(0, "mixer")
-    _wait_for_rows(dialog, tree, 1)
+    controller.trigger_refresh_now()
+    _wait_for_first_column_values(dialog, tree, ["Lemon Soda"])
 
     first_row = tree.get_children()[0]
     assert tree.item(first_row)["values"] == ["Lemon Soda", "Mixer", "US"]
 
     dialog.destroy()
+
+
+def test_open_csv_preview_dialog_reuses_source_search_index_for_follow_up_queries(tk_root, tmp_path, monkeypatch):
+    csv_path = tmp_path / "query_index.csv"
+    csv_path.write_text(
+        "Name,Category,Origin\nBerry Gin,Spirit,UK\nLemon Soda,Mixer,US\nDark Rum,Spirit,Jamaica\n",
+        encoding="utf-8",
+    )
+
+    dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    tree = _find_descendant(dialog, ttk.Treeview)
+    controller = getattr(dialog, "_csv_preview_controller", None)
+
+    assert tree is not None
+    assert controller is not None
+
+    _wait_for_rows(dialog, tree, 3)
+
+    original_iter_rows_before_header_filter = dialog_module._iter_rows_before_header_filter
+    row_scan_calls = 0
+
+    def counting_iter_rows_before_header_filter(*args, **kwargs):
+        nonlocal row_scan_calls
+        row_scan_calls += 1
+        yield from original_iter_rows_before_header_filter(*args, **kwargs)
+
+    monkeypatch.setattr(dialog_module, "_iter_rows_before_header_filter", counting_iter_rows_before_header_filter)
+
+    controller._query_var.set("mixer")
+    controller.refresh()
+    _wait_for_rows(dialog, tree, 1)
+
+    controller._query_var.set("spirit")
+    controller.refresh()
+    _wait_for_rows(dialog, tree, 2)
+
+    assert row_scan_calls == 0
+
+    dialog.destroy()
+
+
+def test_rows_before_header_filter_snapshot_reuses_previous_query_subset_for_incremental_typing(tmp_path, monkeypatch):
+    csv_path = tmp_path / "incremental_query.csv"
+    csv_path.write_text(
+        "Name,Category\nBerry Gin,Spirit\nLemon Soda,Mixer\nDark Rum,Spirit\n",
+        encoding="utf-8",
+    )
+
+    data = load_csv_preview(csv_path)
+    pipeline = dialog_module._PreviewDataPipeline(data)
+    first_state = dialog_module._PreviewFilterState(
+        query="spi",
+        combine_sessions=False,
+        header_filter_column_index=None,
+        header_filter_value=None,
+    )
+    second_state = dialog_module._PreviewFilterState(
+        query="spir",
+        combine_sessions=False,
+        header_filter_column_index=None,
+        header_filter_value=None,
+    )
+
+    assert [row[0] for row in pipeline.rows_before_header_filter_snapshot(first_state)] == ["Berry Gin", "Dark Rum"]
+
+    original_source_rows_snapshot = pipeline._source_rows_snapshot
+    source_snapshot_calls = 0
+
+    def counting_source_rows_snapshot(*args, **kwargs):
+        nonlocal source_snapshot_calls
+        source_snapshot_calls += 1
+        return original_source_rows_snapshot(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "_source_rows_snapshot", counting_source_rows_snapshot)
+
+    assert [row[0] for row in pipeline.rows_before_header_filter_snapshot(second_state)] == ["Berry Gin", "Dark Rum"]
+    assert source_snapshot_calls == 0
+
+
+def test_preview_pipeline_indexes_large_file_when_estimated_memory_fits_budget(tmp_path):
+    csv_path = tmp_path / "budgeted_index.csv"
+    rows = [f"Item {index},Beer" for index in range(1, PREVIEW_ROW_SAMPLE_SIZE + 25002)]
+    csv_path.write_text("Name,Category\n" + "\n".join(rows) + "\n", encoding="utf-8")
+
+    data = resolve_csv_preview_metadata(load_csv_preview(csv_path))
+    pipeline = dialog_module._PreviewDataPipeline(data)
+
+    assert data.row_count is not None
+    assert data.row_count > PREVIEW_ROW_SAMPLE_SIZE
+    assert data.fully_cached is False
+    assert pipeline._estimated_uncombined_source_index_bytes() is not None
+    assert pipeline._can_index_uncombined_source_rows() is True
+    assert pipeline._source_rows_snapshot(False) is not None
+
+
+def test_preview_pipeline_skips_large_file_index_when_estimated_memory_exceeds_budget(tmp_path, monkeypatch):
+    csv_path = tmp_path / "budgeted_skip.csv"
+    rows = [f"Item {index},Beer" for index in range(1, PREVIEW_ROW_SAMPLE_SIZE + 25002)]
+    csv_path.write_text("Name,Category\n" + "\n".join(rows) + "\n", encoding="utf-8")
+
+    data = resolve_csv_preview_metadata(load_csv_preview(csv_path))
+    pipeline = dialog_module._PreviewDataPipeline(data)
+    estimated_bytes = pipeline._estimated_uncombined_source_index_bytes()
+
+    assert estimated_bytes is not None
+
+    monkeypatch.setattr(dialog_module, "MAX_INDEXED_SOURCE_MEMORY_BYTES", estimated_bytes - 1)
+
+    assert pipeline._can_index_uncombined_source_rows() is False
+    assert pipeline._source_rows_snapshot(False) is None
+
+
+def test_preview_pipeline_uses_persisted_full_row_cache_across_restart(tmp_path, monkeypatch):
+    csv_path = tmp_path / "persisted_row_cache.csv"
+    total_rows = PREVIEW_ROW_SAMPLE_SIZE + 120
+    rows = [f"Item {index},Beer" for index in range(1, total_rows + 1)]
+    csv_path.write_text("Name,Category\n" + "\n".join(rows) + "\n", encoding="utf-8")
+
+    data = load_csv_preview(csv_path)
+    resolve_csv_preview_metadata(data)
+
+    loader_module._PREVIEW_CACHE.clear()
+    reopened = load_csv_preview(csv_path)
+    pipeline = dialog_module._PreviewDataPipeline(reopened)
+
+    def fail_iter_csv_preview_rows(*args, **kwargs):
+        raise AssertionError("Persisted full row cache should avoid rescanning the CSV file")
+
+    monkeypatch.setattr(dialog_module, "iter_csv_preview_rows", fail_iter_csv_preview_rows)
+
+    source_rows = pipeline._source_rows_snapshot(False)
+
+    assert source_rows is not None
+    assert len(source_rows) == total_rows
+    assert source_rows[0] == ("Item 1", "Beer")
+    assert source_rows[-1] == (f"Item {total_rows}", "Beer")
 
 
 def test_open_csv_preview_dialog_can_combine_sessions_for_same_product(tk_root, tmp_path):
@@ -405,6 +602,281 @@ def test_open_csv_preview_dialog_runs_search_refresh_off_ui_thread(tk_root, tmp_
     dialog.destroy()
 
 
+def test_open_csv_preview_dialog_shows_loading_row_while_search_refresh_is_pending(tk_root, tmp_path, monkeypatch):
+    csv_path = tmp_path / "search_loading_row.csv"
+    csv_path.write_text(
+        "Name,Category\nPeroni,Beer\nNegroni,Cocktails\n",
+        encoding="utf-8",
+    )
+
+    dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    tree = _find_descendant(dialog, ttk.Treeview)
+    controller = getattr(dialog, "_csv_preview_controller", None)
+
+    assert tree is not None
+    assert controller is not None
+
+    _wait_for_rows(dialog, tree, 2)
+
+    original_iter_rows_before_header_filter = dialog_module._iter_rows_before_header_filter
+
+    def slow_iter_rows_before_header_filter(*args, **kwargs):
+        time.sleep(0.35)
+        yield from original_iter_rows_before_header_filter(*args, **kwargs)
+
+    monkeypatch.setattr(dialog_module, "_iter_rows_before_header_filter", slow_iter_rows_before_header_filter)
+
+    controller._query_var.set("beer")
+    dialog.update()
+
+    visible_values_before_refresh = [tree.item(item_id)["values"][0] for item_id in tree.get_children()]
+    assert visible_values_before_refresh == ["Peroni", "Negroni"]
+    assert controller._summary_var.get().startswith("search_loading_row.csv | 2 rows")
+    assert controller._scheduled_refresh_id is None
+
+    controller.trigger_refresh_now()
+    dialog.update()
+
+    placeholder_values = [tree.item(item_id)["values"][0] for item_id in tree.get_children()]
+    assert placeholder_values == [CSV_PREVIEW_LOADING_ROW_TEXT]
+    assert controller._summary_var.get().startswith("search_loading_row.csv | Loading matching rows")
+
+    _wait_for_first_column_values(dialog, tree, ["Peroni"])
+    assert tree.item(tree.get_children()[0])["values"] == ["Peroni", "Beer"]
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_dialog_keeps_existing_rows_visible_until_search_is_submitted(tk_root, tmp_path, monkeypatch):
+    csv_path = tmp_path / "search_deferred_scan.csv"
+    csv_path.write_text(
+        "Name,Category\nPeroni,Beer\nNegroni,Cocktails\n",
+        encoding="utf-8",
+    )
+
+    dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    tree = _find_descendant(dialog, ttk.Treeview)
+    controller = getattr(dialog, "_csv_preview_controller", None)
+
+    assert tree is not None
+    assert controller is not None
+
+    _wait_for_rows(dialog, tree, 2)
+
+    controller._query_var.set("beer")
+    dialog.update()
+
+    assert controller._scheduled_refresh_id is None
+    assert [tree.item(item_id)["values"][0] for item_id in tree.get_children()] == ["Peroni", "Negroni"]
+    assert controller._summary_var.get().startswith("search_deferred_scan.csv | 2 rows")
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_dialog_runs_search_immediately_on_enter(tk_root, tmp_path, monkeypatch):
+    csv_path = tmp_path / "search_enter_trigger.csv"
+    csv_path.write_text(
+        "Name,Category\nPeroni,Beer\nNegroni,Cocktails\n",
+        encoding="utf-8",
+    )
+
+    dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    tree = _find_descendant(dialog, ttk.Treeview)
+    controller = getattr(dialog, "_csv_preview_controller", None)
+
+    assert tree is not None
+    assert controller is not None
+
+    _wait_for_rows(dialog, tree, 2)
+
+    original_iter_rows_before_header_filter = dialog_module._iter_rows_before_header_filter
+
+    def slow_iter_rows_before_header_filter(*args, **kwargs):
+        time.sleep(0.35)
+        yield from original_iter_rows_before_header_filter(*args, **kwargs)
+
+    monkeypatch.setattr(dialog_module, "_iter_rows_before_header_filter", slow_iter_rows_before_header_filter)
+
+    controller._query_var.set("beer")
+    assert controller._scheduled_refresh_id is None
+
+    started = time.monotonic()
+    result = controller.trigger_refresh_now()
+    elapsed = time.monotonic() - started
+
+    assert result == "break"
+    assert elapsed < 0.2
+    assert controller._scheduled_refresh_id is None
+    assert controller._summary_var.get().startswith("search_enter_trigger.csv | Loading matching rows")
+
+    _wait_for_tree_values(dialog, tree, [["Peroni", "Beer"]])
+
+    dialog.destroy()
+
+
+def test_sorted_refresh_emits_preview_rows_before_exact_sorted_result(tmp_path):
+    csv_path = tmp_path / "progressive_sort.csv"
+    csv_path.write_text(
+        "Name,Category\nPeroni,Beer\nAperol,Spritz\nNegroni,Cocktails\nCampari,Bitters\n",
+        encoding="utf-8",
+    )
+
+    data = load_csv_preview(csv_path)
+    pipeline = dialog_module._PreviewDataPipeline(data)
+    filter_state = dialog_module._PreviewFilterState(
+        query="",
+        combine_sessions=False,
+        header_filter_column_index=None,
+        header_filter_value=None,
+        sort_column_index=0,
+        sort_descending=False,
+    )
+
+    messages = list(pipeline.iter_filtered_refresh_messages(7, filter_state, rendered_row_limit=2))
+    preview_updates = [message for message in messages if isinstance(message, dialog_module._FilteredPreviewUpdate)]
+
+    assert len(preview_updates) == 2
+    assert preview_updates[0].total_rows is None
+    assert [row[0] for row in preview_updates[0].displayed_rows] == ["Aperol", "Peroni"]
+    assert preview_updates[1].total_rows == 4
+    assert [row[0] for row in preview_updates[1].displayed_rows] == ["Aperol", "Campari"]
+
+
+def test_filtered_refresh_emits_early_partial_preview_before_final_count(tmp_path):
+    csv_path = tmp_path / "progressive_filter.csv"
+    csv_path.write_text(
+        "Name,Category\n" + "".join(f"Item {index},Beer\n" for index in range(30)),
+        encoding="utf-8",
+    )
+
+    data = load_csv_preview(csv_path)
+    pipeline = dialog_module._PreviewDataPipeline(data)
+    filter_state = dialog_module._PreviewFilterState(
+        query="beer",
+        combine_sessions=False,
+        header_filter_column_index=None,
+        header_filter_value=None,
+    )
+
+    messages = list(pipeline.iter_filtered_refresh_messages(9, filter_state, rendered_row_limit=50))
+    preview_updates = [message for message in messages if isinstance(message, dialog_module._FilteredPreviewUpdate)]
+    count_updates = [message for message in messages if isinstance(message, dialog_module._FilteredCountUpdate)]
+
+    assert [len(message.displayed_rows) for message in preview_updates[:-1]] == [1, 10, 25]
+    assert all(message.total_rows is None for message in preview_updates[:-1])
+    assert preview_updates[-1].total_rows == 30
+    assert len(preview_updates[-1].displayed_rows) == 30
+    assert count_updates == []
+
+
+def test_open_csv_preview_dialog_reuses_filtered_rows_for_follow_up_sorts(tk_root, tmp_path, monkeypatch):
+    csv_path = tmp_path / "sort_cache.csv"
+    csv_path.write_text(
+        "Name,Category\nPeroni,Beer\nAperol,Spritz\nNegroni,Cocktails\nCampari,Bitters\n",
+        encoding="utf-8",
+    )
+
+    dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    tree = _find_descendant(dialog, ttk.Treeview)
+    controller = getattr(dialog, "_csv_preview_controller", None)
+
+    assert tree is not None
+    assert controller is not None
+
+    _wait_for_rows(dialog, tree, 4)
+
+    original_iter_rows_before_header_filter = dialog_module._iter_rows_before_header_filter
+    filter_calls = 0
+
+    def counting_iter_rows_before_header_filter(*args, **kwargs):
+        nonlocal filter_calls
+        filter_calls += 1
+        yield from original_iter_rows_before_header_filter(*args, **kwargs)
+
+    monkeypatch.setattr(dialog_module, "_iter_rows_before_header_filter", counting_iter_rows_before_header_filter)
+
+    controller.set_sort(0, descending=False)
+    _wait_for_first_column_values(dialog, tree, ["Aperol", "Campari", "Negroni", "Peroni"])
+    assert filter_calls == 0
+
+    controller.set_sort(0, descending=True)
+    _wait_for_first_column_values(dialog, tree, ["Peroni", "Negroni", "Campari", "Aperol"])
+    assert filter_calls == 0
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_dialog_reuses_tree_items_for_same_size_sort_refresh(tk_root, tmp_path, monkeypatch):
+    csv_path = tmp_path / "tree_reuse_sort.csv"
+    csv_path.write_text(
+        "Name,Category\nPeroni,Beer\nAperol,Spritz\nNegroni,Cocktails\nCampari,Bitters\n",
+        encoding="utf-8",
+    )
+
+    dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    tree = _find_descendant(dialog, ttk.Treeview)
+    controller = getattr(dialog, "_csv_preview_controller", None)
+
+    assert tree is not None
+    assert controller is not None
+
+    _wait_for_rows(dialog, tree, 4)
+
+    original_insert = tree.insert
+    insert_calls = 0
+
+    def counting_insert(*args, **kwargs):
+        nonlocal insert_calls
+        insert_calls += 1
+        return original_insert(*args, **kwargs)
+
+    monkeypatch.setattr(tree, "insert", counting_insert)
+
+    controller.set_sort(0, descending=True)
+    _wait_for_first_column_values(dialog, tree, ["Peroni", "Negroni", "Campari", "Aperol"])
+
+    assert insert_calls == 0
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_dialog_prewarms_visible_header_filters_in_background(tk_root, tmp_path, monkeypatch):
+    csv_path = tmp_path / "prewarm_popup.csv"
+    csv_path.write_text(
+        "Name,Category,Origin\nPeroni,Beer,Italy\nNegroni,Cocktails,Italy\nAperol,Spritz,Italy\n",
+        encoding="utf-8",
+    )
+
+    prewarm_calls: list[tuple[str, tuple[int, ...]]] = []
+    original_prewarm_header_filter_columns = dialog_module._PreviewDataPipeline.prewarm_header_filter_columns
+
+    def counting_prewarm_header_filter_columns(self, filter_state, column_indices, **kwargs):
+        prewarm_calls.append((filter_state.query, tuple(column_indices)))
+        return original_prewarm_header_filter_columns(self, filter_state, column_indices, **kwargs)
+
+    monkeypatch.setattr(
+        dialog_module._PreviewDataPipeline,
+        "prewarm_header_filter_columns",
+        counting_prewarm_header_filter_columns,
+    )
+
+    dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    tree = _find_descendant(dialog, ttk.Treeview)
+
+    assert tree is not None
+
+    _wait_for_rows(dialog, tree, 3)
+
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and not prewarm_calls:
+        dialog.update()
+        time.sleep(0.02)
+
+    assert prewarm_calls == [("", (0, 1, 2))]
+
+    dialog.destroy()
+
+
 def test_open_csv_preview_dialog_combines_sessions_with_numeric_textbox_columns(tk_root, tmp_path):
     csv_path = tmp_path / "sessions_with_textboxes.csv"
     csv_path.write_text(
@@ -423,10 +895,7 @@ def test_open_csv_preview_dialog_combines_sessions_with_numeric_textbox_columns(
 
     _wait_for_rows(dialog, tree, 2)
     combine_toggle.invoke()
-    _wait_for_rows(dialog, tree, 1)
-
-    first_row = tree.get_children()[0]
-    assert tree.item(first_row)["values"] == ["Pornstar Martini", "Lunch + Dinner", 1249, 12, "56.25"]
+    _wait_for_tree_values(dialog, tree, [["Pornstar Martini", "Lunch + Dinner", 1249, 12, "56.25"]])
 
     dialog.destroy()
 
@@ -462,8 +931,7 @@ def test_open_csv_preview_dialog_runs_combine_refresh_off_ui_thread(tk_root, tmp
     assert elapsed < 0.2
     assert controller._summary_var.get().startswith("combine_async.csv | Loading matching rows")
 
-    _wait_for_rows(dialog, tree, 1)
-    assert tree.item(tree.get_children()[0])["values"] == ["Target", "Lunch + Dinner", 5]
+    _wait_for_tree_values(dialog, tree, [["Target", "Lunch + Dinner", 5]])
 
     dialog.destroy()
 
@@ -741,20 +1209,109 @@ def test_open_csv_preview_dialog_reuses_cached_header_filter_values(tk_root, tmp
 
     assert controller is not None
 
-    original_sorted_distinct_values = dialog_module._sorted_distinct_values
-    distinct_calls = 0
+    original_resolve_header_filter_options = controller._pipeline.resolve_header_filter_options
+    resolve_calls = 0
 
-    def counting_sorted_distinct_values(rows, column_index):
-        nonlocal distinct_calls
-        distinct_calls += 1
-        return original_sorted_distinct_values(rows, column_index)
+    def counting_resolve_header_filter_options(*args, **kwargs):
+        nonlocal resolve_calls
+        resolve_calls += 1
+        return original_resolve_header_filter_options(*args, **kwargs)
 
-    monkeypatch.setattr(dialog_module, "_sorted_distinct_values", counting_sorted_distinct_values)
+    monkeypatch.setattr(controller._pipeline, "resolve_header_filter_options", counting_resolve_header_filter_options)
 
     controller.show_header_filter_popup(1, 0, 0)
-    controller.show_header_filter_popup(1, 0, 0)
+    dialog.update()
+    first_popup = controller._header_filter_popup
+    first_listbox = _find_descendant(first_popup, tk.Listbox) if first_popup is not None else None
 
-    assert distinct_calls == 1
+    assert first_popup is not None
+    assert first_listbox is not None
+
+    _wait_for_listbox_values(dialog, first_listbox, ["Beer", "Cocktails"])
+
+    controller.show_header_filter_popup(1, 0, 0)
+    dialog.update()
+
+    second_popup = controller._header_filter_popup
+    second_listbox = _find_descendant(second_popup, tk.Listbox) if second_popup is not None else None
+
+    assert second_popup is not None
+    assert second_listbox is not None
+    assert _listbox_values(second_listbox) == ["Beer", "Cocktails"]
+
+    assert resolve_calls in {0, 1}
+
+    dialog.destroy()
+
+
+def test_resolve_header_filter_options_streams_distinct_values_without_row_snapshot_for_large_unfiltered_file(tmp_path, monkeypatch):
+    csv_path = tmp_path / "large_popup.csv"
+    rows = [f"Item {index},Category {index % 5}\n" for index in range(PREVIEW_ROW_SAMPLE_SIZE + 20)]
+    csv_path.write_text("Name,Category\n" + "".join(rows), encoding="utf-8")
+
+    data = load_csv_preview(csv_path)
+    pipeline = dialog_module._PreviewDataPipeline(data)
+    filter_state = dialog_module._PreviewFilterState(
+        query="",
+        combine_sessions=False,
+        header_filter_column_index=None,
+        header_filter_value=None,
+    )
+
+    snapshot_calls = 0
+    original_rows_before_header_filter_snapshot = pipeline.rows_before_header_filter_snapshot
+
+    def counting_rows_before_header_filter_snapshot(*args, **kwargs):
+        nonlocal snapshot_calls
+        snapshot_calls += 1
+        return original_rows_before_header_filter_snapshot(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "rows_before_header_filter_snapshot", counting_rows_before_header_filter_snapshot)
+
+    options = pipeline.resolve_header_filter_options(filter_state, 1)
+
+    assert options == ["Category 0", "Category 1", "Category 2", "Category 3", "Category 4"]
+    assert snapshot_calls == 0
+
+
+def test_open_csv_preview_dialog_loads_header_filter_values_off_ui_thread(tk_root, tmp_path, monkeypatch):
+    csv_path = tmp_path / "async_popup.csv"
+    csv_path.write_text(
+        "Name,Category\nPeroni,Beer\nNegroni,Cocktails\nAperol,Spritz\n",
+        encoding="utf-8",
+    )
+
+    dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    controller = getattr(dialog, "_csv_preview_controller", None)
+
+    assert controller is not None
+
+    popup_controller = controller._popup_export_controller
+    original_resolve_header_filter_options = controller._pipeline.resolve_header_filter_options
+
+    monkeypatch.setattr(controller._pipeline, "cached_header_filter_options", lambda *args, **kwargs: None)
+
+    def slow_resolve_header_filter_options(*args, **kwargs):
+        time.sleep(0.35)
+        return original_resolve_header_filter_options(*args, **kwargs)
+
+    monkeypatch.setattr(controller._pipeline, "resolve_header_filter_options", slow_resolve_header_filter_options)
+
+    started = time.monotonic()
+    controller.show_header_filter_popup(1, 0, 0)
+    elapsed = time.monotonic() - started
+
+    popup = controller._header_filter_popup
+    listbox = _find_descendant(popup, tk.Listbox) if popup is not None else None
+
+    assert popup is not None
+    assert listbox is not None
+    assert elapsed < 0.2
+    assert popup_controller._header_filter_popup_empty_var is not None
+    assert popup_controller._header_filter_popup_empty_var.get() == "Loading values..."
+    assert _listbox_values(listbox) == []
+
+    _wait_for_listbox_values(dialog, listbox, ["Beer", "Cocktails", "Spritz"])
 
     dialog.destroy()
 
@@ -812,10 +1369,7 @@ def test_open_csv_preview_dialog_uses_searchable_scrollable_header_filter_popup(
     dialog.update()
     listbox.selection_set(0)
     controller._apply_selected_header_filter_option()
-    _wait_for_rows(dialog, tree, 1)
-
-    values = [tree.item(item_id)["values"] for item_id in tree.get_children()]
-    assert values == [[long_value, "Peroni"]]
+    _wait_for_tree_values(dialog, tree, [[long_value, "Peroni"]])
 
     dialog.destroy()
 
@@ -919,7 +1473,7 @@ def test_open_csv_preview_dialog_can_sort_numeric_column_ascending_and_descendin
     assert sort_descending_button is not None
 
     sort_ascending_button.invoke()
-    _wait_for_rows(dialog, tree, 3)
+    _wait_for_first_column_values(dialog, tree, ["Peroni", "Spritz", "Negroni"])
 
     ascending_names = [tree.item(item_id)["values"][0] for item_id in tree.get_children()]
     assert ascending_names == ["Peroni", "Spritz", "Negroni"]
@@ -935,7 +1489,7 @@ def test_open_csv_preview_dialog_can_sort_numeric_column_ascending_and_descendin
     assert sort_descending_button is not None
 
     sort_descending_button.invoke()
-    _wait_for_rows(dialog, tree, 3)
+    _wait_for_first_column_values(dialog, tree, ["Negroni", "Spritz", "Peroni"])
 
     descending_names = [tree.item(item_id)["values"][0] for item_id in tree.get_children()]
     assert descending_names == ["Negroni", "Spritz", "Peroni"]
@@ -972,7 +1526,7 @@ def test_open_csv_preview_dialog_can_sort_text_column_ascending_and_descending(t
     assert sort_descending_button is not None
 
     sort_descending_button.invoke()
-    _wait_for_rows(dialog, tree, 3)
+    _wait_for_first_column_values(dialog, tree, ["Peroni", "Negroni", "Aperol"])
 
     descending_names = [tree.item(item_id)["values"][0] for item_id in tree.get_children()]
     assert descending_names == ["Peroni", "Negroni", "Aperol"]
@@ -988,7 +1542,7 @@ def test_open_csv_preview_dialog_can_sort_text_column_ascending_and_descending(t
     assert sort_ascending_button is not None
 
     sort_ascending_button.invoke()
-    _wait_for_rows(dialog, tree, 3)
+    _wait_for_first_column_values(dialog, tree, ["Aperol", "Negroni", "Peroni"])
 
     ascending_names = [tree.item(item_id)["values"][0] for item_id in tree.get_children()]
     assert ascending_names == ["Aperol", "Negroni", "Peroni"]
@@ -1057,6 +1611,7 @@ def test_open_csv_preview_dialog_can_save_current_view_as_new_csv_file(tk_root, 
     assert save_button is not None
 
     query_entry.insert(0, "cuban")
+    controller.trigger_refresh_now()
     _wait_for_rows(dialog, tree, 2)
     combine_toggle.invoke()
     _wait_for_rows(dialog, tree, 1)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import logging
+import os
 import sys
 from pathlib import Path
 from typing import Iterable, Optional
@@ -11,9 +13,74 @@ from .data_manager import DataManager
 from .ui import GPDataApp
 
 
+CSV_PREVIEW_DEBUG_ENV = "GP_DATA_CSV_PREVIEW_DEBUG"
+CSV_PREVIEW_DEBUG_LOG_ENV = "GP_DATA_CSV_PREVIEW_DEBUG_LOG"
+DEFAULT_CSV_PREVIEW_DEBUG_LOG = Path(__file__).with_name("csv_preview_debug.log")
+CSV_PREVIEW_LOGGER_NAME = "gp_data.ui.csv_preview"
+CSV_PREVIEW_LOG_HANDLER_NAME = "gp_data.csv_preview_debug_file"
+
+
+def _env_flag_enabled(raw_value: str | None) -> bool:
+    if raw_value is None:
+        return False
+    return raw_value.strip().casefold() not in {"", "0", "false", "no", "off"}
+
+
+def _configure_csv_preview_debug_logging(log_path: Path) -> Path:
+    resolved_path = Path(log_path)
+    resolved_path.parent.mkdir(parents=True, exist_ok=True)
+
+    logger = logging.getLogger(CSV_PREVIEW_LOGGER_NAME)
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+
+    stale_handlers = [
+        handler
+        for handler in logger.handlers
+        if getattr(handler, "name", "") == CSV_PREVIEW_LOG_HANDLER_NAME
+    ]
+    for handler in stale_handlers:
+        logger.removeHandler(handler)
+        try:
+            handler.close()
+        except Exception:
+            pass
+
+    file_handler = logging.FileHandler(resolved_path, encoding="utf-8")
+    file_handler.name = CSV_PREVIEW_LOG_HANDLER_NAME
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    logger.addHandler(file_handler)
+    return resolved_path
+
+
+def _resolve_csv_preview_debug_log_path(args) -> Path | None:
+    requested_path = args.csv_preview_debug_log
+    if requested_path is not None:
+        return Path(requested_path)
+
+    env_path = os.getenv(CSV_PREVIEW_DEBUG_LOG_ENV)
+    if env_path:
+        return Path(env_path)
+
+    if args.csv_preview_debug or _env_flag_enabled(os.getenv(CSV_PREVIEW_DEBUG_ENV)):
+        return DEFAULT_CSV_PREVIEW_DEBUG_LOG
+    return None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="gp_data")
     parser.add_argument("--storage", type=Path, help="path to storage file (SQLite .db or legacy .csv)")
+    parser.add_argument(
+        "--csv-preview-debug",
+        action="store_true",
+        help="write CSV preview timing logs to a local debug log file",
+    )
+    parser.add_argument(
+        "--csv-preview-debug-log",
+        type=Path,
+        help="path for the CSV preview timing log file (implies CSV preview debug logging)",
+    )
     subs = parser.add_subparsers(dest="command", help="sub-commands")
     subs.required = False
 
@@ -101,9 +168,14 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     command = args.command or "gui"
+    csv_preview_debug_log_path = _resolve_csv_preview_debug_log_path(args)
+    if csv_preview_debug_log_path is not None:
+        csv_preview_debug_log_path = _configure_csv_preview_debug_logging(csv_preview_debug_log_path)
     data_manager = _load_data_manager(command, args.storage)
 
     if command == "gui":
+        if csv_preview_debug_log_path is not None:
+            print(f"csv preview timing logs -> {csv_preview_debug_log_path}")
         run_gui(args.storage)
         return 0
 

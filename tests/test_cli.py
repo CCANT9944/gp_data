@@ -1,8 +1,10 @@
 from pathlib import Path
+import logging
 
 import pytest
 
 from gp_data.main import run_cli
+import gp_data.cli as cli_module
 from gp_data.data_manager import DataManager
 from gp_data.models import Record
 
@@ -112,3 +114,32 @@ def test_cli_migration_failure_returns_error(tmp_path: Path, capsys):
 
     assert result == 1
     assert "migration failed:" in captured.err
+
+
+def test_configure_csv_preview_debug_logging_writes_to_requested_file(tmp_path: Path):
+    log_path = tmp_path / "logs" / "csv_preview_debug.log"
+
+    configured_path = cli_module._configure_csv_preview_debug_logging(log_path)
+    logger = logging.getLogger(cli_module.CSV_PREVIEW_LOGGER_NAME)
+    logger.debug("timing test line")
+
+    assert configured_path == log_path
+    assert log_path.exists()
+    assert "timing test line" in log_path.read_text(encoding="utf-8")
+
+
+def test_run_cli_uses_env_debug_log_for_gui(tmp_path: Path, capsys, monkeypatch):
+    log_path = tmp_path / "csv_preview_debug.log"
+    seen_storage: dict[str, Path | None] = {}
+
+    monkeypatch.setenv(cli_module.CSV_PREVIEW_DEBUG_ENV, "1")
+    monkeypatch.setenv(cli_module.CSV_PREVIEW_DEBUG_LOG_ENV, str(log_path))
+    monkeypatch.setattr(cli_module, "run_gui", lambda storage_path=None: seen_storage.setdefault("path", storage_path))
+
+    result = run_cli(["gui"])
+    output = capsys.readouterr().out
+
+    assert result == 0
+    assert seen_storage["path"] is None
+    assert str(log_path) in output
+    assert log_path.exists()
