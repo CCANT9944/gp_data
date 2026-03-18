@@ -136,6 +136,36 @@ def test_save_and_load_csv_preview_last_path(tmp_path: Path):
     settings.save_csv_preview_last_path(r"C:\data\sales.csv", p)
 
     assert settings.load_csv_preview_last_path(p) == r"C:\data\sales.csv"
+    assert settings.load_csv_preview_recent_paths(p) == [r"C:\data\sales.csv"]
+
+
+def test_save_and_load_csv_preview_recent_paths(tmp_path: Path):
+    p = tmp_path / "settings.json"
+
+    settings.save_csv_preview_recent_paths([r"C:\data\sales.csv", r"C:\data\stock.csv"], p)
+
+    assert settings.load_csv_preview_recent_paths(p) == [r"C:\data\sales.csv", r"C:\data\stock.csv"]
+    assert settings.load_csv_preview_last_path(p) == r"C:\data\sales.csv"
+
+
+def test_save_and_load_csv_preview_visible_columns_for_path(tmp_path: Path):
+    p = tmp_path / "settings.json"
+    settings.save_csv_preview_recent_paths([r"C:\data\sales.csv", r"C:\data\stock.csv"], p)
+
+    settings.save_csv_preview_visible_columns(r"C:\data\stock.csv", [0, 2, 4], p)
+
+    assert settings.load_csv_preview_visible_columns(r"C:\data\stock.csv", p) == [0, 2, 4]
+    assert settings.load_csv_preview_visible_columns(r"C:\data\sales.csv", p) is None
+
+
+def test_save_and_load_csv_preview_visible_column_keys_for_path(tmp_path: Path):
+    p = tmp_path / "settings.json"
+    settings.save_csv_preview_recent_paths([r"C:\data\sales.csv", r"C:\data\stock.csv"], p)
+
+    settings.save_csv_preview_visible_column_keys(r"C:\data\stock.csv", ["name#1", "quantity#1"], p)
+
+    assert settings.load_csv_preview_visible_column_keys(r"C:\data\stock.csv", p) == ["name#1", "quantity#1"]
+    assert settings.load_csv_preview_visible_column_keys(r"C:\data\sales.csv", p) is None
 
 
 def test_settings_store_preserves_csv_preview_last_path_during_other_updates(tmp_path: Path):
@@ -145,3 +175,25 @@ def test_settings_store_preserves_csv_preview_last_path_during_other_updates(tmp
     updated = store.save_visible_columns(["field1", "field2"])
 
     assert updated.csv_preview_last_path == r"C:\data\sales.csv"
+
+
+def test_settings_store_remember_csv_preview_path_moves_path_to_front(tmp_path: Path):
+    store = settings.SettingsStore(tmp_path / "settings.json")
+    store.save_csv_preview_recent_paths([r"C:\data\sales.csv", r"C:\data\stock.csv"])
+
+    updated = store.remember_csv_preview_path(r"C:\data\stock.csv")
+
+    assert updated.csv_preview_last_path == r"C:\data\stock.csv"
+    assert updated.csv_preview_recent_paths == [r"C:\data\stock.csv", r"C:\data\sales.csv"]
+
+
+def test_load_settings_backfills_recent_csv_paths_from_legacy_last_path(tmp_path: Path):
+    p = tmp_path / "settings.json"
+    p.write_text('{"csv_preview_last_path": "C:\\\\data\\\\sales.csv"}', encoding="utf-8")
+
+    loaded = settings.load_settings(p)
+
+    assert loaded["csv_preview_last_path"] == r"C:\data\sales.csv"
+    assert loaded["csv_preview_recent_paths"] == [r"C:\data\sales.csv"]
+    assert loaded["csv_preview_visible_columns_by_path"] == {}
+    assert loaded["csv_preview_visible_column_keys_by_path"] == {}

@@ -44,6 +44,7 @@ If the form has unsaved edits, that banner changes to show UNSAVED CHANGES.
 There is also an Open CSV button for viewing a raw CSV in a separate window.
 That CSV viewer is read-only and shows all rows and all columns from the file you opened.
 There is a Last CSV button beside it that reopens the most recently viewed CSV path if that file still exists.
+There is also a Recent CSVs button that lists several recently viewed CSV files.
 
 4. ADDING A RECORD
 
@@ -219,17 +220,30 @@ What it does:
 
 - opens the CSV in a separate window
 - shows all columns from the file
-- shows all rows from the file
+- shows the first preview rows immediately for large files so the window opens faster
+- lets you search the shown rows by text
+- lets you choose which columns stay visible
+- lets you click a column header and open a compact popup with a search box and scrollable value list so you can pick one exact value to view, such as one ClassName
+- can combine session rows like Lunch and Dinner into one row and total their quantity, even when some numeric export columns have names like Textbox73
 - keeps the viewer read-only
 - lets you scroll across wide files and down long files
+- for very large CSV files, only the first block of matching rows is drawn so the window stays usable
 
 Use Last CSV if you want to reopen the same file again quickly.
+Use Recent CSVs if you want to reopen one of several recently viewed files.
 
 Important notes:
 
 - the raw CSV viewer does not import anything into the main product table yet
-- the app remembers the last CSV path locally so you do not need to browse to it every time
+- the app remembers the last CSV path and a short recent-files list locally so you do not need to browse to it every time
+- the app also remembers which preview columns you left visible for each CSV path and restores them by column header when possible if the same file is reordered later
 - reopening the same unchanged CSV is faster while the app is still open
+- after the app has fully scanned a large unchanged CSV once, reopening it later is also faster because the viewer can reuse a small metadata sidecar for row counts, encoding, and late columns
+- Clear filters resets the preview back to all rows and removes the active search, combine, and column filters, but it does not change which columns you chose to keep visible
+- Columns opens a small chooser so you can hide columns you do not want to look at
+- clicking a column header opens a compact popup with a search field first, a scrollable value list for that column, and a Clear filter action for removing that exact-value filter again
+- Combine sessions groups rows that only differ by session and adds their quantity together when the CSV has matching session and quantity columns
+- if a CSV is very large, the preview summary tells you when it is showing preview rows first or only the first matching rows to avoid freezing the UI
 
 
 12. COMMAND LINE
@@ -256,6 +270,8 @@ This includes:
 - column widths
 - visible columns
 - the last CSV preview path used by Last CSV
+- the recent CSV preview paths used by Recent CSVs
+- the visible preview columns remembered for each CSV path, with header-aware restore when possible for reordered CSVs
 
 Important:
 

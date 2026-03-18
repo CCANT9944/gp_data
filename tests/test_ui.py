@@ -329,10 +329,14 @@ def test_main_controls_show_open_csv_button(app_factory, tmp_path, monkeypatch):
 
     assert _find_descendant(app, ttk.Button, text="Open CSV") is not None
     assert _find_descendant(app, ttk.Button, text="Last CSV") is not None
+    assert _find_descendant(app, ttk.Menubutton, text="Recent CSVs") is not None
     assert str(app._open_last_csv_button.cget("state")) == "disabled"
+    assert str(app._open_recent_csv_button.cget("state")) == "disabled"
 
 
 def test_open_csv_preview_launches_dialog(app_factory, tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setattr(settings_module, "DEFAULT_PATH", settings_path)
     app = app_factory()
     csv_path = tmp_path / "raw.csv"
     csv_path.write_text("A,B,C\n1,2,3\n", encoding="utf-8")
@@ -357,10 +361,14 @@ def test_open_csv_preview_launches_dialog(app_factory, tmp_path, monkeypatch):
     assert int(seen["width"]) >= app.table.winfo_width()
     assert int(seen["height"]) >= app.table.winfo_height()
     assert app._settings.load_csv_preview_last_path() == str(csv_path)
+    assert app._settings.load_csv_preview_recent_paths() == [str(csv_path)]
     assert str(app._open_last_csv_button.cget("state")) == "normal"
+    assert str(app._open_recent_csv_button.cget("state")) == "normal"
+    assert app._recent_csv_menu.entrycget(0, "label") == str(csv_path)
 
 
-def test_open_csv_preview_cancel_does_not_launch_dialog(app_factory, monkeypatch):
+def test_open_csv_preview_cancel_does_not_launch_dialog(app_factory, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings_module, "DEFAULT_PATH", tmp_path / "settings.json")
     app = app_factory()
 
     monkeypatch.setattr("gp_data.ui.app.filedialog.askopenfilename", lambda **kwargs: "")
@@ -371,7 +379,9 @@ def test_open_csv_preview_cancel_does_not_launch_dialog(app_factory, monkeypatch
 
 def test_open_last_csv_button_enabled_from_saved_settings(tmp_path, monkeypatch):
     csv_path = tmp_path / "saved.csv"
+    other_csv_path = tmp_path / "other.csv"
     csv_path.write_text("A,B\n1,2\n", encoding="utf-8")
+    other_csv_path.write_text("A,B\n3,4\n", encoding="utf-8")
     settings_path = tmp_path / "settings.json"
     settings_module.save_settings(
         {
@@ -381,6 +391,7 @@ def test_open_last_csv_button_enabled_from_saved_settings(tmp_path, monkeypatch)
             "visible_columns": settings_module.DEFAULT_VISIBLE_COLUMNS,
             "gp_highlight_threshold": None,
             "csv_preview_last_path": str(csv_path),
+            "csv_preview_recent_paths": [str(csv_path), str(other_csv_path)],
         },
         settings_path,
     )
@@ -393,11 +404,15 @@ def test_open_last_csv_button_enabled_from_saved_settings(tmp_path, monkeypatch)
     app.withdraw()
 
     assert str(app._open_last_csv_button.cget("state")) == "normal"
+    assert str(app._open_recent_csv_button.cget("state")) == "normal"
+    assert app._recent_csv_menu.entrycget(1, "label") == str(other_csv_path)
 
     app.destroy()
 
 
 def test_open_last_csv_preview_launches_saved_path(app_factory, tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setattr(settings_module, "DEFAULT_PATH", settings_path)
     app = app_factory()
     csv_path = tmp_path / "saved.csv"
     csv_path.write_text("A,B\n1,2\n", encoding="utf-8")
@@ -417,6 +432,33 @@ def test_open_last_csv_preview_launches_saved_path(app_factory, tmp_path, monkey
 
     assert seen["parent"] is app
     assert seen["path"] == csv_path
+
+
+def test_open_recent_csv_preview_launches_selected_saved_path(app_factory, tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setattr(settings_module, "DEFAULT_PATH", settings_path)
+    app = app_factory()
+    first_csv = tmp_path / "first.csv"
+    second_csv = tmp_path / "second.csv"
+    first_csv.write_text("A,B\n1,2\n", encoding="utf-8")
+    second_csv.write_text("A,B\n3,4\n", encoding="utf-8")
+    app._settings.save_csv_preview_recent_paths([str(first_csv), str(second_csv)])
+    app._update_open_last_csv_button_state()
+
+    seen: dict[str, object] = {}
+
+    def fake_open(parent, csv_path, *, width, height):
+        seen["parent"] = parent
+        seen["path"] = csv_path
+        return None
+
+    monkeypatch.setattr("gp_data.ui.app.open_csv_preview_dialog", fake_open)
+
+    app._recent_csv_menu.invoke(1)
+
+    assert seen["parent"] is app
+    assert seen["path"] == second_csv
+    assert app._settings.load_csv_preview_recent_paths()[0] == str(second_csv)
 
 
 def _menu_index_by_label(menu: tk.Menu, expected: str) -> int:

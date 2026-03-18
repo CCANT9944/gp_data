@@ -33,9 +33,16 @@ numeric change history per item.
 - Click the `Type` column header to open a small filter menu listing the saved types, then use `Remove type filter` at the bottom to clear it.
 - Click the `GP` column header to open a small menu with highlight presets, a custom threshold option, and a clear option.
 - The GP highlight threshold is saved in your local `settings.json` and comes back after restart.
-- `Open CSV` opens a separate read-only raw CSV viewer that shows all columns and all rows from the selected file.
+- `Open CSV` opens a separate read-only raw CSV viewer for the selected file.
 - `Last CSV` reopens the most recently viewed CSV from a remembered local path so you do not need to browse for the same file every time.
+- `Recent CSVs` shows the latest remembered CSV files so you can jump back to more than one file without browsing again.
+- The raw CSV viewer includes a live global text search across all visible data.
+- The raw CSV viewer lets you choose which columns stay visible, and it remembers that choice per CSV path using column headers when possible so reordered files reopen more sensibly.
+- Clicking a CSV preview column header opens a compact popup with a local search box, a scrollable value list, and exact-value filtering for that column, such as one `ClassName`.
+- The raw CSV viewer can also combine session-based rows, such as `Lunch` and `Dinner`, into one product row when the file has detectable session and quantity columns, including numeric export columns with generic names like `Textbox73`.
+- For very large CSVs, the preview window opens from an initial sample first and only renders the first slice of matching rows so the window stays responsive.
 - Reopening the same unchanged CSV is faster because the preview data is reused while the app is still open.
+- After the app has already resolved a large CSV once, reopening that same unchanged file is also faster after restart because the preview reuses a small sidecar metadata cache for row counts, encoding, and late columns.
 - The app warns at startup if the current storage file looks unreadable and points you toward backup restore or other recovery steps.
 - Add, edit, and delete flows now ask before continuing if a safety backup cannot be created first.
 - If renamed field labels cannot be saved or applied, the app shows an error and keeps the existing labels.
@@ -166,7 +173,8 @@ GUI-related tests skip automatically if Tk is not available in the current envir
 
 - The app stores recent numeric change history, not a full unlimited audit log.
 - Column order, visible columns, and widths are persisted in the local `settings.json` file.
-- The last CSV preview path is also persisted in `settings.json` for the `Last CSV` button.
+- The last and recent CSV preview paths are persisted in `settings.json` for the `Last CSV` and `Recent CSVs` controls.
+- CSV preview visible-column choices are also persisted in `settings.json` per CSV path, with header-aware restore for reordered files when possible.
 - `settings.json` is intentionally ignored by Git so personal layout changes are not committed.
 - Duplicate warnings are advisory: the GUI can still allow a duplicate if the user explicitly confirms it.
 - Older duplicate rows already stored in the database are not merged automatically.

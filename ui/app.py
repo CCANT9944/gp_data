@@ -106,6 +106,10 @@ class GPDataApp(tk.Tk):
         ttk.Button(controls, text="Open CSV", command=self.on_open_csv_preview).pack(side="left", padx=4)
         self._open_last_csv_button = ttk.Button(controls, text="Last CSV", command=self.on_open_last_csv_preview)
         self._open_last_csv_button.pack(side="left", padx=4)
+        self._recent_csv_menu = tk.Menu(self, tearoff=0)
+        self._open_recent_csv_button = ttk.Menubutton(controls, text="Recent CSVs", direction="below")
+        self._open_recent_csv_button.configure(menu=self._recent_csv_menu)
+        self._open_recent_csv_button.pack(side="left", padx=4)
 
         ttk.Button(controls, text="Manage backups", command=self.on_manage_backups).pack(side="right", padx=4)
         ttk.Button(controls, text="Export CSV", command=self.on_export).pack(side="right", padx=4)
@@ -545,9 +549,27 @@ class GPDataApp(tk.Tk):
         return max(self.table.winfo_width(), 900), max(self.table.winfo_height(), 500)
 
     def _update_open_last_csv_button_state(self) -> None:
-        saved_path = self._settings.load_csv_preview_last_path()
-        state = "normal" if saved_path and Path(saved_path).exists() else "disabled"
+        recent_paths = self._settings.load_csv_preview_recent_paths()
+        existing_paths = [path for path in recent_paths if Path(path).exists()]
+        last_path = existing_paths[0] if existing_paths else None
+
+        if existing_paths != recent_paths or self._settings.load_csv_preview_last_path() != last_path:
+            try:
+                self._settings.update(csv_preview_last_path=last_path, csv_preview_recent_paths=existing_paths)
+            except (OSError, TypeError, ValueError) as exc:
+                LOGGER.warning("Unable to normalize remembered CSV preview paths", exc_info=True)
+                self._warn_settings_save_failure("the recent CSV preview list", exc)
+
+        state = "normal" if existing_paths else "disabled"
         self._open_last_csv_button.config(state=state)
+        self._open_recent_csv_button.config(state=state)
+
+        self._recent_csv_menu.delete(0, "end")
+        for saved_path in existing_paths:
+            self._recent_csv_menu.add_command(
+                label=saved_path,
+                command=lambda value=saved_path: self.on_open_recent_csv_preview(value),
+            )
 
     def _open_csv_preview_path(self, csv_path: Path, *, remember: bool) -> None:
         width, height = self._csv_preview_geometry()
@@ -555,19 +577,13 @@ class GPDataApp(tk.Tk):
             open_csv_preview_dialog(self, csv_path, width=width, height=height)
         except CsvPreviewError as exc:
             messagebox.showerror("CSV preview unavailable", str(exc))
-            if remember:
-                try:
-                    self._settings.save_csv_preview_last_path(None)
-                except (OSError, TypeError, ValueError):
-                    LOGGER.warning("Unable to clear remembered CSV preview path", exc_info=True)
-                self._update_open_last_csv_button_state()
             return
         if remember:
             try:
-                self._settings.save_csv_preview_last_path(str(csv_path))
+                self._settings.remember_csv_preview_path(str(csv_path))
             except (OSError, TypeError, ValueError) as exc:
-                LOGGER.warning("Unable to persist last CSV preview path", exc_info=True)
-                self._warn_settings_save_failure("the last CSV preview path", exc)
+                LOGGER.warning("Unable to persist recent CSV preview paths", exc_info=True)
+                self._warn_settings_save_failure("the recent CSV preview list", exc)
             self._update_open_last_csv_button_state()
 
     def on_open_csv_preview(self) -> None:
@@ -580,17 +596,33 @@ class GPDataApp(tk.Tk):
         self._open_csv_preview_path(Path(path), remember=True)
 
     def on_open_last_csv_preview(self) -> None:
-        saved_path = self._settings.load_csv_preview_last_path()
-        if not saved_path:
+        recent_paths = self._settings.load_csv_preview_recent_paths()
+        if not recent_paths:
             self._update_open_last_csv_button_state()
             return
-        csv_path = Path(saved_path)
+        csv_path = Path(recent_paths[0])
         if not csv_path.exists():
             messagebox.showerror("CSV preview unavailable", "The remembered CSV file could not be found.")
             try:
-                self._settings.save_csv_preview_last_path(None)
-            except (OSError, TypeError, ValueError):
+                self._settings.save_csv_preview_recent_paths([path for path in recent_paths if path != str(csv_path)])
+            except (OSError, TypeError, ValueError) as exc:
                 LOGGER.warning("Unable to clear missing remembered CSV preview path", exc_info=True)
+                self._warn_settings_save_failure("the recent CSV preview list", exc)
+            self._update_open_last_csv_button_state()
+            return
+        self._open_csv_preview_path(csv_path, remember=True)
+
+    def on_open_recent_csv_preview(self, saved_path: str) -> None:
+        csv_path = Path(saved_path)
+        if not csv_path.exists():
+            messagebox.showerror("CSV preview unavailable", "The selected recent CSV file could not be found.")
+            try:
+                self._settings.save_csv_preview_recent_paths(
+                    [path for path in self._settings.load_csv_preview_recent_paths() if path != saved_path]
+                )
+            except (OSError, TypeError, ValueError) as exc:
+                LOGGER.warning("Unable to clear missing recent CSV preview path", exc_info=True)
+                self._warn_settings_save_failure("the recent CSV preview list", exc)
             self._update_open_last_csv_button_state()
             return
         self._open_csv_preview_path(csv_path, remember=True)
