@@ -38,9 +38,12 @@ numeric change history per item.
 - `Recent CSVs` shows the latest remembered CSV files so you can jump back to more than one file without browsing again.
 - The raw CSV viewer includes a live global text search across all visible data.
 - The raw CSV viewer lets you choose which columns stay visible, and it remembers that choice per CSV path using column headers when possible so reordered files reopen more sensibly.
-- Clicking a CSV preview column header opens a compact popup with a local search box, a scrollable value list, and exact-value filtering for that column, such as one `ClassName`.
+- Clicking a CSV preview column header opens a compact popup with a local search box, a scrollable value list, exact-value filtering for that column, and sort controls for that same column.
+- The popup sorts text columns A-to-Z or Z-to-A and sorts numeric columns low-to-high or high-to-low using numeric order instead of text order.
+- The raw CSV viewer remembers the active sort per CSV path and shows the current sort in the preview summary so you can see it without reopening the popup.
+- `Save As CSV` creates a new CSV file from the current preview state, including the current search, exact column filter, combined rows, and visible columns, without changing the original imported file, and it defaults to your shared `Favorites/csv_exports` folder.
 - The raw CSV viewer can also combine session-based rows, such as `Lunch` and `Dinner`, into one product row when the file has detectable session and quantity columns, including numeric export columns with generic names like `Textbox73`.
-- For very large CSVs, the preview window opens from an initial sample first and only renders the first slice of matching rows so the window stays responsive.
+- For very large CSVs, the preview window opens from an initial sample first and only renders the first slice of matching rows so the window stays responsive, with a lower live row cap for very wide files to keep navigation smoother.
 - Reopening the same unchanged CSV is faster because the preview data is reused while the app is still open.
 - After the app has already resolved a large CSV once, reopening that same unchanged file is also faster after restart because the preview reuses a small sidecar metadata cache for row counts, encoding, and late columns.
 - The app warns at startup if the current storage file looks unreadable and points you toward backup restore or other recovery steps.

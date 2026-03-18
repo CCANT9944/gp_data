@@ -42,8 +42,34 @@ DEFAULT_SETTINGS = {
     "csv_preview_recent_paths": [],
     "csv_preview_visible_columns_by_path": {},
     "csv_preview_visible_column_keys_by_path": {},
+    "csv_preview_sort_by_path": {},
 }
 DEFAULT_PATH = Path(__file__).parent / "settings.json"
+
+
+@dataclass(frozen=True)
+class CsvPreviewPathState:
+    visible_columns: list[int] = None  # type: ignore[assignment]
+    visible_column_keys: list[str] = None  # type: ignore[assignment]
+    sort_column_key: str | None = None
+    sort_descending: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "visible_columns", list(self.visible_columns or []))
+        object.__setattr__(self, "visible_column_keys", list(self.visible_column_keys or []))
+
+    def to_dict(self) -> dict[str, object]:
+        data: dict[str, object] = {}
+        if self.visible_columns:
+            data["visible_columns"] = list(self.visible_columns)
+        if self.visible_column_keys:
+            data["visible_column_keys"] = list(self.visible_column_keys)
+        if self.sort_column_key:
+            data["sort"] = {
+                "column_key": self.sort_column_key,
+                "descending": self.sort_descending,
+            }
+        return data
 
 
 @dataclass(frozen=True)
@@ -55,8 +81,10 @@ class AppSettings:
     gp_highlight_threshold: float | None
     csv_preview_last_path: str | None
     csv_preview_recent_paths: list[str]
+    csv_preview_state_by_path: dict[str, CsvPreviewPathState]
     csv_preview_visible_columns_by_path: dict[str, list[int]]
     csv_preview_visible_column_keys_by_path: dict[str, list[str]]
+    csv_preview_sort_by_path: dict[str, dict[str, object]]
 
     def to_dict(self) -> dict:
         return {
@@ -67,11 +95,18 @@ class AppSettings:
             "gp_highlight_threshold": self.gp_highlight_threshold,
             "csv_preview_last_path": self.csv_preview_last_path,
             "csv_preview_recent_paths": list(self.csv_preview_recent_paths),
+            "csv_preview_state_by_path": {
+                path: state.to_dict() for path, state in self.csv_preview_state_by_path.items()
+            },
             "csv_preview_visible_columns_by_path": {
                 path: list(columns) for path, columns in self.csv_preview_visible_columns_by_path.items()
             },
             "csv_preview_visible_column_keys_by_path": {
                 path: list(keys) for path, keys in self.csv_preview_visible_column_keys_by_path.items()
+            },
+            "csv_preview_sort_by_path": {
+                path: {"column_key": str(sort_state["column_key"]), "descending": bool(sort_state["descending"])}
+                for path, sort_state in self.csv_preview_sort_by_path.items()
             },
         }
 
@@ -87,6 +122,7 @@ def _default_settings() -> dict:
         "csv_preview_recent_paths": [],
         "csv_preview_visible_columns_by_path": {},
         "csv_preview_visible_column_keys_by_path": {},
+        "csv_preview_sort_by_path": {},
     }
 
 
@@ -99,8 +135,10 @@ def _default_app_settings() -> AppSettings:
         gp_highlight_threshold=None,
         csv_preview_last_path=None,
         csv_preview_recent_paths=[],
+        csv_preview_state_by_path={},
         csv_preview_visible_columns_by_path={},
         csv_preview_visible_column_keys_by_path={},
+        csv_preview_sort_by_path={},
     )
 
 
@@ -259,14 +297,83 @@ def _normalized_csv_preview_visible_column_keys(raw_visible_column_keys) -> dict
     return normalized
 
 
+def _normalized_csv_preview_sort_by_path(raw_sort_by_path) -> dict[str, dict[str, object]]:
+    normalized: dict[str, dict[str, object]] = {}
+    if not isinstance(raw_sort_by_path, dict):
+        return normalized
+
+    for raw_path, raw_sort in raw_sort_by_path.items():
+        path = _normalized_csv_preview_last_path(raw_path)
+        if path is None or not isinstance(raw_sort, dict):
+            continue
+
+        column_key = str(raw_sort.get("column_key", "")).strip().casefold()
+        if not column_key:
+            continue
+
+        normalized[path] = {
+            "column_key": column_key,
+            "descending": bool(raw_sort.get("descending", False)),
+        }
+
+    return normalized
+
+
+def _normalized_csv_preview_state_by_path(raw_state_by_path) -> dict[str, CsvPreviewPathState]:
+    normalized: dict[str, CsvPreviewPathState] = {}
+    if not isinstance(raw_state_by_path, dict):
+        return normalized
+
+    for raw_path, raw_state in raw_state_by_path.items():
+        path = _normalized_csv_preview_last_path(raw_path)
+        if path is None or not isinstance(raw_state, dict):
+            continue
+
+        visible_columns = _normalized_csv_preview_visible_columns({path: raw_state.get("visible_columns")}).get(path, [])
+        visible_column_keys = _normalized_csv_preview_visible_column_keys({path: raw_state.get("visible_column_keys")}).get(path, [])
+        sort = _normalized_csv_preview_sort_by_path({path: raw_state.get("sort")}).get(path, {})
+
+        normalized[path] = CsvPreviewPathState(
+            visible_columns=visible_columns,
+            visible_column_keys=visible_column_keys,
+            sort_column_key=str(sort.get("column_key")).strip().casefold() if sort.get("column_key") else None,
+            sort_descending=bool(sort.get("descending", False)),
+        )
+
+    return normalized
+
+
 def _normalized_app_settings(raw_data: Mapping[str, object] | None) -> AppSettings:
     data = raw_data if isinstance(raw_data, Mapping) else {}
     csv_preview_last_path = _normalized_csv_preview_last_path(data.get("csv_preview_last_path"))
     csv_preview_recent_paths = _normalized_csv_preview_recent_paths(data.get("csv_preview_recent_paths"), csv_preview_last_path)
     if csv_preview_last_path is None and csv_preview_recent_paths:
         csv_preview_last_path = csv_preview_recent_paths[0]
+    csv_preview_state_by_path = _normalized_csv_preview_state_by_path(data.get("csv_preview_state_by_path"))
     csv_preview_visible_columns_by_path = _normalized_csv_preview_visible_columns(data.get("csv_preview_visible_columns_by_path"))
     csv_preview_visible_column_keys_by_path = _normalized_csv_preview_visible_column_keys(data.get("csv_preview_visible_column_keys_by_path"))
+    csv_preview_sort_by_path = _normalized_csv_preview_sort_by_path(data.get("csv_preview_sort_by_path"))
+
+    for path, state in list(csv_preview_state_by_path.items()):
+        if state.visible_columns:
+            csv_preview_visible_columns_by_path[path] = list(state.visible_columns)
+        if state.visible_column_keys:
+            csv_preview_visible_column_keys_by_path[path] = list(state.visible_column_keys)
+        if state.sort_column_key:
+            csv_preview_sort_by_path[path] = {
+                "column_key": state.sort_column_key,
+                "descending": state.sort_descending,
+            }
+
+    for path in set(csv_preview_visible_columns_by_path) | set(csv_preview_visible_column_keys_by_path) | set(csv_preview_sort_by_path):
+        current_state = csv_preview_state_by_path.get(path, CsvPreviewPathState())
+        csv_preview_state_by_path[path] = CsvPreviewPathState(
+            visible_columns=csv_preview_visible_columns_by_path.get(path, current_state.visible_columns),
+            visible_column_keys=csv_preview_visible_column_keys_by_path.get(path, current_state.visible_column_keys),
+            sort_column_key=(csv_preview_sort_by_path.get(path) or {}).get("column_key", current_state.sort_column_key),
+            sort_descending=bool((csv_preview_sort_by_path.get(path) or {}).get("descending", current_state.sort_descending)),
+        )
+
     return AppSettings(
         labels=_normalized_labels(data.get("labels", DEFAULT_LABELS)),
         column_order=_normalized_column_order(data.get("column_order", DEFAULT_COLUMN_ORDER)),
@@ -275,8 +382,10 @@ def _normalized_app_settings(raw_data: Mapping[str, object] | None) -> AppSettin
         gp_highlight_threshold=_normalized_gp_highlight_threshold(data.get("gp_highlight_threshold")),
         csv_preview_last_path=csv_preview_last_path,
         csv_preview_recent_paths=csv_preview_recent_paths,
+        csv_preview_state_by_path=csv_preview_state_by_path,
         csv_preview_visible_columns_by_path=csv_preview_visible_columns_by_path,
         csv_preview_visible_column_keys_by_path=csv_preview_visible_column_keys_by_path,
+        csv_preview_sort_by_path=csv_preview_sort_by_path,
     )
 
 
@@ -362,6 +471,24 @@ class SettingsStore:
         recent_paths = _normalized_csv_preview_recent_paths(self.load_csv_preview_recent_paths(), normalized_path)
         return self.update(csv_preview_last_path=normalized_path, csv_preview_recent_paths=recent_paths)
 
+    def load_csv_preview_state(self, csv_preview_path: str | None) -> CsvPreviewPathState | None:
+        normalized_path = _normalized_csv_preview_last_path(csv_preview_path)
+        if normalized_path is None:
+            return None
+        saved = self.load().csv_preview_state_by_path.get(normalized_path)
+        return saved if saved is not None else None
+
+    def save_csv_preview_state(self, csv_preview_path: str | None, state: CsvPreviewPathState | None) -> AppSettings:
+        normalized_path = _normalized_csv_preview_last_path(csv_preview_path)
+        current = {path: saved_state.to_dict() for path, saved_state in self.load().csv_preview_state_by_path.items()}
+        if normalized_path is None:
+            return self.update(csv_preview_state_by_path=current)
+        if state is None or not state.to_dict():
+            current.pop(normalized_path, None)
+        else:
+            current[normalized_path] = state.to_dict()
+        return self.update(csv_preview_state_by_path=current)
+
     def load_csv_preview_visible_columns(self, csv_preview_path: str | None) -> List[int] | None:
         normalized_path = _normalized_csv_preview_last_path(csv_preview_path)
         if normalized_path is None:
@@ -372,13 +499,31 @@ class SettingsStore:
     def save_csv_preview_visible_columns(self, csv_preview_path: str | None, visible_columns: List[int] | None) -> AppSettings:
         normalized_path = _normalized_csv_preview_last_path(csv_preview_path)
         current = dict(self.load().csv_preview_visible_columns_by_path)
+        current_state = self.load_csv_preview_state(normalized_path) or CsvPreviewPathState()
+        current_state_by_path = {path: state.to_dict() for path, state in self.load().csv_preview_state_by_path.items()}
         if normalized_path is None:
             return self.update(csv_preview_visible_columns_by_path=current)
         if not visible_columns:
             current.pop(normalized_path, None)
+            current_state = CsvPreviewPathState(
+                visible_columns=[],
+                visible_column_keys=current_state.visible_column_keys,
+                sort_column_key=current_state.sort_column_key,
+                sort_descending=current_state.sort_descending,
+            )
         else:
             current[normalized_path] = list(visible_columns)
-        return self.update(csv_preview_visible_columns_by_path=current)
+            current_state = CsvPreviewPathState(
+                visible_columns=list(visible_columns),
+                visible_column_keys=current_state.visible_column_keys,
+                sort_column_key=current_state.sort_column_key,
+                sort_descending=current_state.sort_descending,
+            )
+        if current_state.to_dict():
+            current_state_by_path[normalized_path] = current_state.to_dict()
+        else:
+            current_state_by_path.pop(normalized_path, None)
+        return self.update(csv_preview_visible_columns_by_path=current, csv_preview_state_by_path=current_state_by_path)
 
     def load_csv_preview_visible_column_keys(self, csv_preview_path: str | None) -> List[str] | None:
         normalized_path = _normalized_csv_preview_last_path(csv_preview_path)
@@ -390,13 +535,76 @@ class SettingsStore:
     def save_csv_preview_visible_column_keys(self, csv_preview_path: str | None, visible_column_keys: List[str] | None) -> AppSettings:
         normalized_path = _normalized_csv_preview_last_path(csv_preview_path)
         current = dict(self.load().csv_preview_visible_column_keys_by_path)
+        current_state = self.load_csv_preview_state(normalized_path) or CsvPreviewPathState()
+        current_state_by_path = {path: state.to_dict() for path, state in self.load().csv_preview_state_by_path.items()}
         if normalized_path is None:
             return self.update(csv_preview_visible_column_keys_by_path=current)
         if not visible_column_keys:
             current.pop(normalized_path, None)
+            current_state = CsvPreviewPathState(
+                visible_columns=current_state.visible_columns,
+                visible_column_keys=[],
+                sort_column_key=current_state.sort_column_key,
+                sort_descending=current_state.sort_descending,
+            )
         else:
-            current[normalized_path] = [str(key).strip().casefold() for key in visible_column_keys if str(key).strip()]
-        return self.update(csv_preview_visible_column_keys_by_path=current)
+            normalized_keys = [str(key).strip().casefold() for key in visible_column_keys if str(key).strip()]
+            current[normalized_path] = normalized_keys
+            current_state = CsvPreviewPathState(
+                visible_columns=current_state.visible_columns,
+                visible_column_keys=normalized_keys,
+                sort_column_key=current_state.sort_column_key,
+                sort_descending=current_state.sort_descending,
+            )
+        if current_state.to_dict():
+            current_state_by_path[normalized_path] = current_state.to_dict()
+        else:
+            current_state_by_path.pop(normalized_path, None)
+        return self.update(csv_preview_visible_column_keys_by_path=current, csv_preview_state_by_path=current_state_by_path)
+
+    def load_csv_preview_sort(self, csv_preview_path: str | None) -> dict[str, object] | None:
+        normalized_path = _normalized_csv_preview_last_path(csv_preview_path)
+        if normalized_path is None:
+            return None
+        saved = self.load().csv_preview_sort_by_path.get(normalized_path)
+        return dict(saved) if saved is not None else None
+
+    def save_csv_preview_sort(
+        self,
+        csv_preview_path: str | None,
+        column_key: str | None,
+        *,
+        descending: bool = False,
+    ) -> AppSettings:
+        normalized_path = _normalized_csv_preview_last_path(csv_preview_path)
+        current = dict(self.load().csv_preview_sort_by_path)
+        current_state = self.load_csv_preview_state(normalized_path) or CsvPreviewPathState()
+        current_state_by_path = {path: state.to_dict() for path, state in self.load().csv_preview_state_by_path.items()}
+        if normalized_path is None:
+            return self.update(csv_preview_sort_by_path=current)
+
+        normalized_key = str(column_key).strip().casefold() if column_key is not None else ""
+        if not normalized_key:
+            current.pop(normalized_path, None)
+            current_state = CsvPreviewPathState(
+                visible_columns=current_state.visible_columns,
+                visible_column_keys=current_state.visible_column_keys,
+                sort_column_key=None,
+                sort_descending=False,
+            )
+        else:
+            current[normalized_path] = {"column_key": normalized_key, "descending": bool(descending)}
+            current_state = CsvPreviewPathState(
+                visible_columns=current_state.visible_columns,
+                visible_column_keys=current_state.visible_column_keys,
+                sort_column_key=normalized_key,
+                sort_descending=bool(descending),
+            )
+        if current_state.to_dict():
+            current_state_by_path[normalized_path] = current_state.to_dict()
+        else:
+            current_state_by_path.pop(normalized_path, None)
+        return self.update(csv_preview_sort_by_path=current, csv_preview_state_by_path=current_state_by_path)
 
 
 def load_settings(path: Optional[Path] = None) -> dict:
@@ -485,3 +693,25 @@ def save_csv_preview_visible_column_keys(
     path: Optional[Path] = None,
 ) -> None:
     SettingsStore(path).save_csv_preview_visible_column_keys(csv_preview_path, visible_column_keys)
+
+
+def load_csv_preview_sort(csv_preview_path: str | None, path: Optional[Path] = None) -> dict[str, object] | None:
+    return SettingsStore(path).load_csv_preview_sort(csv_preview_path)
+
+
+def load_csv_preview_state(csv_preview_path: str | None, path: Optional[Path] = None) -> CsvPreviewPathState | None:
+    return SettingsStore(path).load_csv_preview_state(csv_preview_path)
+
+
+def save_csv_preview_state(csv_preview_path: str | None, state: CsvPreviewPathState | None, path: Optional[Path] = None) -> None:
+    SettingsStore(path).save_csv_preview_state(csv_preview_path, state)
+
+
+def save_csv_preview_sort(
+    csv_preview_path: str | None,
+    column_key: str | None,
+    *,
+    descending: bool = False,
+    path: Optional[Path] = None,
+) -> None:
+    SettingsStore(path).save_csv_preview_sort(csv_preview_path, column_key, descending=descending)

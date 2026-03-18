@@ -168,6 +168,43 @@ def test_save_and_load_csv_preview_visible_column_keys_for_path(tmp_path: Path):
     assert settings.load_csv_preview_visible_column_keys(r"C:\data\sales.csv", p) is None
 
 
+def test_save_and_load_csv_preview_sort_for_path(tmp_path: Path):
+    p = tmp_path / "settings.json"
+    settings.save_csv_preview_recent_paths([r"C:\data\sales.csv", r"C:\data\stock.csv"], p)
+
+    settings.save_csv_preview_sort(r"C:\data\stock.csv", "quantity#1", descending=True, path=p)
+
+    assert settings.load_csv_preview_sort(r"C:\data\stock.csv", p) == {
+        "column_key": "quantity#1",
+        "descending": True,
+    }
+    assert settings.load_csv_preview_sort(r"C:\data\sales.csv", p) is None
+
+    settings.save_csv_preview_sort(r"C:\data\stock.csv", None, path=p)
+
+    assert settings.load_csv_preview_sort(r"C:\data\stock.csv", p) is None
+
+
+def test_save_and_load_csv_preview_state_for_path(tmp_path: Path):
+    p = tmp_path / "settings.json"
+    state = settings.CsvPreviewPathState(
+        visible_columns=[0, 2],
+        visible_column_keys=["name#1", "quantity#1"],
+        sort_column_key="quantity#1",
+        sort_descending=True,
+    )
+
+    settings.save_csv_preview_state(r"C:\data\stock.csv", state, p)
+
+    loaded = settings.load_csv_preview_state(r"C:\data\stock.csv", p)
+
+    assert loaded is not None
+    assert loaded.visible_columns == [0, 2]
+    assert loaded.visible_column_keys == ["name#1", "quantity#1"]
+    assert loaded.sort_column_key == "quantity#1"
+    assert loaded.sort_descending is True
+
+
 def test_settings_store_preserves_csv_preview_last_path_during_other_updates(tmp_path: Path):
     store = settings.SettingsStore(tmp_path / "settings.json")
     store.save_csv_preview_last_path(r"C:\data\sales.csv")
@@ -197,3 +234,4 @@ def test_load_settings_backfills_recent_csv_paths_from_legacy_last_path(tmp_path
     assert loaded["csv_preview_recent_paths"] == [r"C:\data\sales.csv"]
     assert loaded["csv_preview_visible_columns_by_path"] == {}
     assert loaded["csv_preview_visible_column_keys_by_path"] == {}
+    assert loaded["csv_preview_sort_by_path"] == {}

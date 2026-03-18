@@ -1,3 +1,4 @@
+import csv
 import tkinter as tk
 import time
 from tkinter import ttk
@@ -12,6 +13,7 @@ from gp_data.ui.csv_preview.dialog import (
     HEADER_FILTER_POPUP_LABEL_MAX_LENGTH,
     HEADER_FILTER_POPUP_LIST_HEIGHT,
     MAX_RENDERED_PREVIEW_ROWS,
+    _rendered_preview_row_limit,
     _compact_filter_popup_label,
     _detect_numeric_columns,
     _detect_session_column,
@@ -487,6 +489,33 @@ def test_open_csv_preview_dialog_limits_rendered_rows_for_large_files(tk_root, t
     dialog.destroy()
 
 
+def test_rendered_preview_row_limit_scales_down_for_wide_csvs():
+    assert _rendered_preview_row_limit(3) == MAX_RENDERED_PREVIEW_ROWS
+    assert _rendered_preview_row_limit(40) < MAX_RENDERED_PREVIEW_ROWS
+    assert _rendered_preview_row_limit(120) < _rendered_preview_row_limit(40)
+
+
+def test_open_csv_preview_dialog_uses_lower_row_cap_for_wide_large_files(tk_root, tmp_path):
+    headers = [f"Col {index}" for index in range(1, 41)]
+    row_limit = _rendered_preview_row_limit(len(headers))
+    rows = [",".join([f"r{row}_c{col}" for col in range(1, 41)]) for row in range(1, row_limit + 401)]
+    csv_path = tmp_path / "wide_large.csv"
+    csv_path.write_text(
+        "\n".join([",".join(headers)] + rows) + "\n",
+        encoding="utf-8",
+    )
+
+    dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    tree = _find_descendant(dialog, ttk.Treeview)
+
+    assert tree is not None
+
+    _wait_for_rows(dialog, tree, row_limit)
+    assert len(tree.get_children()) == row_limit
+
+    dialog.destroy()
+
+
 def test_open_csv_preview_dialog_expands_columns_when_late_wider_rows_are_found(tk_root, tmp_path):
     csv_path = tmp_path / "late_wide.csv"
     rows = ["A,B"]
@@ -858,5 +887,291 @@ def test_open_csv_preview_dialog_hiding_filtered_column_clears_filter_and_popup(
 
     assert controller._header_filter_popup is None
     assert list(tree.cget("displaycolumns")) == ["col_0", "col_2"]
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_dialog_can_sort_numeric_column_ascending_and_descending(tk_root, tmp_path):
+    csv_path = tmp_path / "numeric_sort.csv"
+    csv_path.write_text(
+        "Name,Revenue1\nPeroni,2\nNegroni,10\nSpritz,3\n",
+        encoding="utf-8",
+    )
+
+    dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    controller = getattr(dialog, "_csv_preview_controller", None)
+    tree = _find_descendant(dialog, ttk.Treeview)
+
+    assert controller is not None
+    assert tree is not None
+
+    _wait_for_rows(dialog, tree, 3)
+    controller.show_header_filter_popup(1, 0, 0)
+    dialog.update()
+
+    popup = controller._header_filter_popup
+    assert popup is not None
+
+    sort_ascending_button = _find_button(popup, "Sort low to high")
+    sort_descending_button = _find_button(popup, "Sort high to low")
+
+    assert sort_ascending_button is not None
+    assert sort_descending_button is not None
+
+    sort_ascending_button.invoke()
+    _wait_for_rows(dialog, tree, 3)
+
+    ascending_names = [tree.item(item_id)["values"][0] for item_id in tree.get_children()]
+    assert ascending_names == ["Peroni", "Spritz", "Negroni"]
+    assert tree.heading("col_1")["text"].endswith("▲")
+
+    controller.show_header_filter_popup(1, 0, 0)
+    dialog.update()
+    popup = controller._header_filter_popup
+
+    assert popup is not None
+
+    sort_descending_button = _find_button(popup, "Sort high to low")
+    assert sort_descending_button is not None
+
+    sort_descending_button.invoke()
+    _wait_for_rows(dialog, tree, 3)
+
+    descending_names = [tree.item(item_id)["values"][0] for item_id in tree.get_children()]
+    assert descending_names == ["Negroni", "Spritz", "Peroni"]
+    assert tree.heading("col_1")["text"].endswith("▼")
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_dialog_can_sort_text_column_ascending_and_descending(tk_root, tmp_path):
+    csv_path = tmp_path / "text_sort.csv"
+    csv_path.write_text(
+        "Name,Category\nPeroni,Beer\nNegroni,Cocktails\nAperol,Spritz\n",
+        encoding="utf-8",
+    )
+
+    dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    controller = getattr(dialog, "_csv_preview_controller", None)
+    tree = _find_descendant(dialog, ttk.Treeview)
+
+    assert controller is not None
+    assert tree is not None
+
+    _wait_for_rows(dialog, tree, 3)
+    controller.show_header_filter_popup(0, 0, 0)
+    dialog.update()
+
+    popup = controller._header_filter_popup
+    assert popup is not None
+
+    sort_ascending_button = _find_button(popup, "Sort A to Z")
+    sort_descending_button = _find_button(popup, "Sort Z to A")
+
+    assert sort_ascending_button is not None
+    assert sort_descending_button is not None
+
+    sort_descending_button.invoke()
+    _wait_for_rows(dialog, tree, 3)
+
+    descending_names = [tree.item(item_id)["values"][0] for item_id in tree.get_children()]
+    assert descending_names == ["Peroni", "Negroni", "Aperol"]
+    assert tree.heading("col_0")["text"].endswith("▼")
+
+    controller.show_header_filter_popup(0, 0, 0)
+    dialog.update()
+    popup = controller._header_filter_popup
+
+    assert popup is not None
+
+    sort_ascending_button = _find_button(popup, "Sort A to Z")
+    assert sort_ascending_button is not None
+
+    sort_ascending_button.invoke()
+    _wait_for_rows(dialog, tree, 3)
+
+    ascending_names = [tree.item(item_id)["values"][0] for item_id in tree.get_children()]
+    assert ascending_names == ["Aperol", "Negroni", "Peroni"]
+    assert tree.heading("col_0")["text"].endswith("▲")
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_dialog_restores_saved_sort_on_reopen_and_shows_it_in_summary(tk_root, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "DEFAULT_PATH", tmp_path / "settings.json")
+    csv_path = tmp_path / "sorted_reopen.csv"
+    csv_path.write_text(
+        "Name,Category\nPeroni,Beer\nNegroni,Cocktails\nAperol,Spritz\n",
+        encoding="utf-8",
+    )
+
+    first_dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    first_controller = getattr(first_dialog, "_csv_preview_controller", None)
+
+    assert first_controller is not None
+
+    first_controller.set_sort(0, descending=True)
+    first_dialog.update()
+    first_dialog.destroy()
+
+    second_dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    tree = _find_descendant(second_dialog, ttk.Treeview)
+    summary = _find_descendant(second_dialog, ttk.Label)
+
+    assert tree is not None
+    assert summary is not None
+
+    _wait_for_rows(second_dialog, tree, 3)
+
+    values = [tree.item(item_id)["values"][0] for item_id in tree.get_children()]
+    assert values == ["Peroni", "Negroni", "Aperol"]
+    assert "Sorted by Name (Z to A)" in str(summary.cget("text"))
+
+    second_dialog.destroy()
+
+
+def test_open_csv_preview_dialog_can_save_current_view_as_new_csv_file(tk_root, tmp_path, monkeypatch):
+    csv_path = tmp_path / "sessions.csv"
+    csv_path.write_text(
+        "Description1,Sessionname1,Quantity1,Revenue1\n"
+        "Cuban,Lunch,2,12.5\n"
+        "Cuban,Dinner,3,18.5\n"
+        "French 75,Lunch,4,20\n",
+        encoding="utf-8",
+    )
+    original_text = csv_path.read_text(encoding="utf-8")
+    export_path = tmp_path / "sessions.preview.csv"
+
+    dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    controller = getattr(dialog, "_csv_preview_controller", None)
+    tree = _find_descendant(dialog, ttk.Treeview)
+    query_entry = _find_descendant(dialog, ttk.Entry)
+    combine_toggle = _find_descendant(dialog, ttk.Checkbutton)
+    save_button = _find_button(dialog, "Save As CSV")
+    seen_info: dict[str, str] = {}
+
+    assert controller is not None
+    assert tree is not None
+    assert query_entry is not None
+    assert combine_toggle is not None
+    assert save_button is not None
+
+    query_entry.insert(0, "cuban")
+    _wait_for_rows(dialog, tree, 2)
+    combine_toggle.invoke()
+    _wait_for_rows(dialog, tree, 1)
+    controller._apply_visible_columns([0, 1, 2])
+    _wait_for_rows(dialog, tree, 1)
+
+    monkeypatch.setattr(dialog_module.filedialog, "asksaveasfilename", lambda **kwargs: str(export_path))
+    monkeypatch.setattr(dialog_module.messagebox, "showinfo", lambda title, message: seen_info.update(title=title, message=message))
+    monkeypatch.setattr(dialog_module.messagebox, "showerror", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected error dialog")))
+
+    save_button.invoke()
+
+    assert seen_info["title"] == "Save CSV As"
+    assert "original CSV was not changed" in seen_info["message"]
+    assert csv_path.read_text(encoding="utf-8") == original_text
+
+    with export_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.reader(handle))
+
+    assert rows == [
+        ["Description1", "Sessionname1", "Quantity1"],
+        ["Cuban", "Lunch + Dinner", "5"],
+    ]
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_dialog_save_as_defaults_to_favorites_csv_exports_folder(tk_root, tmp_path, monkeypatch):
+    favorites_dir = tmp_path / "Favorites"
+    desktop_dir = tmp_path / "Desktop"
+    csv_path = desktop_dir / "sample.csv"
+    csv_path.parent.mkdir(parents=True)
+    csv_path.write_text("Name,Revenue1\nPeroni,2\n", encoding="utf-8")
+
+    export_dir = favorites_dir / "csv_exports"
+    export_path = export_dir / "sample.preview.csv"
+    seen_dialog: dict[str, str] = {}
+
+    dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    save_button = _find_button(dialog, "Save As CSV")
+
+    assert save_button is not None
+
+    def fake_asksaveasfilename(**kwargs):
+        seen_dialog.update({key: str(value) for key, value in kwargs.items() if key in {"initialdir", "initialfile"}})
+        return str(export_path)
+
+    monkeypatch.setattr(dialog_module.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(dialog_module.filedialog, "asksaveasfilename", fake_asksaveasfilename)
+    monkeypatch.setattr(dialog_module.messagebox, "showinfo", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dialog_module.messagebox, "showerror", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected error dialog")))
+
+    save_button.invoke()
+
+    assert export_dir.exists()
+    assert seen_dialog["initialdir"] == str(export_dir)
+    assert seen_dialog["initialfile"] == "sample.preview.csv"
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_dialog_save_as_uses_current_numeric_sort_order(tk_root, tmp_path, monkeypatch):
+    csv_path = tmp_path / "sorted_export.csv"
+    csv_path.write_text(
+        "Name,Revenue1\nPeroni,2\nNegroni,10\nSpritz,3\n",
+        encoding="utf-8",
+    )
+    export_path = tmp_path / "sorted_export.preview.csv"
+
+    dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    controller = getattr(dialog, "_csv_preview_controller", None)
+    save_button = _find_button(dialog, "Save As CSV")
+
+    assert controller is not None
+    assert save_button is not None
+
+    controller.set_sort(1, descending=True)
+    monkeypatch.setattr(dialog_module.filedialog, "asksaveasfilename", lambda **kwargs: str(export_path))
+    monkeypatch.setattr(dialog_module.messagebox, "showinfo", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dialog_module.messagebox, "showerror", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected error dialog")))
+
+    save_button.invoke()
+
+    with export_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.reader(handle))
+
+    assert rows == [
+        ["Name", "Revenue1"],
+        ["Negroni", "10"],
+        ["Spritz", "3"],
+        ["Peroni", "2"],
+    ]
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_dialog_save_as_rejects_original_source_path(tk_root, tmp_path, monkeypatch):
+    csv_path = tmp_path / "source.csv"
+    csv_path.write_text("A,B\n1,2\n", encoding="utf-8")
+    original_text = csv_path.read_text(encoding="utf-8")
+
+    dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    save_button = _find_button(dialog, "Save As CSV")
+    seen_error: dict[str, str] = {}
+
+    assert save_button is not None
+
+    monkeypatch.setattr(dialog_module.filedialog, "asksaveasfilename", lambda **kwargs: str(csv_path))
+    monkeypatch.setattr(dialog_module.messagebox, "showerror", lambda title, message: seen_error.update(title=title, message=message))
+    monkeypatch.setattr(dialog_module.messagebox, "showinfo", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected info dialog")))
+
+    save_button.invoke()
+
+    assert seen_error["title"] == "Save CSV As"
+    assert "different destination file" in seen_error["message"]
+    assert csv_path.read_text(encoding="utf-8") == original_text
 
     dialog.destroy()

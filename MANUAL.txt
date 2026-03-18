@@ -224,10 +224,12 @@ What it does:
 - lets you search the shown rows by text
 - lets you choose which columns stay visible
 - lets you click a column header and open a compact popup with a search box and scrollable value list so you can pick one exact value to view, such as one ClassName
+- lets you sort text columns A-to-Z or Z-to-A and sort numeric columns low-to-high or high-to-low from that same popup using the real values for that column type
+- lets you save the current preview as a new CSV file based on the current filters, combined rows, and visible columns without changing the original imported file
 - can combine session rows like Lunch and Dinner into one row and total their quantity, even when some numeric export columns have names like Textbox73
 - keeps the viewer read-only
 - lets you scroll across wide files and down long files
-- for very large CSV files, only the first block of matching rows is drawn so the window stays usable
+- for very large CSV files, only the first block of matching rows is drawn so the window stays usable, and very wide files use a lower live row cap so scrolling and navigation stay smoother
 
 Use Last CSV if you want to reopen the same file again quickly.
 Use Recent CSVs if you want to reopen one of several recently viewed files.
@@ -237,11 +239,14 @@ Important notes:
 - the raw CSV viewer does not import anything into the main product table yet
 - the app remembers the last CSV path and a short recent-files list locally so you do not need to browse to it every time
 - the app also remembers which preview columns you left visible for each CSV path and restores them by column header when possible if the same file is reordered later
+- the app remembers the active preview sort for each CSV path and shows that active sort in the preview summary line
 - reopening the same unchanged CSV is faster while the app is still open
 - after the app has fully scanned a large unchanged CSV once, reopening it later is also faster because the viewer can reuse a small metadata sidecar for row counts, encoding, and late columns
-- Clear filters resets the preview back to all rows and removes the active search, combine, and column filters, but it does not change which columns you chose to keep visible
+- Clear filters resets the preview back to all rows and removes the active search, combine, column filters, and sort, but it does not change which columns you chose to keep visible
 - Columns opens a small chooser so you can hide columns you do not want to look at
-- clicking a column header opens a compact popup with a search field first, a scrollable value list for that column, and a Clear filter action for removing that exact-value filter again
+- Save As CSV creates a new CSV file from what the preview currently shows logically, and the original imported file stays unchanged
+- Save As CSV opens in your shared `Favorites\csv_exports` folder by default, and the folder is created automatically if needed
+- clicking a column header opens a compact popup with a search field first, a scrollable value list for that column, sort controls for that column type, and a Clear filter action for removing that exact-value filter again
 - Combine sessions groups rows that only differ by session and adds their quantity together when the CSV has matching session and quantity columns
 - if a CSV is very large, the preview summary tells you when it is showing preview rows first or only the first matching rows to avoid freezing the UI
 
@@ -272,6 +277,7 @@ This includes:
 - the last CSV preview path used by Last CSV
 - the recent CSV preview paths used by Recent CSVs
 - the visible preview columns remembered for each CSV path, with header-aware restore when possible for reordered CSVs
+- the active preview sort remembered for each CSV path
 
 Important:
 
