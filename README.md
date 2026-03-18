@@ -166,9 +166,11 @@ python main.py cleanup
 ## CSV Preview Architecture
 
 - `ui/csv_preview/loader.py`: loads CSV preview data, manages restart-safe preview sidecars, and can reuse persisted preview rows or persisted full-row caches for unchanged files.
+- `ui/csv_preview/helpers.py`: holds pure preview helpers for column identity, numeric detection, row summaries, and sort/query formatting so those rules stay separate from Tk widget code.
 - `ui/csv_preview/pipeline.py`: owns preview search, filtering, sort, combine-session, and cache decisions that should stay independent from Tk widgets.
 - `ui/csv_preview/popup_controller.py`: owns header popup and preview export behavior, including async distinct-value loading and exact-value filter application.
-- `ui/csv_preview/dialog.py`: owns Tk window creation, view state, background refresh orchestration, and Treeview rendering, while bridging to the extracted pipeline and popup controller layers.
+- `ui/csv_preview/refresh_controller.py`: owns metadata refresh, filtered refresh polling, loading placeholders, and header-filter prewarm orchestration for the preview table.
+- `ui/csv_preview/dialog.py`: owns Tk window creation, view state, and Treeview rendering, while bridging to the extracted helper, pipeline, refresh, and popup-controller layers.
 
 ## Testing
 
