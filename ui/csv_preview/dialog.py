@@ -13,7 +13,17 @@ from time import perf_counter
 from tkinter import filedialog, messagebox, ttk
 
 from gp_data.settings import SettingsStore
-from .loader import CsvPreviewData, iter_csv_preview_rows, load_cached_csv_row_cache, load_csv_preview, resolve_csv_preview_metadata
+from .loader import CsvPreviewData, iter_csv_preview_rows, load_csv_preview, resolve_csv_preview_metadata
+from .pipeline import (
+    MAX_INDEXED_SOURCE_MEMORY_BYTES as _PIPELINE_MAX_INDEXED_SOURCE_MEMORY_BYTES,
+    _FilteredCountUpdate,
+    _FilteredErrorUpdate,
+    _FilteredPreviewUpdate,
+    _FilteredRefreshMessage,
+    _PreviewDataPipelineBase,
+    _PreviewFilterState,
+)
+from .popup_controller import _PreviewPopupExportControllerBase
 
 
 LOGGER = logging.getLogger(__name__)
@@ -35,12 +45,8 @@ HEADER_FILTER_POPUP_WIDTH = 320
 HEADER_FILTER_POPUP_HEIGHT = 300
 HEADER_FILTER_POPUP_LIST_HEIGHT = 10
 CSV_PREVIEW_EXPORT_ENCODING = "utf-8-sig"
-MAX_INDEXED_SOURCE_MEMORY_BYTES = 192 * 1024 * 1024
-SOURCE_INDEX_FILE_SIZE_MULTIPLIER = 6
-SOURCE_INDEX_ROW_OVERHEAD_BYTES = 64
-NUMERIC_SORT_DETECTION_SAMPLE_SIZE = 2000
+MAX_INDEXED_SOURCE_MEMORY_BYTES = _PIPELINE_MAX_INDEXED_SOURCE_MEMORY_BYTES
 PREWARM_VISIBLE_HEADER_FILTER_COLUMNS = 6
-FILTERED_PREVIEW_PROGRESS_THRESHOLDS = (1, 10, 25, 100, 250)
 CSV_PREVIEW_LOADING_ROW_TEXT = "Loading..."
 
 
@@ -56,46 +62,6 @@ def _log_preview_performance(operation: str, started_at: float, **fields: object
 
 
 @dataclass(frozen=True)
-class _PreviewFilterState:
-    query: str
-    combine_sessions: bool
-    header_filter_column_index: int | None
-    header_filter_value: str | None
-    sort_column_index: int | None = None
-    sort_descending: bool = False
-
-    @property
-    def filtering_active(self) -> bool:
-        return bool(self.query or self.combine_sessions or self.header_filter_column_index is not None)
-
-    def header_filter_cache_key(self, column_index: int) -> tuple[int, str, bool]:
-        return (column_index, self.query.casefold(), self.combine_sessions)
-
-
-@dataclass(frozen=True)
-class _FilteredPreviewUpdate:
-    load_token: int
-    displayed_rows: list[tuple[str, ...]]
-    total_rows: int | None
-    replace_rows: bool = True
-
-
-@dataclass(frozen=True)
-class _FilteredCountUpdate:
-    load_token: int
-    total_rows: int
-
-
-@dataclass(frozen=True)
-class _FilteredErrorUpdate:
-    load_token: int
-    error: Exception
-
-
-_FilteredRefreshMessage = _FilteredPreviewUpdate | _FilteredCountUpdate | _FilteredErrorUpdate
-
-
-@dataclass(frozen=True)
 class _MetadataResolvedUpdate:
     resolved_data: CsvPreviewData
 
@@ -106,23 +72,6 @@ class _MetadataErrorUpdate:
 
 
 _MetadataRefreshMessage = _MetadataResolvedUpdate | _MetadataErrorUpdate
-
-
-@dataclass(frozen=True)
-class _HeaderFilterOptionsResolvedUpdate:
-    request_token: int
-    column_index: int
-    options: list[str]
-
-
-@dataclass(frozen=True)
-class _HeaderFilterOptionsErrorUpdate:
-    request_token: int
-    column_index: int
-    error: Exception
-
-
-_HeaderFilterOptionsMessage = _HeaderFilterOptionsResolvedUpdate | _HeaderFilterOptionsErrorUpdate
 
 
 @dataclass
@@ -635,70 +584,7 @@ def _sort_direction_label(*, descending: bool, numeric: bool) -> str:
     return "Z to A" if descending else "A to Z"
 
 
-class _PreviewDataPipeline:
-    def __init__(self, data: CsvPreviewData) -> None:
-        self._data = data
-        self._combined_rows_cache: list[tuple[str, ...]] | None = None
-        self._source_rows_cache: dict[bool, list[tuple[str, ...]]] = {}
-        self._source_search_text_cache: dict[bool, list[str]] = {}
-        self._header_filter_options_cache: dict[tuple[int, str, bool], list[str]] = {}
-        self._numeric_sort_columns_cache: dict[int, bool] = {}
-        self._rows_before_header_filter_cache: OrderedDict[tuple[str, bool], list[tuple[str, ...]]] = OrderedDict()
-        self._filtered_rows_cache: OrderedDict[
-            tuple[str, bool, int | None, str | None],
-            list[tuple[str, ...]],
-        ] = OrderedDict()
-        self._sorted_rows_cache: OrderedDict[
-            tuple[str, bool, int | None, str | None, int, bool],
-            list[tuple[str, ...]],
-        ] = OrderedDict()
-
-    @property
-    def data(self) -> CsvPreviewData:
-        return self._data
-
-    def update_data(self, data: CsvPreviewData) -> None:
-        self._data = data
-        self._combined_rows_cache = None
-        self._source_rows_cache.clear()
-        self._source_search_text_cache.clear()
-        self._header_filter_options_cache.clear()
-        self._numeric_sort_columns_cache.clear()
-        self._rows_before_header_filter_cache.clear()
-        self._filtered_rows_cache.clear()
-        self._sorted_rows_cache.clear()
-
-    def _remember_cached_rows(self, cache: OrderedDict, cache_key, rows, *, max_entries: int) -> list[tuple[str, ...]]:
-        cached_rows = list(rows)
-        cache[cache_key] = cached_rows
-        cache.move_to_end(cache_key)
-        while len(cache) > max_entries:
-            cache.popitem(last=False)
-        return cached_rows
-
-    def _rows_before_header_filter_cache_key(self, filter_state: _PreviewFilterState) -> tuple[str, bool]:
-        return (filter_state.query.casefold(), filter_state.combine_sessions)
-
-    def _estimated_uncombined_source_index_bytes(self) -> int | None:
-        if self._data.fully_cached:
-            return 0
-
-        row_count = self._data.row_count
-        if row_count is None or row_count <= 0:
-            return None
-
-        try:
-            file_size = self._data.path.stat().st_size
-        except OSError:
-            return None
-
-        estimated_bytes = (file_size * SOURCE_INDEX_FILE_SIZE_MULTIPLIER) + (row_count * SOURCE_INDEX_ROW_OVERHEAD_BYTES)
-        sample_rows = self._data.rows[: min(len(self._data.rows), 250)]
-        if sample_rows:
-            average_search_text_length = sum(len(_row_search_text(row)) for row in sample_rows) / len(sample_rows)
-            estimated_bytes += int(row_count * max(16.0, average_search_text_length * 2.0))
-        return estimated_bytes
-
+class _PreviewDataPipeline(_PreviewDataPipelineBase):
     def _can_index_uncombined_source_rows(self) -> bool:
         if self._data.fully_cached:
             return True
@@ -706,512 +592,49 @@ class _PreviewDataPipeline:
         estimated_bytes = self._estimated_uncombined_source_index_bytes()
         return estimated_bytes is not None and estimated_bytes <= MAX_INDEXED_SOURCE_MEMORY_BYTES
 
-    def _source_rows_snapshot(self, combine_sessions: bool) -> list[tuple[str, ...]] | None:
-        cached_rows = self._source_rows_cache.get(combine_sessions)
-        if cached_rows is not None:
-            return cached_rows
+    def _log_performance(self, operation: str, started_at: float, **fields: object) -> None:
+        _log_preview_performance(operation, started_at, **fields)
 
-        if combine_sessions:
-            combined_rows = self._combined_rows(True)
-            if combined_rows is not None:
-                self._source_rows_cache[True] = combined_rows
-            return combined_rows
+    def _row_search_text(self, row: tuple[str, ...]) -> str:
+        return _row_search_text(row)
 
-        if self._data.fully_cached:
-            self._source_rows_cache[False] = self._data.rows
-            return self._data.rows
+    def _iter_csv_preview_rows(self):
+        return iter_csv_preview_rows(self._data)
 
-        if not self._can_index_uncombined_source_rows():
-            return None
-
-        started_at = perf_counter()
-        persisted_rows = load_cached_csv_row_cache(self._data)
-        if persisted_rows is not None:
-            self._source_rows_cache[False] = persisted_rows
-            _log_preview_performance("load persisted source rows", started_at, rows=len(persisted_rows), combined=False)
-            return persisted_rows
-
-        started_at = perf_counter()
-        rows = list(iter_csv_preview_rows(self._data))
-        self._source_rows_cache[False] = rows
-        _log_preview_performance(
-            "index source rows",
-            started_at,
-            rows=len(rows),
-            combined=False,
-            estimated_bytes=self._estimated_uncombined_source_index_bytes(),
-        )
-        return rows
-
-    def _source_search_text_snapshot(self, combine_sessions: bool, source_rows: list[tuple[str, ...]]) -> list[str]:
-        cached_search_texts = self._source_search_text_cache.get(combine_sessions)
-        if cached_search_texts is not None:
-            return cached_search_texts
-
-        started_at = perf_counter()
-        search_texts = [_row_search_text(row) for row in source_rows]
-        self._source_search_text_cache[combine_sessions] = search_texts
-        _log_preview_performance("index search text", started_at, rows=len(source_rows), combined=combine_sessions)
-        return search_texts
-
-    def _filtered_rows_cache_key(self, filter_state: _PreviewFilterState) -> tuple[str, bool, int | None, str | None]:
-        normalized_value = filter_state.header_filter_value.casefold() if filter_state.header_filter_value is not None else None
-        return (
-            filter_state.query.casefold(),
-            filter_state.combine_sessions,
-            filter_state.header_filter_column_index,
-            normalized_value,
-        )
-
-    def _sorted_rows_cache_key(self, filter_state: _PreviewFilterState) -> tuple[str, bool, int | None, str | None, int, bool] | None:
-        if filter_state.sort_column_index is None:
-            return None
-        return (*self._filtered_rows_cache_key(filter_state), filter_state.sort_column_index, filter_state.sort_descending)
-
-    def rows_before_header_filter(self, filter_state: _PreviewFilterState):
-        cache_key = self._rows_before_header_filter_cache_key(filter_state)
-        cached_rows = self._rows_before_header_filter_cache.get(cache_key)
-        if cached_rows is not None:
-            self._rows_before_header_filter_cache.move_to_end(cache_key)
-            yield from cached_rows
-            return
-
-        source_rows = self._source_rows_snapshot(filter_state.combine_sessions)
-        if source_rows is not None:
-            yield from self.rows_before_header_filter_snapshot(filter_state)
-            return
-
-        yield from _iter_rows_before_header_filter(
+    def _iter_rows_before_header_filter(
+        self,
+        query: str,
+        combine_sessions: bool,
+        combined_rows: list[tuple[str, ...]] | None = None,
+    ):
+        return _iter_rows_before_header_filter(
             self._data,
-            filter_state.query,
-            filter_state.combine_sessions,
-            combined_rows=self._combined_rows(filter_state.combine_sessions),
+            query,
+            combine_sessions,
+            combined_rows=combined_rows,
         )
 
-    def rows_before_header_filter_snapshot(self, filter_state: _PreviewFilterState) -> list[tuple[str, ...]]:
-        cache_key = self._rows_before_header_filter_cache_key(filter_state)
-        cached_rows = self._rows_before_header_filter_cache.get(cache_key)
-        if cached_rows is not None:
-            self._rows_before_header_filter_cache.move_to_end(cache_key)
-            return cached_rows
+    def _sort_rows(
+        self,
+        rows: list[tuple[str, ...]],
+        column_index: int,
+        *,
+        descending: bool,
+        numeric: bool,
+    ) -> list[tuple[str, ...]]:
+        return _sort_rows(rows, column_index, descending=descending, numeric=numeric)
 
-        normalized_query = filter_state.query.strip().casefold()
-        if normalized_query:
-            incremental_source = self._rows_before_header_filter_cache.get((normalized_query[:-1], filter_state.combine_sessions))
-            if incremental_source is not None:
-                started_at = perf_counter()
-                rows = [row for row in incremental_source if _row_matches_normalized_query(row, normalized_query)]
-                _log_preview_performance(
-                    "collect query rows",
-                    started_at,
-                    rows=len(rows),
-                    combined=filter_state.combine_sessions,
-                    query_length=len(normalized_query),
-                    incremental=True,
-                )
-                return self._remember_cached_rows(self._rows_before_header_filter_cache, cache_key, rows, max_entries=4)
+    def _sorted_distinct_values(self, rows, column_index: int) -> list[str]:
+        return _sorted_distinct_values(rows, column_index)
 
-        source_rows = self._source_rows_snapshot(filter_state.combine_sessions)
-        if source_rows is not None:
-            started_at = perf_counter()
-            if not normalized_query:
-                rows = list(source_rows)
-            else:
-                search_texts = self._source_search_text_snapshot(filter_state.combine_sessions, source_rows)
-                rows = [
-                    row
-                    for row, search_text in zip(source_rows, search_texts)
-                    if normalized_query in search_text
-                ]
-            _log_preview_performance(
-                "collect query rows",
-                started_at,
-                rows=len(rows),
-                combined=filter_state.combine_sessions,
-                query_length=len(normalized_query),
-            )
-            return self._remember_cached_rows(self._rows_before_header_filter_cache, cache_key, rows, max_entries=4)
+    def _header_suggests_numeric(self, header: str) -> bool:
+        return _header_suggests_numeric(header)
 
-        started_at = perf_counter()
-        rows = list(
-            _iter_rows_before_header_filter(
-                self._data,
-                filter_state.query,
-                filter_state.combine_sessions,
-                combined_rows=self._combined_rows(filter_state.combine_sessions),
-            )
-        )
-        _log_preview_performance(
-            "collect query rows",
-            started_at,
-            rows=len(rows),
-            combined=filter_state.combine_sessions,
-            query_length=len(normalized_query),
-        )
-        return self._remember_cached_rows(self._rows_before_header_filter_cache, cache_key, rows, max_entries=4)
+    def _is_identifier_column(self, header: str) -> bool:
+        return _is_identifier_column(header)
 
-    def header_filter_options(self, filter_state: _PreviewFilterState, column_index: int) -> list[str]:
-        cache_key = filter_state.header_filter_cache_key(column_index)
-        options = self._header_filter_options_cache.get(cache_key)
-        if options is None:
-            options = self.resolve_header_filter_options(filter_state, column_index)
-        return options
-
-    def cached_header_filter_options(self, filter_state: _PreviewFilterState, column_index: int) -> list[str] | None:
-        cache_key = filter_state.header_filter_cache_key(column_index)
-        options = self._header_filter_options_cache.get(cache_key)
-        if options is None:
-            return None
-        return list(options)
-
-    def resolve_header_filter_options(self, filter_state: _PreviewFilterState, column_index: int, *, should_cancel=None) -> list[str]:
-        cache_key = filter_state.header_filter_cache_key(column_index)
-        options = self._header_filter_options_cache.get(cache_key)
-        if options is not None:
-            return list(options)
-
-        started_at = perf_counter()
-        if not filter_state.query.strip() and not filter_state.combine_sessions:
-            row_source = self._data.rows if self._data.fully_cached else iter_csv_preview_rows(self._data)
-            distinct_values: set[str] = set()
-            for row in row_source:
-                if should_cancel is not None and should_cancel():
-                    return []
-                distinct_values.add(row[column_index])
-            options = sorted(distinct_values, key=lambda value: value.casefold())
-        else:
-            started_at = perf_counter()
-            options = _sorted_distinct_values(self.rows_before_header_filter_snapshot(filter_state), column_index)
-        self._header_filter_options_cache[cache_key] = options
-        _log_preview_performance(
-            "collect distinct values",
-            started_at,
-            column_index=column_index,
-            values=len(options),
-            query_length=len(filter_state.query.strip()),
-            combined=filter_state.combine_sessions,
-        )
-        return list(options)
-
-    def prewarm_header_filter_columns(self, filter_state: _PreviewFilterState, column_indices: list[int], *, should_cancel=None) -> None:
-        started_at = perf_counter()
-        unique_indices: list[int] = []
-        seen_indices: set[int] = set()
-        for raw_index in column_indices:
-            try:
-                column_index = int(raw_index)
-            except (TypeError, ValueError):
-                continue
-            if column_index < 0 or column_index >= self._data.column_count or column_index in seen_indices:
-                continue
-            unique_indices.append(column_index)
-            seen_indices.add(column_index)
-
-        for column_index in unique_indices:
-            if should_cancel is not None and should_cancel():
-                return
-            self.resolve_header_filter_options(filter_state, column_index, should_cancel=should_cancel)
-            if should_cancel is not None and should_cancel():
-                return
-            self.is_numeric_sort_column(column_index, should_cancel=should_cancel)
-
-        _log_preview_performance(
-            "prewarm header filters",
-            started_at,
-            columns=len(unique_indices),
-            query_length=len(filter_state.query.strip()),
-            combined=filter_state.combine_sessions,
-        )
-
-    def iter_rows(self, filter_state: _PreviewFilterState):
-        if filter_state.sort_column_index is None:
-            yield from self.iter_filtered_rows(filter_state)
-            return
-        yield from self.iter_sorted_rows(filter_state)
-
-    def iter_filtered_rows(self, filter_state: _PreviewFilterState):
-        yield from self._iter_rows_after_header_filter(filter_state)
-
-    def iter_sorted_rows(self, filter_state: _PreviewFilterState):
-        yield from self.sorted_rows_snapshot(filter_state)
-
-    def filtered_rows_snapshot(self, filter_state: _PreviewFilterState) -> list[tuple[str, ...]]:
-        cache_key = self._filtered_rows_cache_key(filter_state)
-        cached_rows = self._filtered_rows_cache.get(cache_key)
-        if cached_rows is not None:
-            self._filtered_rows_cache.move_to_end(cache_key)
-            return cached_rows
-
-        started_at = perf_counter()
-        rows = list(self._iter_rows_after_header_filter(filter_state))
-        _log_preview_performance(
-            "collect filtered rows",
-            started_at,
-            rows=len(rows),
-            query_length=len(filter_state.query.strip()),
-            header_filter=filter_state.header_filter_column_index is not None,
-        )
-        return self._remember_cached_rows(self._filtered_rows_cache, cache_key, rows, max_entries=4)
-
-    def sorted_rows_snapshot(self, filter_state: _PreviewFilterState) -> list[tuple[str, ...]]:
-        if filter_state.sort_column_index is None:
-            return self.filtered_rows_snapshot(filter_state)
-
-        cache_key = self._sorted_rows_cache_key(filter_state)
-        if cache_key is not None:
-            cached_rows = self._sorted_rows_cache.get(cache_key)
-            if cached_rows is not None:
-                self._sorted_rows_cache.move_to_end(cache_key)
-                return cached_rows
-
-        started_at = perf_counter()
-        sorted_rows = _sort_rows(
-            list(self.filtered_rows_snapshot(filter_state)),
-            filter_state.sort_column_index,
-            descending=filter_state.sort_descending,
-            numeric=self.is_numeric_sort_column(filter_state.sort_column_index),
-        )
-        _log_preview_performance(
-            "sort rows",
-            started_at,
-            rows=len(sorted_rows),
-            column_index=filter_state.sort_column_index,
-            descending=filter_state.sort_descending,
-        )
-        if cache_key is None:
-            return sorted_rows
-        return self._remember_cached_rows(self._sorted_rows_cache, cache_key, sorted_rows, max_entries=4)
-
-    def is_numeric_sort_column(self, column_index: int, *, should_cancel=None) -> bool:
-        cached_value = self._numeric_sort_columns_cache.get(column_index)
-        if cached_value is not None:
-            return cached_value
-
-        if column_index < 0 or column_index >= self._data.column_count:
-            return False
-
-        started_at = perf_counter()
-        header = self._data.headers[column_index]
-        if _is_identifier_column(header):
-            result = False
-        elif _header_suggests_numeric(header):
-            result = True
-        else:
-            non_empty_values = 0
-            numeric_values = 0
-            row_source = self._data.rows if self._data.fully_cached else iter_csv_preview_rows(self._data)
-            for row in row_source:
-                if should_cancel is not None and should_cancel():
-                    return False
-                value = row[column_index].strip()
-                if not value:
-                    continue
-                non_empty_values += 1
-                if _parse_decimal(value) is not None:
-                    numeric_values += 1
-                if non_empty_values >= NUMERIC_SORT_DETECTION_SAMPLE_SIZE:
-                    break
-
-            mostly_numeric = non_empty_values and (numeric_values / non_empty_values) >= 0.98
-            small_sample_with_single_outlier = non_empty_values <= 5 and numeric_values >= max(2, non_empty_values - 1)
-            result = bool(mostly_numeric or small_sample_with_single_outlier)
-
-        self._numeric_sort_columns_cache[column_index] = result
-        _log_preview_performance(
-            "detect numeric sort column",
-            started_at,
-            column_index=column_index,
-            result=result,
-        )
-        return result
-
-    def _iter_rows_after_header_filter(self, filter_state: _PreviewFilterState):
-        normalized_value = filter_state.header_filter_value.casefold() if filter_state.header_filter_value is not None else None
-        for row in self.rows_before_header_filter(filter_state):
-            if (
-                filter_state.header_filter_column_index is not None
-                and normalized_value is not None
-                and row[filter_state.header_filter_column_index].casefold() != normalized_value
-            ):
-                continue
-            yield row
-
-    def iter_filtered_refresh_messages(self, load_token: int, filter_state: _PreviewFilterState, *, rendered_row_limit: int, should_cancel=None):
-        if filter_state.sort_column_index is not None:
-            yield from self._iter_sorted_refresh_messages(
-                load_token,
-                filter_state,
-                rendered_row_limit=rendered_row_limit,
-                should_cancel=should_cancel,
-            )
-            return
-
-        row_source = (
-            self.iter_filtered_rows(filter_state)
-        )
-        displayed_rows: list[tuple[str, ...]] = []
-        matched_rows = 0
-        preview_sent = False
-        emitted_preview_sizes: set[int] = set()
-
-        for row in row_source:
-            if should_cancel is not None and should_cancel():
-                return
-            matched_rows += 1
-            if len(displayed_rows) < rendered_row_limit:
-                displayed_rows.append(row)
-                if len(displayed_rows) in FILTERED_PREVIEW_PROGRESS_THRESHOLDS and len(displayed_rows) not in emitted_preview_sizes:
-                    yield _FilteredPreviewUpdate(load_token=load_token, displayed_rows=list(displayed_rows), total_rows=None)
-                    emitted_preview_sizes.add(len(displayed_rows))
-                continue
-            if not preview_sent:
-                yield _FilteredPreviewUpdate(load_token=load_token, displayed_rows=list(displayed_rows), total_rows=None)
-                preview_sent = True
-
-        if preview_sent:
-            yield _FilteredCountUpdate(load_token=load_token, total_rows=matched_rows)
-            return
-
-        if matched_rows and matched_rows in emitted_preview_sizes:
-            yield _FilteredCountUpdate(load_token=load_token, total_rows=matched_rows)
-            return
-
-        yield _FilteredPreviewUpdate(load_token=load_token, displayed_rows=displayed_rows, total_rows=matched_rows)
-
-    def _iter_sorted_refresh_messages(self, load_token: int, filter_state: _PreviewFilterState, *, rendered_row_limit: int, should_cancel=None):
-        if filter_state.sort_column_index is None:
-            yield _FilteredPreviewUpdate(load_token=load_token, displayed_rows=[], total_rows=0)
-            return
-
-        cache_key = self._sorted_rows_cache_key(filter_state)
-        if cache_key is not None:
-            cached_sorted_rows = self._sorted_rows_cache.get(cache_key)
-            if cached_sorted_rows is not None:
-                self._sorted_rows_cache.move_to_end(cache_key)
-                yield _FilteredPreviewUpdate(
-                    load_token=load_token,
-                    displayed_rows=cached_sorted_rows[:rendered_row_limit],
-                    total_rows=len(cached_sorted_rows),
-                )
-                return
-
-        numeric_sort = self.is_numeric_sort_column(filter_state.sort_column_index, should_cancel=should_cancel)
-        if should_cancel is not None and should_cancel():
-            return
-        filtered_cache_key = self._filtered_rows_cache_key(filter_state)
-        cached_filtered_rows = self._filtered_rows_cache.get(filtered_cache_key)
-        if cached_filtered_rows is not None:
-            self._filtered_rows_cache.move_to_end(filtered_cache_key)
-            if len(cached_filtered_rows) > rendered_row_limit:
-                preview_started_at = perf_counter()
-                yield _FilteredPreviewUpdate(
-                    load_token=load_token,
-                    displayed_rows=_sort_rows(
-                        list(cached_filtered_rows[:rendered_row_limit]),
-                        filter_state.sort_column_index,
-                        descending=filter_state.sort_descending,
-                        numeric=numeric_sort,
-                    ),
-                    total_rows=None,
-                )
-                _log_preview_performance(
-                    "sort preview rows",
-                    preview_started_at,
-                    rows=rendered_row_limit,
-                    cached=True,
-                    column_index=filter_state.sort_column_index,
-                )
-            sort_started_at = perf_counter()
-            sorted_rows = _sort_rows(
-                list(cached_filtered_rows),
-                filter_state.sort_column_index,
-                descending=filter_state.sort_descending,
-                numeric=numeric_sort,
-            )
-            _log_preview_performance(
-                "sort rows",
-                sort_started_at,
-                rows=len(sorted_rows),
-                column_index=filter_state.sort_column_index,
-                descending=filter_state.sort_descending,
-                cached=True,
-            )
-            if cache_key is not None:
-                self._remember_cached_rows(self._sorted_rows_cache, cache_key, sorted_rows, max_entries=4)
-            yield _FilteredPreviewUpdate(
-                load_token=load_token,
-                displayed_rows=sorted_rows[:rendered_row_limit],
-                total_rows=len(sorted_rows),
-            )
-            return
-
-        preview_rows: list[tuple[str, ...]] = []
-        filtered_rows: list[tuple[str, ...]] = []
-        preview_sent = False
-        collect_started_at = perf_counter()
-        for row in self.iter_filtered_rows(filter_state):
-            if should_cancel is not None and should_cancel():
-                return
-            filtered_rows.append(row)
-            if len(preview_rows) < rendered_row_limit:
-                preview_rows.append(row)
-                continue
-            if not preview_sent:
-                preview_started_at = perf_counter()
-                yield _FilteredPreviewUpdate(
-                    load_token=load_token,
-                    displayed_rows=_sort_rows(
-                        list(preview_rows),
-                        filter_state.sort_column_index,
-                        descending=filter_state.sort_descending,
-                        numeric=numeric_sort,
-                    ),
-                    total_rows=None,
-                )
-                _log_preview_performance(
-                    "sort preview rows",
-                    preview_started_at,
-                    rows=len(preview_rows),
-                    cached=False,
-                    column_index=filter_state.sort_column_index,
-                )
-                preview_sent = True
-        _log_preview_performance(
-            "collect filtered rows",
-            collect_started_at,
-            rows=len(filtered_rows),
-            query_length=len(filter_state.query.strip()),
-            header_filter=filter_state.header_filter_column_index is not None,
-        )
-
-        cached_filtered_rows = self._remember_cached_rows(
-            self._filtered_rows_cache,
-            filtered_cache_key,
-            filtered_rows,
-            max_entries=4,
-        )
-        sort_started_at = perf_counter()
-        sorted_rows = _sort_rows(
-            list(cached_filtered_rows),
-            filter_state.sort_column_index,
-            descending=filter_state.sort_descending,
-            numeric=numeric_sort,
-        )
-        _log_preview_performance(
-            "sort rows",
-            sort_started_at,
-            rows=len(sorted_rows),
-            column_index=filter_state.sort_column_index,
-            descending=filter_state.sort_descending,
-            cached=False,
-        )
-        if cache_key is not None:
-            self._remember_cached_rows(self._sorted_rows_cache, cache_key, sorted_rows, max_entries=4)
-        yield _FilteredPreviewUpdate(
-            load_token=load_token,
-            displayed_rows=sorted_rows[:rendered_row_limit],
-            total_rows=len(sorted_rows),
-        )
+    def _parse_decimal(self, value: str) -> Decimal | None:
+        return _parse_decimal(value)
 
     def resolve_metadata_refresh_message(self) -> _MetadataRefreshMessage:
         try:
@@ -1260,323 +683,36 @@ def _open_column_visibility_dialog(parent: tk.Misc, headers: list[str], selected
     return dialog
 
 
-class _PreviewPopupExportController:
-    def __init__(self, owner: _PreviewTableController) -> None:
-        self._owner = owner
-        self._header_filter_popup_value = tk.StringVar(value="")
-        self._header_filter_popup: tk.Toplevel | None = None
-        self._header_filter_popup_column_index: int | None = None
-        self._header_filter_popup_search_var: tk.StringVar | None = None
-        self._header_filter_popup_listbox: tk.Listbox | None = None
-        self._header_filter_popup_empty_var: tk.StringVar | None = None
-        self._header_filter_popup_options: list[str] = []
-        self._header_filter_popup_filtered_options: list[str] = []
-        self._header_filter_popup_loading = False
-        self._header_filter_options_request_token = 0
-        self._header_filter_options_queue: queue.Queue[_HeaderFilterOptionsMessage] = queue.Queue()
-        self._header_filter_options_polling = False
+class _PreviewPopupExportController(_PreviewPopupExportControllerBase):
+    def _popup_width(self) -> int:
+        return HEADER_FILTER_POPUP_WIDTH
 
-    @property
-    def popup(self) -> tk.Toplevel | None:
-        return self._header_filter_popup
+    def _popup_height(self) -> int:
+        return HEADER_FILTER_POPUP_HEIGHT
 
-    def export_current_view_as_csv(self) -> None:
-        data = self._owner._data
-        view_state = self._owner._view_state
-        export_dir = _prepare_csv_preview_export_directory(data.path)
-        suggested_path = export_dir / _default_csv_preview_export_path(data.path).name
-        raw_path = filedialog.asksaveasfilename(
-            title="Save CSV As",
-            initialdir=str(export_dir),
-            initialfile=suggested_path.name,
-            defaultextension=".csv",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
-        )
-        if not raw_path:
-            return
+    def _popup_list_height(self) -> int:
+        return HEADER_FILTER_POPUP_LIST_HEIGHT
 
-        destination = Path(raw_path)
-        if _paths_match(destination, data.path):
-            messagebox.showerror(
-                "Save CSV As",
-                "Choose a different destination file. The original CSV will not be modified.",
-            )
-            return
+    def _prepare_export_directory(self, source_path: Path) -> Path:
+        return _prepare_csv_preview_export_directory(source_path)
 
-        headers = [data.headers[index] for index in view_state.visible_column_indices]
-        rows = (
-            tuple(row[index] for index in view_state.visible_column_indices)
-            for row in self._owner._pipeline.iter_rows(self._owner._current_filter_state())
-        )
-        try:
-            _write_csv_preview_export(destination, headers, rows)
-        except OSError as exc:
-            messagebox.showerror("Save CSV As failed", f"Could not create the new CSV file.\n\nReason: {exc}")
-            return
+    def _default_export_path(self, source_path: Path) -> Path:
+        return _default_csv_preview_export_path(source_path)
 
-        messagebox.showinfo(
-            "Save CSV As",
-            f"Saved preview to {destination}.\n\nThe original CSV was not changed.",
-        )
+    def _paths_match(self, first: Path, second: Path) -> bool:
+        return _paths_match(first, second)
 
-    def show_header_filter_popup(self, column_index: int, x_root: int, y_root: int) -> None:
-        filter_state = self._owner._current_filter_state()
-        options = self._owner._pipeline.cached_header_filter_options(filter_state, column_index)
-        self.destroy_header_filter_popup()
+    def _write_export(self, dest_path: Path, headers: list[str], rows) -> None:
+        _write_csv_preview_export(dest_path, headers, rows)
 
-        popup = tk.Toplevel(self._owner._win)
-        popup.title(_filter_label(self._owner._data.headers[column_index], column_index))
-        popup.transient(self._owner._win)
-        popup.resizable(False, False)
+    def _filter_label(self, header: str, index: int) -> str:
+        return _filter_label(header, index)
 
-        screen_width = popup.winfo_screenwidth()
-        screen_height = popup.winfo_screenheight()
-        left = max(0, min(x_root, screen_width - HEADER_FILTER_POPUP_WIDTH))
-        top = max(0, min(y_root, screen_height - HEADER_FILTER_POPUP_HEIGHT))
-        popup.geometry(f"{HEADER_FILTER_POPUP_WIDTH}x{HEADER_FILTER_POPUP_HEIGHT}+{left}+{top}")
+    def _compact_filter_popup_label(self, value: str) -> str:
+        return _compact_filter_popup_label(value)
 
-        self._header_filter_popup = popup
-        self._header_filter_popup_column_index = column_index
-        self._header_filter_popup_options = list(options or [])
-        self._header_filter_popup_filtered_options = []
-        self._header_filter_popup_search_var = tk.StringVar(value="")
-        self._header_filter_popup_empty_var = tk.StringVar(value="")
-        self._header_filter_popup_loading = options is None
-
-        container = ttk.Frame(popup, padding=8)
-        container.pack(fill="both", expand=True)
-        container.columnconfigure(0, weight=1)
-        container.rowconfigure(2, weight=1)
-
-        ttk.Label(container, text="Search").grid(row=0, column=0, sticky="w")
-        search_entry = ttk.Entry(container, textvariable=self._header_filter_popup_search_var, width=28)
-        search_entry.grid(row=1, column=0, sticky="ew", pady=(4, 8))
-
-        list_frame = ttk.Frame(container)
-        list_frame.grid(row=2, column=0, sticky="nsew")
-        list_frame.columnconfigure(0, weight=1)
-        list_frame.rowconfigure(0, weight=1)
-
-        listbox = tk.Listbox(list_frame, exportselection=False, height=HEADER_FILTER_POPUP_LIST_HEIGHT)
-        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=listbox.yview)
-        listbox.configure(yscrollcommand=scrollbar.set)
-        listbox.grid(row=0, column=0, sticky="nsew")
-        scrollbar.grid(row=0, column=1, sticky="ns")
-
-        self._header_filter_popup_listbox = listbox
-
-        empty_label = ttk.Label(container, textvariable=self._header_filter_popup_empty_var, anchor="w")
-        empty_label.grid(row=3, column=0, sticky="ew", pady=(6, 0))
-
-        numeric_sort = self._owner._pipeline.is_numeric_sort_column(column_index)
-        ascending_label = "Sort low to high" if numeric_sort else "Sort A to Z"
-        descending_label = "Sort high to low" if numeric_sort else "Sort Z to A"
-
-        sort_controls = ttk.Frame(container)
-        sort_controls.grid(row=4, column=0, sticky="ew", pady=(8, 0))
-        ttk.Button(
-            sort_controls,
-            text=ascending_label,
-            command=lambda: self._owner.set_sort(column_index, descending=False),
-        ).pack(side="left")
-        ttk.Button(
-            sort_controls,
-            text=descending_label,
-            command=lambda: self._owner.set_sort(column_index, descending=True),
-        ).pack(side="left", padx=(6, 0))
-        ttk.Button(sort_controls, text="Clear sort", command=self._owner.clear_sort).pack(side="right")
-
-        button_row = ttk.Frame(container)
-        button_row.grid(row=5, column=0, sticky="ew", pady=(8, 0))
-        ttk.Button(button_row, text="Clear filter", command=self._clear_header_filter_popup_filter).pack(side="right")
-        ttk.Button(button_row, text="Apply", command=self._apply_selected_header_filter_option).pack(side="right", padx=(0, 6))
-
-        if self._owner._view_state.header_filter_column_index != column_index:
-            self._header_filter_popup_value.set("")
-
-        popup.bind("<Destroy>", self._on_header_filter_popup_destroy, add="+")
-        popup.bind("<Escape>", lambda _event: self.destroy_header_filter_popup(), add="+")
-        widgets_for_focus = [popup, container, search_entry, listbox, empty_label, button_row, sort_controls]
-        for widget in widgets_for_focus:
-            widget.bind("<FocusOut>", self._schedule_header_filter_popup_focus_check, add="+")
-
-        listbox.bind("<Double-Button-1>", self._on_header_filter_popup_listbox_activate, add="+")
-        listbox.bind("<Return>", self._on_header_filter_popup_listbox_activate, add="+")
-        search_entry.bind("<Return>", self._on_header_filter_popup_search_submit, add="+")
-
-        self._header_filter_popup_search_var.trace_add("write", self._refresh_header_filter_popup_options)
-        self._refresh_header_filter_popup_options()
-        if options is None:
-            self._start_header_filter_options_refresh(column_index, filter_state)
-        search_entry.focus_set()
-
-    def _start_header_filter_options_refresh(self, column_index: int, filter_state: _PreviewFilterState) -> None:
-        self._header_filter_options_request_token += 1
-        request_token = self._header_filter_options_request_token
-        worker = threading.Thread(
-            target=self._load_header_filter_options_in_background,
-            args=(request_token, column_index, filter_state),
-            daemon=True,
-        )
-        worker.start()
-        if not self._header_filter_options_polling:
-            self._header_filter_options_polling = True
-            self._owner._win.after(25, self._poll_header_filter_options)
-
-    def _load_header_filter_options_in_background(
-        self,
-        request_token: int,
-        column_index: int,
-        filter_state: _PreviewFilterState,
-    ) -> None:
-        try:
-            options = self._owner._pipeline.resolve_header_filter_options(filter_state, column_index)
-            self._header_filter_options_queue.put(
-                _HeaderFilterOptionsResolvedUpdate(
-                    request_token=request_token,
-                    column_index=column_index,
-                    options=options,
-                )
-            )
-        except Exception as exc:
-            self._header_filter_options_queue.put(
-                _HeaderFilterOptionsErrorUpdate(
-                    request_token=request_token,
-                    column_index=column_index,
-                    error=exc,
-                )
-            )
-
-    def _poll_header_filter_options(self) -> None:
-        if not self._owner._win.winfo_exists():
-            return
-
-        saw_pending = False
-        while True:
-            try:
-                message = self._header_filter_options_queue.get_nowait()
-            except queue.Empty:
-                break
-
-            if message.request_token != self._header_filter_options_request_token:
-                continue
-            saw_pending = True
-            popup = self._header_filter_popup
-            if popup is None or not popup.winfo_exists() or self._header_filter_popup_column_index != message.column_index:
-                continue
-
-            self._header_filter_popup_loading = False
-            if isinstance(message, _HeaderFilterOptionsErrorUpdate):
-                if self._header_filter_popup_empty_var is not None:
-                    self._header_filter_popup_empty_var.set(f"Could not load values: {message.error}")
-                continue
-
-            self._header_filter_popup_options = list(message.options)
-            self._refresh_header_filter_popup_options()
-
-        if self._header_filter_popup_loading or not self._header_filter_options_queue.empty():
-            self._owner._win.after(25, self._poll_header_filter_options)
-            return
-        self._header_filter_options_polling = False
-
-    def _refresh_header_filter_popup_options(self, *_args) -> None:
-        listbox = self._header_filter_popup_listbox
-        search_var = self._header_filter_popup_search_var
-        empty_var = self._header_filter_popup_empty_var
-        if listbox is None or search_var is None or empty_var is None:
-            return
-
-        if self._header_filter_popup_loading:
-            self._header_filter_popup_filtered_options = []
-            listbox.delete(0, "end")
-            empty_var.set("Loading values...")
-            return
-
-        query = search_var.get().strip().casefold()
-        if query:
-            filtered_options = [option for option in self._header_filter_popup_options if query in option.casefold()]
-        else:
-            filtered_options = list(self._header_filter_popup_options)
-
-        self._header_filter_popup_filtered_options = filtered_options
-        listbox.delete(0, "end")
-        for option in filtered_options:
-            listbox.insert("end", "(blank)" if not option else _compact_filter_popup_label(option))
-
-        selected_value = self._header_filter_popup_value.get()
-        if selected_value and selected_value in filtered_options:
-            selected_index = filtered_options.index(selected_value)
-            listbox.selection_set(selected_index)
-            listbox.see(selected_index)
-
-        if filtered_options:
-            empty_var.set("")
-        else:
-            empty_var.set("No matching values" if query else "No values available")
-
-    def _apply_selected_header_filter_option(self) -> None:
-        column_index = self._header_filter_popup_column_index
-        listbox = self._header_filter_popup_listbox
-        if column_index is None or listbox is None:
-            return
-        selection = listbox.curselection()
-        if not selection:
-            return
-        selected_index = selection[0]
-        if selected_index < 0 or selected_index >= len(self._header_filter_popup_filtered_options):
-            return
-        self._owner.set_header_filter(column_index, self._header_filter_popup_filtered_options[selected_index])
-        self.destroy_header_filter_popup()
-
-    def _clear_header_filter_popup_filter(self) -> None:
-        self._owner.clear_header_filter()
-
-    def _on_header_filter_popup_listbox_activate(self, _event) -> str:
-        self._apply_selected_header_filter_option()
-        return "break"
-
-    def _on_header_filter_popup_search_submit(self, _event) -> str:
-        listbox = self._header_filter_popup_listbox
-        if listbox is None:
-            return "break"
-        if not listbox.curselection() and self._header_filter_popup_filtered_options:
-            listbox.selection_set(0)
-            listbox.see(0)
-        self._apply_selected_header_filter_option()
-        return "break"
-
-    def _schedule_header_filter_popup_focus_check(self, _event=None) -> None:
-        if self._header_filter_popup is None:
-            return
-        self._owner._win.after_idle(self._close_header_filter_popup_if_focus_lost)
-
-    def _close_header_filter_popup_if_focus_lost(self) -> None:
-        popup = self._header_filter_popup
-        if popup is None or not popup.winfo_exists():
-            return
-        focused_widget = popup.focus_get()
-        if _widget_descends_from(focused_widget, popup):
-            return
-        self.destroy_header_filter_popup()
-
-    def _on_header_filter_popup_destroy(self, event) -> None:
-        if event.widget != self._header_filter_popup:
-            return
-        self._header_filter_options_request_token += 1
-        self._header_filter_popup = None
-        self._header_filter_popup_column_index = None
-        self._header_filter_popup_search_var = None
-        self._header_filter_popup_listbox = None
-        self._header_filter_popup_empty_var = None
-        self._header_filter_popup_options = []
-        self._header_filter_popup_filtered_options = []
-        self._header_filter_popup_loading = False
-
-    def destroy_header_filter_popup(self) -> None:
-        popup = self._header_filter_popup
-        if popup is None or not popup.winfo_exists():
-            return
-        popup.destroy()
+    def _widget_descends_from(self, widget: tk.Misc | None, ancestor: tk.Misc | None) -> bool:
+        return _widget_descends_from(widget, ancestor)
 
 
 class _PreviewTableController:

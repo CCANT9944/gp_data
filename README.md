@@ -163,6 +163,13 @@ python main.py cleanup
 - `MANUAL.txt`: plain-language user guide
 - `BUG_HUNTING.md`: manual and test checklist for finding regressions
 
+## CSV Preview Architecture
+
+- `ui/csv_preview/loader.py`: loads CSV preview data, manages restart-safe preview sidecars, and can reuse persisted preview rows or persisted full-row caches for unchanged files.
+- `ui/csv_preview/pipeline.py`: owns preview search, filtering, sort, combine-session, and cache decisions that should stay independent from Tk widgets.
+- `ui/csv_preview/popup_controller.py`: owns header popup and preview export behavior, including async distinct-value loading and exact-value filter application.
+- `ui/csv_preview/dialog.py`: owns Tk window creation, view state, background refresh orchestration, and Treeview rendering, while bridging to the extracted pipeline and popup controller layers.
+
 ## Testing
 
 Install dependencies and run:
