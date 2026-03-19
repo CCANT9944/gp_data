@@ -6,6 +6,7 @@ import json
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeAlias
 
 
 FALLBACK_ENCODINGS = ("utf-8-sig", "utf-8", "cp1252", "latin-1")
@@ -18,8 +19,8 @@ PERSISTED_FULL_ROW_CACHE_MAX_FILE_BYTES = 32 * 1024 * 1024
 PREVIEW_CACHE_MAX_ENTRIES = 32
 _PREVIEW_CACHE: OrderedDict[tuple[str, int, int, bool], "CsvPreviewData"] = OrderedDict()
 
-type CacheKey = tuple[str, int, int]
-type PreviewCacheKey = tuple[str, int, int, bool]
+CacheKey: TypeAlias = tuple[str, int, int]
+PreviewCacheKey: TypeAlias = tuple[str, int, int, bool]
 
 
 class CsvPreviewError(RuntimeError):
