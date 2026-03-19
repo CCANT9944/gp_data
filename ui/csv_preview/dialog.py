@@ -11,6 +11,7 @@ from time import perf_counter
 from tkinter import filedialog, messagebox, ttk
 
 from gp_data.settings import SettingsStore
+from .analysis_dialog import open_csv_preview_analysis_dialog
 from .helpers import (
     HEADER_FILTER_POPUP_LABEL_MAX_LENGTH,
     _column_identity_keys,
@@ -561,6 +562,24 @@ class _PreviewTableController(_PreviewRefreshControllerBase):
     def export_current_view_as_csv(self) -> None:
         self._popup_export_controller.export_current_view_as_csv()
 
+    def open_analysis_dialog(self) -> None:
+        filter_state = self._current_filter_state()
+        visible_column_indices = list(self._view_state.visible_column_indices)
+        numeric_column_indices = {
+            index
+            for index in visible_column_indices
+            if self._pipeline.is_numeric_sort_column(index)
+        }
+        open_csv_preview_analysis_dialog(
+            self._win,
+            self._data,
+            self._pipeline.filtered_rows_snapshot(filter_state),
+            visible_column_indices,
+            numeric_column_indices,
+            filtering_active=filter_state.filtering_active,
+            combine_sessions=filter_state.combine_sessions,
+        )
+
     def show_header_filter_popup(self, column_index: int, x_root: int, y_root: int) -> None:
         self._popup_export_controller.show_header_filter_popup(column_index, x_root, y_root)
 
@@ -783,6 +802,7 @@ def create_csv_preview_dialog(
 
     ttk.Button(filter_row, text="Columns", command=controller.open_column_dialog).pack(side="left", padx=(0, 12))
     ttk.Button(filter_row, text="Save As CSV", command=controller.export_current_view_as_csv).pack(side="left", padx=(0, 12))
+    ttk.Button(filter_row, text="Analyze", command=controller.open_analysis_dialog).pack(side="left", padx=(0, 12))
     ttk.Button(filter_row, text="Clear filters", command=_clear_filters).pack(side="left")
 
     button_row = ttk.Frame(container)

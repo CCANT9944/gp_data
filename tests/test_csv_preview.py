@@ -6,6 +6,7 @@ from tkinter import ttk
 import pytest
 
 from gp_data import settings
+import gp_data.ui.csv_preview.analysis_dialog as analysis_dialog_module
 import gp_data.ui.csv_preview.dialog as dialog_module
 import gp_data.ui.csv_preview.loader as loader_module
 from gp_data.ui.csv_preview import CsvPreviewError, load_csv_preview, open_csv_preview_dialog
@@ -67,6 +68,14 @@ def _find_label_with_text(root: tk.Misc, expected_text: str):
         if found is not None:
             return found
     return None
+
+
+def _canvas_texts(canvas: tk.Canvas) -> list[str]:
+    texts: list[str] = []
+    for item_id in canvas.find_all():
+        if canvas.type(item_id) == "text":
+            texts.append(str(canvas.itemcget(item_id, "text")))
+    return texts
 
 
 def _wait_for_rows(window: tk.Misc, tree: ttk.Treeview, expected_count: int) -> None:
@@ -174,6 +183,261 @@ def test_open_csv_preview_dialog_shows_all_columns_and_rows(tk_root, tmp_path):
     assert len(tree.get_children()) == 3
     assert tree.item(tree.get_children()[0])["values"][0] == "row1_col1"
     assert tree.item(tree.get_children()[-1])["values"][-1] == "row3_col20"
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_dialog_opens_analysis_from_current_filtered_rows(tk_root, tmp_path, monkeypatch):
+    csv_path = tmp_path / "analysis_filter.csv"
+    csv_path.write_text(
+        "Name,Category,Quantity\nNegroni,Cocktail,2\nAperol Spritz,Spritz,4\nBeer,Beer,6\n",
+        encoding="utf-8",
+    )
+
+    seen: dict[str, object] = {}
+
+    def fake_open_analysis_dialog(parent, data, filtered_rows, visible_column_indices, numeric_column_indices, *, filtering_active, combine_sessions):
+        seen.update(
+            parent=parent,
+            data=data,
+            filtered_rows=list(filtered_rows),
+            visible_column_indices=list(visible_column_indices),
+            numeric_column_indices=set(numeric_column_indices),
+            filtering_active=filtering_active,
+            combine_sessions=combine_sessions,
+        )
+        return parent
+
+    monkeypatch.setattr(dialog_module, "open_csv_preview_analysis_dialog", fake_open_analysis_dialog)
+
+    dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    query_entry = _find_descendant(dialog, ttk.Entry)
+    analyze_button = _find_button(dialog, "Analyze")
+    controller = getattr(dialog, "_csv_preview_controller", None)
+
+    assert query_entry is not None
+    assert analyze_button is not None
+    assert controller is not None
+
+    query_entry.insert(0, "spritz")
+    controller.trigger_refresh_now()
+    analyze_button.invoke()
+
+    assert seen["filtering_active"] is True
+    assert seen["combine_sessions"] is False
+    assert seen["filtered_rows"] == [("Aperol Spritz", "Spritz", "4")]
+    assert seen["visible_column_indices"] == [0, 1, 2]
+    assert seen["numeric_column_indices"] == {2}
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_dialog_analysis_respects_combined_rows_and_visible_columns(tk_root, tmp_path, monkeypatch):
+    csv_path = tmp_path / "analysis_combine.csv"
+    csv_path.write_text(
+        "Description1,Sessionname1,Quantity1,Notes\nTarget,Lunch,2,a\nTarget,Dinner,3,a\n",
+        encoding="utf-8",
+    )
+
+    seen: dict[str, object] = {}
+
+    def fake_open_analysis_dialog(parent, data, filtered_rows, visible_column_indices, numeric_column_indices, *, filtering_active, combine_sessions):
+        seen.update(
+            filtered_rows=list(filtered_rows),
+            visible_column_indices=list(visible_column_indices),
+            numeric_column_indices=set(numeric_column_indices),
+            filtering_active=filtering_active,
+            combine_sessions=combine_sessions,
+        )
+        return parent
+
+    monkeypatch.setattr(dialog_module, "open_csv_preview_analysis_dialog", fake_open_analysis_dialog)
+
+    dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    combine_toggle = _find_descendant(dialog, ttk.Checkbutton)
+    analyze_button = _find_button(dialog, "Analyze")
+    controller = getattr(dialog, "_csv_preview_controller", None)
+
+    assert combine_toggle is not None
+    assert analyze_button is not None
+    assert controller is not None
+
+    controller._apply_visible_columns([0, 1, 2])
+    combine_toggle.invoke()
+    analyze_button.invoke()
+
+    assert seen["combine_sessions"] is True
+    assert seen["visible_column_indices"] == [0, 1, 2]
+    assert seen["numeric_column_indices"] == {2}
+    assert seen["filtered_rows"] == [("Target", "Lunch + Dinner", "5", "a")]
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_analysis_dialog_renders_chart_views(tk_root):
+    analysis_path = loader_module.Path("analysis.csv")
+    dialog = analysis_dialog_module.open_csv_preview_analysis_dialog(
+        tk_root,
+        loader_module.CsvPreviewData(
+            path=analysis_path,
+            encoding="utf-8",
+            headers=["Name", "Category", "Quantity"],
+            rows=[],
+            row_total=1,
+            fully_cached=True,
+        ),
+        [("Negroni", "Cocktail", "2")],
+        [0, 1, 2],
+        {2},
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    combo_boxes = _find_widgets(dialog, ttk.Combobox)
+    assert combo_boxes
+
+    view_box = combo_boxes[0]
+    label_box = combo_boxes[1]
+    value_box = combo_boxes[2]
+    view_box.set("Bar chart")
+    view_box.event_generate("<<ComboboxSelected>>")
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    label_box.set("1: Name")
+    label_box.event_generate("<<ComboboxSelected>>")
+    value_box.set("3: Quantity")
+    value_box.event_generate("<<ComboboxSelected>>")
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    canvas = _find_descendant(dialog, tk.Canvas)
+    assert canvas is not None
+    assert canvas.find_all()
+    assert label_box.get() == "1: Name"
+    assert value_box.get() == "3: Quantity"
+    assert _find_label_with_text(dialog, "3: Quantity by 1: Name (highest to lowest)") is not None
+
+    view_box.set("Pie chart")
+    view_box.event_generate("<<ComboboxSelected>>")
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    assert dialog.title() == "CSV Analysis - analysis.csv"
+    assert canvas.find_all()
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_analysis_dialog_bar_chart_shows_all_items_with_scroll(tk_root):
+    analysis_path = loader_module.Path("analysis.csv")
+    dialog = analysis_dialog_module.open_csv_preview_analysis_dialog(
+        tk_root,
+        loader_module.CsvPreviewData(
+            path=analysis_path,
+            encoding="utf-8",
+            headers=["Name", "Quantity"],
+            rows=[],
+            row_total=50,
+            fully_cached=True,
+        ),
+        [(f"Cocktail {index}", str(index)) for index in range(1, 51)],
+        [0, 1],
+        {1},
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    combo_boxes = _find_widgets(dialog, ttk.Combobox)
+    assert combo_boxes
+
+    view_box = combo_boxes[0]
+    view_box.set("Bar chart")
+    view_box.event_generate("<<ComboboxSelected>>")
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    canvas = _find_descendant(dialog, tk.Canvas)
+    assert canvas is not None
+    assert str(canvas.cget("xscrollcommand"))
+    assert "Other" not in _canvas_texts(canvas)
+
+    label_angles = [
+        str(canvas.itemcget(item_id, "angle"))
+        for item_id in canvas.find_all()
+        if canvas.type(item_id) == "text" and "Cocktail" in str(canvas.itemcget(item_id, "text"))
+    ]
+    assert label_angles
+    assert all(angle in {"90", "90.0"} for angle in label_angles)
+
+    axis_y = max(
+        canvas.coords(item_id)[1]
+        for item_id in canvas.find_all()
+        if canvas.type(item_id) == "line" and len(canvas.coords(item_id)) == 4 and canvas.coords(item_id)[1] == canvas.coords(item_id)[3]
+    )
+    label_item_ids = [
+        item_id
+        for item_id in canvas.find_all()
+        if canvas.type(item_id) == "text" and "Cocktail" in str(canvas.itemcget(item_id, "text"))
+    ]
+    assert label_item_ids
+    assert all(canvas.bbox(item_id)[1] >= axis_y + 10 for item_id in label_item_ids if canvas.bbox(item_id) is not None)
+    assert all(str(canvas.itemcget(item_id, "anchor")) == "center" for item_id in label_item_ids)
+
+    bar_item_ids = [
+        item_id
+        for item_id in canvas.find_all()
+        if canvas.type(item_id) == "rectangle" and str(canvas.itemcget(item_id, "fill"))
+    ]
+    bar_centers = sorted((canvas.coords(item_id)[0] + canvas.coords(item_id)[2]) / 2 for item_id in bar_item_ids)
+    label_centers = sorted((canvas.bbox(item_id)[0] + canvas.bbox(item_id)[2]) / 2 for item_id in label_item_ids if canvas.bbox(item_id) is not None)
+    assert len(bar_centers) == len(label_centers)
+    assert all(abs(bar_center - label_center) <= 1.0 for bar_center, label_center in zip(bar_centers, label_centers, strict=False))
+
+    scrollregion = [float(value) for value in str(canvas.cget("scrollregion")).split()]
+    assert len(scrollregion) == 4
+    assert scrollregion[2] > canvas.winfo_width()
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_analysis_dialog_pie_chart_groups_smaller_items_into_other(tk_root):
+    analysis_path = loader_module.Path("analysis.csv")
+    dialog = analysis_dialog_module.open_csv_preview_analysis_dialog(
+        tk_root,
+        loader_module.CsvPreviewData(
+            path=analysis_path,
+            encoding="utf-8",
+            headers=["Name", "Quantity"],
+            rows=[],
+            row_total=50,
+            fully_cached=True,
+        ),
+        [(f"Cocktail {index}", str(index)) for index in range(1, 51)],
+        [0, 1],
+        {1},
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    combo_boxes = _find_widgets(dialog, ttk.Combobox)
+    assert combo_boxes
+
+    view_box = combo_boxes[0]
+    view_box.set("Pie chart")
+    view_box.event_generate("<<ComboboxSelected>>")
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    canvas = _find_descendant(dialog, tk.Canvas)
+    assert canvas is not None
+    canvas_texts = _canvas_texts(canvas)
+    assert any("Other" in text for text in canvas_texts)
+    assert any("Cocktail" in text for text in canvas_texts)
+
+    scrollregion = [float(value) for value in str(canvas.cget("scrollregion")).split()]
+    assert len(scrollregion) == 4
+    assert scrollregion[3] <= canvas.winfo_height()
 
     dialog.destroy()
 
@@ -1203,6 +1467,8 @@ def test_open_csv_preview_dialog_reuses_cached_header_filter_values(tk_root, tmp
         "SiteName1,ClassName1,Description1\nWaterfront,Cocktails,Espresso Martini\nWaterfront,Beer,Peroni\nWaterfront,Cocktails,Negroni\n",
         encoding="utf-8",
     )
+
+    monkeypatch.setattr(dialog_module._PreviewRefreshControllerBase, "_maybe_start_header_filter_prewarm", lambda *args, **kwargs: None)
 
     dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
     controller = getattr(dialog, "_csv_preview_controller", None)

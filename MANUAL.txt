@@ -225,6 +225,8 @@ What it does:
 - lets you choose which columns stay visible
 - lets you click a column header and open a compact popup with a search box and scrollable value list so you can pick one exact value to view, such as one ClassName
 - lets you sort text columns A-to-Z or Z-to-A and sort numeric columns low-to-high or high-to-low from that same popup using the real values for that column type
+- lets you click Analyze to open a separate analysis window for the current preview result
+- lets that analysis window show either a summary table or bar and pie charts for the columns that are still visible in the preview
 - lets you save the current preview as a new CSV file based on the current filters, combined rows, and visible columns without changing the original imported file
 - can combine session rows like Lunch and Dinner into one row and total their quantity, even when some numeric export columns have names like Textbox73
 - keeps the viewer read-only
@@ -247,6 +249,10 @@ Important notes:
 - after the app has fully scanned a large unchanged CSV once, reopening it later is also faster because the viewer can reuse a small metadata sidecar for row counts, encoding, and late columns
 - Clear filters resets the preview back to all rows and removes the active search, combine, column filters, and sort, but it does not change which columns you chose to keep visible
 - Columns opens a small chooser so you can hide columns you do not want to look at
+- Analyze uses only the rows that currently match the preview, so if you search, exact-filter a column, or combine sessions first, the analysis window reflects that current result instead of the original full CSV
+- Analyze only includes columns that are currently visible in the preview window
+- bar charts show all grouped items for the chosen visible label and value columns in highest-to-lowest order, and the chart scrolls horizontally when needed
+- pie charts keep the most important slices visible and group the smaller remainder into Other so the chart stays readable
 - Save As CSV creates a new CSV file from what the preview currently shows logically, and the original imported file stays unchanged
 - Save As CSV opens in your shared `Favorites\csv_exports` folder by default, and the folder is created automatically if needed
 - clicking a column header opens a compact popup with a search field first, a scrollable value list for that column, sort controls for that column type, and a Clear filter action for removing that exact-value filter again
