@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Sequence
 
 from .helpers import _filter_label, _format_decimal, _is_identifier_column, _normalized_header, _parse_decimal
 from .loader import CsvPreviewData
@@ -76,7 +77,7 @@ class PreviewAnalysisSnapshot:
     filtering_active: bool
     combine_sessions: bool
     columns: list[PreviewAnalysisColumn]
-    rows: tuple[tuple[str, ...], ...]
+    rows: Sequence[tuple[str, ...]]
 
     def column(self, column_index: int) -> PreviewAnalysisColumn | None:
         for column in self.columns:
@@ -88,6 +89,18 @@ class PreviewAnalysisSnapshot:
 def _sorted_value_counts(counter: Counter[str]) -> list[PreviewAnalysisValueCount]:
     items = sorted(counter.items(), key=lambda item: (-item[1], item[0].casefold()))
     return [PreviewAnalysisValueCount(value=value, count=count) for value, count in items]
+
+
+def _grouped_other_label(existing_labels: set[str]) -> str:
+    label = "Other"
+    if label not in existing_labels:
+        return label
+    suffix = 1
+    while True:
+        candidate = f"Other (grouped {suffix})"
+        if candidate not in existing_labels:
+            return candidate
+        suffix += 1
 
 
 def build_preview_analysis_snapshot(
@@ -142,7 +155,7 @@ def build_preview_analysis_snapshot(
         filtering_active=filtering_active,
         combine_sessions=combine_sessions,
         columns=analyzed_columns,
-        rows=tuple(filtered_rows),
+        rows=filtered_rows,
     )
 
 
@@ -206,9 +219,10 @@ def build_category_chart_series(
     safe_limit = max(2, limit)
     value_counts = list(column.value_counts)
     if len(value_counts) > safe_limit:
+        other_label = _grouped_other_label({entry.value for entry in value_counts})
         retained = value_counts[: safe_limit - 1]
         other_count = sum(value.count for value in value_counts[safe_limit - 1 :])
-        value_counts = retained + [PreviewAnalysisValueCount(value="Other", count=other_count)]
+        value_counts = retained + [PreviewAnalysisValueCount(value=other_label, count=other_count)]
 
     return PreviewCategoryChartSeries(
         column_index=column.index,
@@ -255,9 +269,10 @@ def build_aggregated_chart_series(
     if limit is not None:
         safe_limit = max(2, limit)
         if len(sorted_items) > safe_limit:
+            other_label = _grouped_other_label({label for label, _ in sorted_items})
             retained = sorted_items[: safe_limit - 1]
             other_value = sum((value for _, value in sorted_items[safe_limit - 1 :]), Decimal("0"))
-            sorted_items = retained + [("Other", other_value)]
+            sorted_items = retained + [(other_label, other_value)]
 
     value_column_label = value_column.label if value_column is not None else "Count rows"
     return PreviewAggregatedChartSeries(

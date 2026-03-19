@@ -332,7 +332,8 @@ class _PreviewDataPipelineBase:
 
         started_at = perf_counter()
         if not filter_state.query.strip() and not filter_state.combine_sessions:
-            row_source = self._data.rows if self._data.fully_cached else self._iter_csv_preview_rows()
+            source_rows = self._source_rows_snapshot(False)
+            row_source = source_rows if source_rows is not None else (self._data.rows if self._data.fully_cached else self._iter_csv_preview_rows())
             distinct_values: set[str] = set()
             for row in row_source:
                 if should_cancel is not None and should_cancel():
@@ -355,6 +356,10 @@ class _PreviewDataPipelineBase:
 
     def prewarm_header_filter_columns(self, filter_state: _PreviewFilterState, column_indices: list[int], *, should_cancel=None) -> None:
         started_at = perf_counter()
+        source_rows = self._source_rows_snapshot(filter_state.combine_sessions)
+        if source_rows is None:
+            return
+
         unique_indices: list[int] = []
         seen_indices: set[int] = set()
         for raw_index in column_indices:
@@ -459,7 +464,8 @@ class _PreviewDataPipelineBase:
         else:
             non_empty_values = 0
             numeric_values = 0
-            row_source = self._data.rows if self._data.fully_cached else self._iter_csv_preview_rows()
+            source_rows = self._source_rows_snapshot(False)
+            row_source = source_rows if source_rows is not None else (self._data.rows if self._data.fully_cached else self._iter_csv_preview_rows())
             for row in row_source:
                 if should_cancel is not None and should_cancel():
                     return False

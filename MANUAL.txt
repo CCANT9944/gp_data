@@ -43,6 +43,8 @@ If the form has unsaved edits, that banner changes to show UNSAVED CHANGES.
 
 There is also an Open CSV button for viewing a raw CSV in a separate window.
 That CSV viewer is read-only and shows all rows and all columns from the file you opened.
+The first time you open a CSV, the app asks whether the file already has a header row.
+If you answer No, the viewer creates Column 1, Column 2, Column 3, and so on, and keeps the first row as data.
 There is a Last CSV button beside it that reopens the most recently viewed CSV path if that file still exists.
 There is also a Recent CSVs button that lists several recently viewed CSV files.
 
@@ -219,10 +221,13 @@ Use Open CSV if you want to inspect a raw CSV file without importing it into the
 What it does:
 
 - opens the CSV in a separate window
+- shows a clear centered processing message while the CSV is opening, while sessions are being combined, and while analysis is being prepared
 - shows all columns from the file
 - shows the first preview rows immediately for large files so the window opens faster
+- can generate Column 1, Column 2, Column 3, and so on when the file does not have real headers
 - lets you type a text search and press Enter when you are ready to run it
 - lets you choose which columns stay visible
+- shows a small label in the preview telling you whether it is using Headers: Row 1 or Headers: Generated
 - lets you click a column header and open a compact popup with a search box and scrollable value list so you can pick one exact value to view, such as one ClassName
 - lets you sort text columns A-to-Z or Z-to-A and sort numeric columns low-to-high or high-to-low from that same popup using the real values for that column type
 - lets you click Analyze to open a separate analysis window for the current preview result
@@ -241,6 +246,7 @@ Important notes:
 - the raw CSV viewer does not import anything into the main product table yet
 - the raw CSV viewer search does not run while you are typing; it starts after you press Enter, and then the viewer shows Loading while the search is being applied
 - the app remembers the last CSV path and a short recent-files list locally so you do not need to browse to it every time
+- the app also remembers whether each CSV path uses a real header row or generated column names, so Last CSV and Recent CSVs reopen the same way
 - the app also remembers which preview columns you left visible for each CSV path and restores them by column header when possible if the same file is reordered later
 - the app remembers the active preview sort for each CSV path and shows that active sort in the preview summary line
 - reopening the same unchanged CSV is faster while the app is still open
@@ -251,6 +257,7 @@ Important notes:
 - Columns opens a small chooser so you can hide columns you do not want to look at
 - Analyze uses only the rows that currently match the preview, so if you search, exact-filter a column, or combine sessions first, the analysis window reflects that current result instead of the original full CSV
 - Analyze only includes columns that are currently visible in the preview window
+- bar charts in Analyze can show negative values, but pie charts only work with positive values
 - bar charts show all grouped items for the chosen visible label and value columns in highest-to-lowest order, and the chart scrolls horizontally when needed
 - pie charts keep the most important slices visible and group the smaller remainder into Other so the chart stays readable
 - Save As CSV creates a new CSV file from what the preview currently shows logically, and the original imported file stays unchanged
@@ -287,6 +294,7 @@ This includes:
 - the recent CSV preview paths used by Recent CSVs
 - the visible preview columns remembered for each CSV path, with header-aware restore when possible for reordered CSVs
 - the active preview sort remembered for each CSV path
+- the remembered header-row choice for each CSV path
 
 Important:
 
@@ -320,6 +328,7 @@ If the CSV viewer does not reopen the file you expect:
 - use Open CSV to pick the file again
 - check that the old CSV still exists at the remembered path
 - if the file changed on disk, the app reloads it again instead of reusing the old preview
+- if the first row is being treated the wrong way, reopen it with Open CSV and answer the header-row question differently
 
 
 14. CURRENT LIMITATIONS

@@ -161,6 +161,31 @@ def test_load_csv_preview_rejects_empty_file(tmp_path):
         load_csv_preview(csv_path)
 
 
+def test_load_csv_preview_without_headers_generates_default_headers_and_keeps_first_row(tmp_path):
+    csv_path = tmp_path / "no_headers.csv"
+    csv_path.write_text("1,2,3\n4,5,6\n", encoding="utf-8")
+
+    data = load_csv_preview(csv_path, has_header_row=False)
+
+    assert data.headers == ["Column 1", "Column 2", "Column 3"]
+    assert data.row_count == 2
+    assert data.rows[0] == ("1", "2", "3")
+    assert data.rows[1] == ("4", "5", "6")
+
+
+def test_load_csv_preview_keeps_header_and_no_header_cache_entries_separate(tmp_path):
+    csv_path = tmp_path / "shared.csv"
+    csv_path.write_text("1,2,3\n4,5,6\n", encoding="utf-8")
+
+    with_headers = load_csv_preview(csv_path)
+    without_headers = load_csv_preview(csv_path, has_header_row=False)
+
+    assert with_headers.headers == ["1", "2", "3"]
+    assert with_headers.rows == [("4", "5", "6")]
+    assert without_headers.headers == ["Column 1", "Column 2", "Column 3"]
+    assert without_headers.rows == [("1", "2", "3"), ("4", "5", "6")]
+
+
 def test_open_csv_preview_dialog_shows_all_columns_and_rows(tk_root, tmp_path):
     csv_path = tmp_path / "wide.csv"
     headers = [f"Col {index}" for index in range(1, 21)]
@@ -187,6 +212,36 @@ def test_open_csv_preview_dialog_shows_all_columns_and_rows(tk_root, tmp_path):
     dialog.destroy()
 
 
+def test_open_csv_preview_dialog_generates_default_headers_when_csv_has_no_header_row(tk_root, tmp_path):
+    csv_path = tmp_path / "headerless.csv"
+    csv_path.write_text("1,2,3\n4,5,6\n", encoding="utf-8")
+
+    dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520, has_header_row=False)
+    tree = _find_descendant(dialog, ttk.Treeview)
+    mode_label = _find_label_with_text(dialog, "Headers: Generated")
+
+    assert tree is not None
+    assert mode_label is not None
+    assert [tree.heading(column_id)["text"] for column_id in tree.cget("columns")] == ["Column 1", "Column 2", "Column 3"]
+    _wait_for_rows(dialog, tree, 2)
+    assert [str(value) for value in tree.item(tree.get_children()[0])["values"]] == ["1", "2", "3"]
+    assert [str(value) for value in tree.item(tree.get_children()[1])["values"]] == ["4", "5", "6"]
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_dialog_shows_header_mode_label_for_real_headers(tk_root, tmp_path):
+    csv_path = tmp_path / "with_headers.csv"
+    csv_path.write_text("A,B,C\n1,2,3\n", encoding="utf-8")
+
+    dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    mode_label = _find_label_with_text(dialog, "Headers: Row 1")
+
+    assert mode_label is not None
+
+    dialog.destroy()
+
+
 def test_open_csv_preview_dialog_opens_analysis_from_current_filtered_rows(tk_root, tmp_path, monkeypatch):
     csv_path = tmp_path / "analysis_filter.csv"
     csv_path.write_text(
@@ -196,19 +251,14 @@ def test_open_csv_preview_dialog_opens_analysis_from_current_filtered_rows(tk_ro
 
     seen: dict[str, object] = {}
 
-    def fake_open_analysis_dialog(parent, data, filtered_rows, visible_column_indices, numeric_column_indices, *, filtering_active, combine_sessions):
+    def fake_open_analysis_dialog(parent, snapshot):
         seen.update(
             parent=parent,
-            data=data,
-            filtered_rows=list(filtered_rows),
-            visible_column_indices=list(visible_column_indices),
-            numeric_column_indices=set(numeric_column_indices),
-            filtering_active=filtering_active,
-            combine_sessions=combine_sessions,
+            snapshot=snapshot,
         )
         return parent
 
-    monkeypatch.setattr(dialog_module, "open_csv_preview_analysis_dialog", fake_open_analysis_dialog)
+    monkeypatch.setattr(dialog_module, "open_csv_preview_analysis_dialog_from_snapshot", fake_open_analysis_dialog)
 
     dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
     query_entry = _find_descendant(dialog, ttk.Entry)
@@ -223,11 +273,17 @@ def test_open_csv_preview_dialog_opens_analysis_from_current_filtered_rows(tk_ro
     controller.trigger_refresh_now()
     analyze_button.invoke()
 
-    assert seen["filtering_active"] is True
-    assert seen["combine_sessions"] is False
-    assert seen["filtered_rows"] == [("Aperol Spritz", "Spritz", "4")]
-    assert seen["visible_column_indices"] == [0, 1, 2]
-    assert seen["numeric_column_indices"] == {2}
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and "snapshot" not in seen:
+        dialog.update()
+        time.sleep(0.02)
+
+    snapshot = seen["snapshot"]
+    assert snapshot.filtering_active is True
+    assert snapshot.combine_sessions is False
+    assert list(snapshot.rows) == [("Aperol Spritz", "Spritz", "4")]
+    assert [column.index for column in snapshot.columns] == [0, 1, 2]
+    assert {column.index for column in snapshot.columns if column.numeric} == {2}
 
     dialog.destroy()
 
@@ -241,17 +297,13 @@ def test_open_csv_preview_dialog_analysis_respects_combined_rows_and_visible_col
 
     seen: dict[str, object] = {}
 
-    def fake_open_analysis_dialog(parent, data, filtered_rows, visible_column_indices, numeric_column_indices, *, filtering_active, combine_sessions):
+    def fake_open_analysis_dialog(parent, snapshot):
         seen.update(
-            filtered_rows=list(filtered_rows),
-            visible_column_indices=list(visible_column_indices),
-            numeric_column_indices=set(numeric_column_indices),
-            filtering_active=filtering_active,
-            combine_sessions=combine_sessions,
+            snapshot=snapshot,
         )
         return parent
 
-    monkeypatch.setattr(dialog_module, "open_csv_preview_analysis_dialog", fake_open_analysis_dialog)
+    monkeypatch.setattr(dialog_module, "open_csv_preview_analysis_dialog_from_snapshot", fake_open_analysis_dialog)
 
     dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
     combine_toggle = _find_descendant(dialog, ttk.Checkbutton)
@@ -266,10 +318,155 @@ def test_open_csv_preview_dialog_analysis_respects_combined_rows_and_visible_col
     combine_toggle.invoke()
     analyze_button.invoke()
 
-    assert seen["combine_sessions"] is True
-    assert seen["visible_column_indices"] == [0, 1, 2]
-    assert seen["numeric_column_indices"] == {2}
-    assert seen["filtered_rows"] == [("Target", "Lunch + Dinner", "5", "a")]
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and "snapshot" not in seen:
+        dialog.update()
+        time.sleep(0.02)
+
+    snapshot = seen["snapshot"]
+    assert snapshot.combine_sessions is True
+    assert [column.index for column in snapshot.columns] == [0, 1, 2]
+    assert {column.index for column in snapshot.columns if column.numeric} == {2}
+    assert list(snapshot.rows) == [("Target", "Lunch + Dinner", "5", "a")]
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_dialog_shows_processing_popup_while_opening_analysis(tk_root, tmp_path, monkeypatch):
+    csv_path = tmp_path / "analysis_popup.csv"
+    csv_path.write_text(
+        "Name,Category,Quantity\nNegroni,Cocktail,2\nSpritz,Spritz,4\n",
+        encoding="utf-8",
+    )
+
+    original_build_preview_analysis_snapshot = dialog_module.build_preview_analysis_snapshot
+    seen: dict[str, object] = {}
+
+    def slow_build_preview_analysis_snapshot(*args, **kwargs):
+        time.sleep(0.15)
+        return original_build_preview_analysis_snapshot(*args, **kwargs)
+
+    def fake_open_analysis_dialog(parent, snapshot):
+        seen["snapshot"] = snapshot
+        return parent
+
+    monkeypatch.setattr(dialog_module, "build_preview_analysis_snapshot", slow_build_preview_analysis_snapshot)
+    monkeypatch.setattr(dialog_module, "open_csv_preview_analysis_dialog_from_snapshot", fake_open_analysis_dialog)
+
+    dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    analyze_button = _find_button(dialog, "Analyze")
+    controller = getattr(dialog, "_csv_preview_controller", None)
+
+    assert analyze_button is not None
+    assert controller is not None
+
+    dialog.update()
+    analyze_button.invoke()
+    dialog.update()
+
+    status_dialog = controller._analysis_status_dialog
+    assert status_dialog is not None
+    assert status_dialog.winfo_exists()
+    assert status_dialog.title() == "Preparing Analysis"
+    assert controller._analysis_status_var.get() == "Preparing analysis..."
+
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and "snapshot" not in seen:
+        dialog.update()
+        time.sleep(0.02)
+
+    assert "snapshot" in seen
+    assert controller._analysis_status_dialog is None
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_dialog_shows_centered_processing_popup_while_combining_sessions(tk_root, tmp_path, monkeypatch):
+    csv_path = tmp_path / "combine_popup.csv"
+    csv_path.write_text(
+        "Description1,Sessionname1,Quantity1\nTarget,Lunch,2\nTarget,Dinner,3\n",
+        encoding="utf-8",
+    )
+
+    original_iter_filtered_refresh_messages = dialog_module._PreviewDataPipeline.iter_filtered_refresh_messages
+
+    def delayed_iter_filtered_refresh_messages(self, load_token, filter_state, *, rendered_row_limit, should_cancel=None):
+        if not filter_state.combine_sessions:
+            yield from original_iter_filtered_refresh_messages(
+                self,
+                load_token,
+                filter_state,
+                rendered_row_limit=rendered_row_limit,
+                should_cancel=should_cancel,
+            )
+            return
+
+        yield dialog_module._FilteredPreviewUpdate(
+            load_token=load_token,
+            displayed_rows=[("Target", "Lunch + Dinner", "5")],
+            total_rows=None,
+        )
+        time.sleep(0.15)
+        if should_cancel is not None and should_cancel():
+            return
+        yield dialog_module._FilteredCountUpdate(load_token=load_token, total_rows=1)
+
+    monkeypatch.setattr(
+        dialog_module._PreviewDataPipeline,
+        "iter_filtered_refresh_messages",
+        delayed_iter_filtered_refresh_messages,
+    )
+
+    dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    combine_toggle = _find_descendant(dialog, ttk.Checkbutton)
+    tree = _find_descendant(dialog, ttk.Treeview)
+    controller = getattr(dialog, "_csv_preview_controller", None)
+
+    assert combine_toggle is not None
+    assert tree is not None
+    assert controller is not None
+
+    dialog.update()
+    combine_toggle.invoke()
+    dialog.update()
+
+    status_dialog = controller._processing_status_dialog
+    assert status_dialog is not None
+    assert status_dialog.winfo_exists()
+    assert status_dialog.title() == "Processing CSV"
+    assert controller._processing_status_var.get() == "Processing sessions..."
+
+    preview_center_x = dialog.winfo_rootx() + (dialog.winfo_width() / 2)
+    preview_center_y = dialog.winfo_rooty() + (dialog.winfo_height() / 2)
+    status_center_x = status_dialog.winfo_rootx() + (status_dialog.winfo_width() / 2)
+    status_center_y = status_dialog.winfo_rooty() + (status_dialog.winfo_height() / 2)
+    assert abs(status_center_x - preview_center_x) <= 20
+    assert abs(status_center_y - preview_center_y) <= 40
+
+    saw_preview_with_popup = False
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        dialog.update()
+        rows = [list(tree.item(item_id)["values"]) for item_id in tree.get_children()]
+        if rows and rows[0][:2] == ["Target", "Lunch + Dinner"] and str(rows[0][2]) == "5":
+            if controller._processing_status_dialog is not None:
+                saw_preview_with_popup = True
+                break
+        time.sleep(0.02)
+
+    assert saw_preview_with_popup is True
+
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        dialog.update()
+        if controller._processing_status_dialog is None:
+            break
+        time.sleep(0.02)
+
+    assert controller._processing_status_dialog is None
+    rows = [list(tree.item(item_id)["values"]) for item_id in tree.get_children()]
+    assert rows and rows[0][:2] == ["Target", "Lunch + Dinner"]
+    assert str(rows[0][2]) == "5"
 
     dialog.destroy()
 
@@ -442,6 +639,75 @@ def test_open_csv_preview_analysis_dialog_pie_chart_groups_smaller_items_into_ot
     dialog.destroy()
 
 
+def test_open_csv_preview_analysis_dialog_bar_chart_supports_negative_values(tk_root):
+    analysis_path = loader_module.Path("analysis.csv")
+    dialog = analysis_dialog_module.open_csv_preview_analysis_dialog(
+        tk_root,
+        loader_module.CsvPreviewData(
+            path=analysis_path,
+            encoding="utf-8",
+            headers=["Name", "Value"],
+            rows=[],
+            row_total=2,
+            fully_cached=True,
+        ),
+        [("Refund", "-5"), ("Discount", "-2")],
+        [0, 1],
+        {1},
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    combo_boxes = _find_widgets(dialog, ttk.Combobox)
+    view_box = combo_boxes[0]
+    view_box.set("Bar chart")
+    view_box.event_generate("<<ComboboxSelected>>")
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    canvas = _find_descendant(dialog, tk.Canvas)
+    assert canvas is not None
+    texts = _canvas_texts(canvas)
+    assert "No chartable values are available for the selected columns." not in texts
+    assert any(text == "-5" for text in texts)
+    assert any(text == "-2" for text in texts)
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_analysis_dialog_pie_chart_rejects_negative_values(tk_root):
+    analysis_path = loader_module.Path("analysis.csv")
+    dialog = analysis_dialog_module.open_csv_preview_analysis_dialog(
+        tk_root,
+        loader_module.CsvPreviewData(
+            path=analysis_path,
+            encoding="utf-8",
+            headers=["Name", "Value"],
+            rows=[],
+            row_total=2,
+            fully_cached=True,
+        ),
+        [("Sales", "5"), ("Refund", "-2")],
+        [0, 1],
+        {1},
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    combo_boxes = _find_widgets(dialog, ttk.Combobox)
+    view_box = combo_boxes[0]
+    view_box.set("Pie chart")
+    view_box.event_generate("<<ComboboxSelected>>")
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    canvas = _find_descendant(dialog, tk.Canvas)
+    assert canvas is not None
+    assert "Pie charts require positive values only." in _canvas_texts(canvas)
+
+    dialog.destroy()
+
+
 def test_load_csv_preview_reuses_cached_data_for_unchanged_file(tmp_path):
     csv_path = tmp_path / "wide.csv"
     csv_path.write_text("A,B\n1,2\n", encoding="utf-8")
@@ -450,6 +716,32 @@ def test_load_csv_preview_reuses_cached_data_for_unchanged_file(tmp_path):
     second = load_csv_preview(csv_path)
 
     assert first is second
+
+
+def test_load_csv_preview_evicts_least_recently_used_cache_entry_across_paths(tmp_path, monkeypatch):
+    first_path = tmp_path / "first.csv"
+    second_path = tmp_path / "second.csv"
+    third_path = tmp_path / "third.csv"
+    for csv_path, value in ((first_path, "1"), (second_path, "2"), (third_path, "3")):
+        csv_path.write_text(f"A,B\n{value},{value}\n", encoding="utf-8")
+
+    loader_module._PREVIEW_CACHE.clear()
+    monkeypatch.setattr(loader_module, "PREVIEW_CACHE_MAX_ENTRIES", 2)
+
+    first = load_csv_preview(first_path)
+    second = load_csv_preview(second_path)
+    assert len(loader_module._PREVIEW_CACHE) == 2
+
+    first_again = load_csv_preview(first_path)
+    third = load_csv_preview(third_path)
+
+    assert first_again is first
+    assert third.path == third_path
+    assert len(loader_module._PREVIEW_CACHE) == 2
+    cached_paths = [key[0] for key in loader_module._PREVIEW_CACHE]
+    assert str(first_path.resolve()) in cached_paths
+    assert str(third_path.resolve()) in cached_paths
+    assert str(second_path.resolve()) not in cached_paths
 
 
 def test_load_large_csv_preview_keeps_only_preview_rows_in_memory(tmp_path):
@@ -505,6 +797,26 @@ def test_load_large_csv_preview_reuses_sidecar_metadata_on_reopen(tmp_path):
     assert reopened.fully_cached is False
 
 
+def test_load_large_csv_preview_reuses_sidecar_metadata_with_blank_headers_on_reopen(tmp_path):
+    csv_path = tmp_path / "blank_headers.csv"
+    rows = [",Category"]
+    rows.extend(f"item{index},value{index}" for index in range(PREVIEW_ROW_SAMPLE_SIZE + 25))
+    csv_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    data = load_csv_preview(csv_path)
+    resolved = resolve_csv_preview_metadata(data)
+
+    loader_module._PREVIEW_CACHE.clear()
+    reopened = load_csv_preview(csv_path)
+
+    assert loader_module._metadata_sidecar_path(csv_path).exists()
+    assert reopened is not resolved
+    assert reopened.headers == ["", "Category"]
+    assert reopened.row_count == PREVIEW_ROW_SAMPLE_SIZE + 25
+    assert len(reopened.rows) == PREVIEW_ROW_SAMPLE_SIZE
+    assert reopened.fully_cached is False
+
+
 def test_load_large_csv_preview_reuses_persisted_preview_rows_without_rereading_csv(tmp_path, monkeypatch):
     csv_path = tmp_path / "reopen_preview_rows.csv"
     rows = ["A,B"]
@@ -527,6 +839,34 @@ def test_load_large_csv_preview_reuses_persisted_preview_rows_without_rereading_
     assert len(reopened.rows) == PREVIEW_ROW_SAMPLE_SIZE
     assert reopened.rows[0] == ("item0", "value0")
     assert reopened.fully_cached is False
+
+
+def test_preview_pipeline_uses_persisted_full_row_cache_with_blank_headers_across_restart(tmp_path, monkeypatch):
+    csv_path = tmp_path / "blank_header_row_cache.csv"
+    total_rows = PREVIEW_ROW_SAMPLE_SIZE + 120
+    rows = [",Category"]
+    rows.extend(f"Item {index},Beer" for index in range(1, total_rows + 1))
+    csv_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    data = load_csv_preview(csv_path)
+    resolve_csv_preview_metadata(data)
+
+    loader_module._PREVIEW_CACHE.clear()
+    reopened = load_csv_preview(csv_path)
+    pipeline = dialog_module._PreviewDataPipeline(reopened)
+
+    def fail_iter_csv_preview_rows(*args, **kwargs):
+        raise AssertionError("Persisted full row cache should avoid rescanning the CSV file")
+
+    monkeypatch.setattr(dialog_module, "iter_csv_preview_rows", fail_iter_csv_preview_rows)
+
+    source_rows = pipeline._source_rows_snapshot(False)
+
+    assert reopened.headers == ["", "Category"]
+    assert source_rows is not None
+    assert len(source_rows) == total_rows
+    assert source_rows[0] == ("Item 1", "Beer")
+    assert source_rows[-1] == (f"Item {total_rows}", "Beer")
 
 
 def test_load_large_csv_preview_ignores_stale_sidecar_metadata_after_file_change(tmp_path):
@@ -1137,6 +1477,58 @@ def test_open_csv_preview_dialog_prewarms_visible_header_filters_in_background(t
         time.sleep(0.02)
 
     assert prewarm_calls == [("", (0, 1, 2))]
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_dialog_skips_large_file_prewarm_rescans_without_source_snapshot(tk_root, tmp_path, monkeypatch):
+    csv_path = tmp_path / "large_prewarm_skip.csv"
+    rows = ["Name,Category"]
+    rows.extend(f"Item {index},Beer" for index in range(PREVIEW_ROW_SAMPLE_SIZE + 25))
+    csv_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    prewarm_calls: list[tuple[str, tuple[int, ...]]] = []
+    iter_calls = 0
+    original_prewarm_header_filter_columns = dialog_module._PreviewDataPipeline.prewarm_header_filter_columns
+    original_iter_csv_preview_rows = dialog_module.iter_csv_preview_rows
+
+    def counting_prewarm_header_filter_columns(self, filter_state, column_indices, **kwargs):
+        prewarm_calls.append((filter_state.query, tuple(column_indices)))
+        return original_prewarm_header_filter_columns(self, filter_state, column_indices, **kwargs)
+
+    def counting_iter_csv_preview_rows(*args, **kwargs):
+        nonlocal iter_calls
+        iter_calls += 1
+        yield from original_iter_csv_preview_rows(*args, **kwargs)
+
+    monkeypatch.setattr(
+        dialog_module._PreviewDataPipeline,
+        "prewarm_header_filter_columns",
+        counting_prewarm_header_filter_columns,
+    )
+    monkeypatch.setattr(dialog_module, "iter_csv_preview_rows", counting_iter_csv_preview_rows)
+
+    dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    tree = _find_descendant(dialog, ttk.Treeview)
+
+    assert tree is not None
+
+    _wait_for_rows(dialog, tree, PREVIEW_ROW_SAMPLE_SIZE)
+
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and not prewarm_calls:
+        dialog.update()
+        time.sleep(0.02)
+
+    assert prewarm_calls
+    assert all(call == ("", (0, 1)) for call in prewarm_calls)
+
+    deadline = time.monotonic() + 0.3
+    while time.monotonic() < deadline:
+        dialog.update()
+        time.sleep(0.02)
+
+    assert iter_calls == 0
 
     dialog.destroy()
 

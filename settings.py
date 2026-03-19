@@ -53,6 +53,7 @@ class CsvPreviewPathState:
     visible_column_keys: list[str] = None  # type: ignore[assignment]
     sort_column_key: str | None = None
     sort_descending: bool = False
+    has_header_row: bool | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "visible_columns", list(self.visible_columns or []))
@@ -69,6 +70,8 @@ class CsvPreviewPathState:
                 "column_key": self.sort_column_key,
                 "descending": self.sort_descending,
             }
+        if self.has_header_row is not None:
+            data["has_header_row"] = self.has_header_row
         return data
 
 
@@ -332,12 +335,14 @@ def _normalized_csv_preview_state_by_path(raw_state_by_path) -> dict[str, CsvPre
         visible_columns = _normalized_csv_preview_visible_columns({path: raw_state.get("visible_columns")}).get(path, [])
         visible_column_keys = _normalized_csv_preview_visible_column_keys({path: raw_state.get("visible_column_keys")}).get(path, [])
         sort = _normalized_csv_preview_sort_by_path({path: raw_state.get("sort")}).get(path, {})
+        has_header_row = raw_state.get("has_header_row") if isinstance(raw_state.get("has_header_row"), bool) else None
 
         normalized[path] = CsvPreviewPathState(
             visible_columns=visible_columns,
             visible_column_keys=visible_column_keys,
             sort_column_key=str(sort.get("column_key")).strip().casefold() if sort.get("column_key") else None,
             sort_descending=bool(sort.get("descending", False)),
+            has_header_row=has_header_row,
         )
 
     return normalized
@@ -372,6 +377,7 @@ def _normalized_app_settings(raw_data: Mapping[str, object] | None) -> AppSettin
             visible_column_keys=csv_preview_visible_column_keys_by_path.get(path, current_state.visible_column_keys),
             sort_column_key=(csv_preview_sort_by_path.get(path) or {}).get("column_key", current_state.sort_column_key),
             sort_descending=bool((csv_preview_sort_by_path.get(path) or {}).get("descending", current_state.sort_descending)),
+            has_header_row=current_state.has_header_row,
         )
 
     return AppSettings(
@@ -510,6 +516,7 @@ class SettingsStore:
                 visible_column_keys=current_state.visible_column_keys,
                 sort_column_key=current_state.sort_column_key,
                 sort_descending=current_state.sort_descending,
+                has_header_row=current_state.has_header_row,
             )
         else:
             current[normalized_path] = list(visible_columns)
@@ -518,6 +525,7 @@ class SettingsStore:
                 visible_column_keys=current_state.visible_column_keys,
                 sort_column_key=current_state.sort_column_key,
                 sort_descending=current_state.sort_descending,
+                has_header_row=current_state.has_header_row,
             )
         if current_state.to_dict():
             current_state_by_path[normalized_path] = current_state.to_dict()
@@ -546,6 +554,7 @@ class SettingsStore:
                 visible_column_keys=[],
                 sort_column_key=current_state.sort_column_key,
                 sort_descending=current_state.sort_descending,
+                has_header_row=current_state.has_header_row,
             )
         else:
             normalized_keys = [str(key).strip().casefold() for key in visible_column_keys if str(key).strip()]
@@ -555,6 +564,7 @@ class SettingsStore:
                 visible_column_keys=normalized_keys,
                 sort_column_key=current_state.sort_column_key,
                 sort_descending=current_state.sort_descending,
+                has_header_row=current_state.has_header_row,
             )
         if current_state.to_dict():
             current_state_by_path[normalized_path] = current_state.to_dict()
@@ -591,6 +601,7 @@ class SettingsStore:
                 visible_column_keys=current_state.visible_column_keys,
                 sort_column_key=None,
                 sort_descending=False,
+                has_header_row=current_state.has_header_row,
             )
         else:
             current[normalized_path] = {"column_key": normalized_key, "descending": bool(descending)}
@@ -599,12 +610,39 @@ class SettingsStore:
                 visible_column_keys=current_state.visible_column_keys,
                 sort_column_key=normalized_key,
                 sort_descending=bool(descending),
+                has_header_row=current_state.has_header_row,
             )
         if current_state.to_dict():
             current_state_by_path[normalized_path] = current_state.to_dict()
         else:
             current_state_by_path.pop(normalized_path, None)
         return self.update(csv_preview_sort_by_path=current, csv_preview_state_by_path=current_state_by_path)
+
+    def load_csv_preview_has_header_row(self, csv_preview_path: str | None) -> bool | None:
+        saved_state = self.load_csv_preview_state(csv_preview_path)
+        if saved_state is None:
+            return None
+        return saved_state.has_header_row
+
+    def save_csv_preview_has_header_row(self, csv_preview_path: str | None, has_header_row: bool | None) -> AppSettings:
+        normalized_path = _normalized_csv_preview_last_path(csv_preview_path)
+        current_state_by_path = {path: state.to_dict() for path, state in self.load().csv_preview_state_by_path.items()}
+        current_state = self.load_csv_preview_state(normalized_path) or CsvPreviewPathState()
+        if normalized_path is None:
+            return self.update(csv_preview_state_by_path=current_state_by_path)
+
+        current_state = CsvPreviewPathState(
+            visible_columns=current_state.visible_columns,
+            visible_column_keys=current_state.visible_column_keys,
+            sort_column_key=current_state.sort_column_key,
+            sort_descending=current_state.sort_descending,
+            has_header_row=None if has_header_row is None else bool(has_header_row),
+        )
+        if current_state.to_dict():
+            current_state_by_path[normalized_path] = current_state.to_dict()
+        else:
+            current_state_by_path.pop(normalized_path, None)
+        return self.update(csv_preview_state_by_path=current_state_by_path)
 
 
 def load_settings(path: Optional[Path] = None) -> dict:
@@ -705,6 +743,14 @@ def load_csv_preview_state(csv_preview_path: str | None, path: Optional[Path] = 
 
 def save_csv_preview_state(csv_preview_path: str | None, state: CsvPreviewPathState | None, path: Optional[Path] = None) -> None:
     SettingsStore(path).save_csv_preview_state(csv_preview_path, state)
+
+
+def load_csv_preview_has_header_row(csv_preview_path: str | None, path: Optional[Path] = None) -> bool | None:
+    return SettingsStore(path).load_csv_preview_has_header_row(csv_preview_path)
+
+
+def save_csv_preview_has_header_row(csv_preview_path: str | None, has_header_row: bool | None, path: Optional[Path] = None) -> None:
+    SettingsStore(path).save_csv_preview_has_header_row(csv_preview_path, has_header_row)
 
 
 def save_csv_preview_sort(

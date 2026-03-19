@@ -122,10 +122,21 @@ def _draw_bar_chart(canvas: tk.Canvas, series: PreviewAggregatedChartSeries) -> 
     chart_top = top
     chart_height = max(chart_bottom - chart_top, 80)
     max_value = max(series.values, default=None)
-    if max_value is None or max_value <= 0:
+    min_value = min(series.values, default=None)
+    if max_value is None or min_value is None:
         _draw_empty_chart(canvas, "No chartable values are available for the selected columns.")
         return
-    max_value_float = float(max_value)
+    chart_min = min(min_value, Decimal("0"))
+    chart_max = max(max_value, Decimal("0"))
+    if chart_min == chart_max:
+        _draw_empty_chart(canvas, "No chartable values are available for the selected columns.")
+        return
+    chart_range_float = float(chart_max - chart_min)
+
+    def _y_for(value: Decimal) -> float:
+        return chart_top + ((float(chart_max - value) / chart_range_float) * chart_height)
+
+    baseline_y = _y_for(Decimal("0"))
 
     count = len(series.values)
     gap = 10
@@ -138,13 +149,14 @@ def _draw_bar_chart(canvas: tk.Canvas, series: PreviewAggregatedChartSeries) -> 
     canvas.xview_moveto(0)
 
     canvas.create_line(left, chart_top, left, chart_bottom, fill="#9ca3af")
-    canvas.create_line(left, chart_bottom, content_width - right, chart_bottom, fill="#9ca3af")
+    canvas.create_line(left, baseline_y, content_width - right, baseline_y, fill="#9ca3af")
 
     tick_count = 4
-    for tick in range(1, tick_count + 1):
-        value = max_value * Decimal(tick) / Decimal(tick_count)
-        y = chart_bottom - (chart_height * tick / tick_count)
-        canvas.create_line(left, y, content_width - right, y, fill="#eef2f7")
+    for tick in range(tick_count + 1):
+        value = chart_min + ((chart_max - chart_min) * Decimal(tick) / Decimal(tick_count))
+        y = _y_for(value)
+        grid_color = "#9ca3af" if value == 0 else "#eef2f7"
+        canvas.create_line(left, y, content_width - right, y, fill=grid_color)
         canvas.create_text(
             left - 10,
             y,
@@ -158,15 +170,18 @@ def _draw_bar_chart(canvas: tk.Canvas, series: PreviewAggregatedChartSeries) -> 
     for index, (label, value) in enumerate(zip(label_texts, series.values, strict=False)):
         x0 = start_x + index * (bar_width + gap)
         x1 = x0 + bar_width
-        bar_height = chart_height * (float(value) / max_value_float)
-        y0 = chart_bottom - bar_height
+        value_y = _y_for(value)
+        y0 = min(value_y, baseline_y)
+        y1 = max(value_y, baseline_y)
         color = CHART_COLORS[index % len(CHART_COLORS)]
-        canvas.create_rectangle(x0, y0, x1, chart_bottom, fill=color, outline="")
+        canvas.create_rectangle(x0, y0, x1, y1, fill=color, outline="")
+        value_text_y = y0 - 10 if value >= 0 else y1 + 10
+        value_anchor = "s" if value >= 0 else "n"
         canvas.create_text(
             (x0 + x1) / 2,
-            y0 - 10,
+            value_text_y,
             text=format_decimal_summary(value),
-            anchor="s",
+            anchor=value_anchor,
             fill="#374151",
             font=("Segoe UI", 8, "bold"),
         )
@@ -188,7 +203,12 @@ def _draw_aggregated_pie_chart(canvas: tk.Canvas, series: PreviewAggregatedChart
     _clear_chart(canvas)
     width, height = _chart_canvas_size(canvas)
     canvas.xview_moveto(0)
-    total = sum(series.values, Decimal("0"))
+    if any(value < 0 for value in series.values):
+        _draw_empty_chart(canvas, "Pie charts require positive values only.")
+        return
+
+    positive_items = [(label, value) for label, value in zip(series.labels, series.values, strict=False) if value > 0]
+    total = sum((value for _, value in positive_items), Decimal("0"))
     if total <= 0:
         _draw_empty_chart(canvas, "No chartable values are available for the selected columns.")
         return
@@ -206,7 +226,7 @@ def _draw_aggregated_pie_chart(canvas: tk.Canvas, series: PreviewAggregatedChart
 
     start_angle = 0.0
     total_float = float(total)
-    for index, (label, value) in enumerate(zip(series.labels, series.values, strict=False)):
+    for index, (label, value) in enumerate(positive_items):
         value_float = float(value)
         extent = 360.0 * value_float / total_float
         color = CHART_COLORS[index % len(CHART_COLORS)]
@@ -263,7 +283,13 @@ def open_csv_preview_analysis_dialog(
         filtering_active=filtering_active,
         combine_sessions=combine_sessions,
     )
+    return open_csv_preview_analysis_dialog_from_snapshot(parent, snapshot)
 
+
+def open_csv_preview_analysis_dialog_from_snapshot(
+    parent: tk.Misc,
+    snapshot: PreviewAnalysisSnapshot,
+) -> tk.Toplevel:
     win = tk.Toplevel(parent)
     win.title(f"CSV Analysis - {snapshot.source_name}")
     win.geometry(f"{ANALYSIS_WINDOW_WIDTH}x{ANALYSIS_WINDOW_HEIGHT}")

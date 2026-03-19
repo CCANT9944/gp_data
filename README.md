@@ -34,15 +34,18 @@ numeric change history per item.
 - Click the `GP` column header to open a small menu with highlight presets, a custom threshold option, and a clear option.
 - The GP highlight threshold is saved in your local `settings.json` and comes back after restart.
 - `Open CSV` opens a separate read-only raw CSV viewer for the selected file.
+- `Open CSV` now asks whether the file already has a header row; if it does not, the preview generates `Column 1`, `Column 2`, `Column 3`, and so on, and keeps the first row as data.
 - `Last CSV` reopens the most recently viewed CSV from a remembered local path so you do not need to browse for the same file every time.
 - `Recent CSVs` shows the latest remembered CSV files so you can jump back to more than one file without browsing again.
+- Opening a CSV, combining sessions, and preparing analysis now show a centered processing dialog so long preview actions are clearly visible.
 - The raw CSV viewer includes a global text search across all visible data, and it runs when you press `Enter` in the search box so you can finish typing first.
 - The raw CSV viewer lets you choose which columns stay visible, and it remembers that choice per CSV path using column headers when possible so reordered files reopen more sensibly.
 - Clicking a CSV preview column header opens a compact popup with a local search box, a scrollable value list, exact-value filtering for that column, and sort controls for that same column.
 - The popup sorts text columns A-to-Z or Z-to-A and sorts numeric columns low-to-high or high-to-low using numeric order instead of text order.
 - The raw CSV viewer remembers the active sort per CSV path and shows the current sort in the preview summary so you can see it without reopening the popup.
+- The raw CSV viewer also shows a small header-mode label so you can see whether the file is using `Row 1` headers or generated column names.
 - The raw CSV viewer includes an `Analyze` action that opens a separate analysis window for the current preview result, using only the rows that currently match the preview filters, the active combine-sessions state, and the columns that are still visible.
-- The analysis window can show a summary table or bar and pie charts so you can inspect top visible values without exporting the CSV first.
+- The analysis window can show a summary table or bar and pie charts so you can inspect top visible values without exporting the CSV first; bar charts can show negative values, while pie charts only render positive values.
 - `Save As CSV` creates a new CSV file from the current preview state, including the current search, exact column filter, combined rows, and visible columns, without changing the original imported file, and it defaults to your shared `Favorites/csv_exports` folder.
 - The raw CSV viewer can also combine session-based rows, such as `Lunch` and `Dinner`, into one product row when the file has detectable session and quantity columns, including numeric export columns with generic names like `Textbox73`.
 - For very large CSVs, the preview window opens from an initial sample first and only renders the first slice of matching rows so the window stays responsive, with a lower live row cap for very wide files to keep navigation smoother.
@@ -193,6 +196,7 @@ GUI-related tests skip automatically if Tk is not available in the current envir
 - Column order, visible columns, and widths are persisted in the local `settings.json` file.
 - The last and recent CSV preview paths are persisted in `settings.json` for the `Last CSV` and `Recent CSVs` controls.
 - CSV preview visible-column choices are also persisted in `settings.json` per CSV path, with header-aware restore for reordered files when possible.
+- CSV preview header-row choices are also persisted in `settings.json` per CSV path, so `Last CSV` and `Recent CSVs` reopen with the same header mode.
 - `settings.json` is intentionally ignored by Git so personal layout changes are not committed.
 - Duplicate warnings are advisory: the GUI can still allow a duplicate if the user explicitly confirms it.
 - Older duplicate rows already stored in the database are not merged automatically.

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import csv
 import logging
+import queue
+import threading
 import tkinter as tk
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -11,7 +13,8 @@ from time import perf_counter
 from tkinter import filedialog, messagebox, ttk
 
 from gp_data.settings import SettingsStore
-from .analysis_dialog import open_csv_preview_analysis_dialog
+from .analysis import PreviewAnalysisSnapshot, build_preview_analysis_snapshot
+from .analysis_dialog import open_csv_preview_analysis_dialog_from_snapshot
 from .helpers import (
     HEADER_FILTER_POPUP_LABEL_MAX_LENGTH,
     _column_identity_keys,
@@ -58,6 +61,7 @@ from .refresh_controller import (
     _MetadataResolvedUpdate,
     _PreviewRefreshControllerBase,
 )
+from ..view_helpers import close_processing_dialog, show_centered_processing_dialog
 
 
 LOGGER = logging.getLogger(__name__)
@@ -89,6 +93,12 @@ def _log_preview_performance(operation: str, started_at: float, **fields: object
         LOGGER.debug("CSV preview %s took %.1fms (%s)", operation, duration_ms, details)
         return
     LOGGER.debug("CSV preview %s took %.1fms", operation, duration_ms)
+
+
+def _header_mode_text(has_header_row: bool) -> str:
+    if has_header_row:
+        return "Headers: Row 1"
+    return "Headers: Generated"
 
 
 @dataclass
@@ -183,6 +193,21 @@ class _PreviewViewState:
             self.sort_descending = False
             sort_cleared = True
         return header_filter_cleared, sort_cleared
+
+
+@dataclass(frozen=True)
+class _AnalysisSnapshotReady:
+    request_token: int
+    snapshot: PreviewAnalysisSnapshot
+
+
+@dataclass(frozen=True)
+class _AnalysisSnapshotError:
+    request_token: int
+    error: Exception
+
+
+_AnalysisMessage = _AnalysisSnapshotReady | _AnalysisSnapshotError
 
 
 def _column_width(header: str) -> int:
@@ -497,6 +522,15 @@ class _PreviewTableController(_PreviewRefreshControllerBase):
         self._on_visible_columns_changed = on_visible_columns_changed
         self._on_sort_changed = on_sort_changed
         self._popup_export_controller = _PreviewPopupExportController(self)
+        self._processing_status_var = tk.StringVar(value="")
+        self._processing_status_dialog: tk.Toplevel | None = None
+        self._processing_status_load_token: int | None = None
+        self._analysis_status_var = tk.StringVar(value="")
+        self._analysis_status_dialog: tk.Toplevel | None = None
+        self._analysis_request_token = 0
+        self._analysis_queue: queue.Queue[_AnalysisMessage] = queue.Queue()
+        self._pending_analysis_tokens: set[int] = set()
+        self._analysis_polling = False
         self._initialize_refresh_state()
 
     @property
@@ -559,10 +593,28 @@ class _PreviewTableController(_PreviewRefreshControllerBase):
         self._popup_export_controller.destroy_header_filter_popup()
         self.refresh()
 
+    def on_query_changed(self, *_args) -> None:
+        self._cancel_pending_analysis_request()
+        self._clear_processing_status()
+        super().on_query_changed(*_args)
+
+    def on_combine_sessions_changed(self, *_args) -> None:
+        self._set_processing_status("Processing sessions...")
+        self._processing_status_load_token = self._load_token + 1
+        self.refresh()
+
+    def refresh(self, *_args) -> None:
+        self._cancel_pending_analysis_request()
+        next_load_token = self._load_token + 1
+        if self._processing_status_load_token is not None and self._processing_status_load_token != next_load_token:
+            self._clear_processing_status()
+        super().refresh(*_args)
+
     def export_current_view_as_csv(self) -> None:
         self._popup_export_controller.export_current_view_as_csv()
 
     def open_analysis_dialog(self) -> None:
+        self._cancel_pending_analysis_request()
         filter_state = self._current_filter_state()
         visible_column_indices = list(self._view_state.visible_column_indices)
         numeric_column_indices = {
@@ -570,15 +622,19 @@ class _PreviewTableController(_PreviewRefreshControllerBase):
             for index in visible_column_indices
             if self._pipeline.is_numeric_sort_column(index)
         }
-        open_csv_preview_analysis_dialog(
-            self._win,
-            self._data,
-            self._pipeline.filtered_rows_snapshot(filter_state),
-            visible_column_indices,
-            numeric_column_indices,
-            filtering_active=filter_state.filtering_active,
-            combine_sessions=filter_state.combine_sessions,
+        self._analysis_request_token += 1
+        request_token = self._analysis_request_token
+        self._pending_analysis_tokens.add(request_token)
+        self._set_analysis_status("Preparing analysis...")
+        worker = threading.Thread(
+            target=self._build_analysis_snapshot_in_background,
+            args=(request_token, filter_state, visible_column_indices, numeric_column_indices),
+            daemon=True,
         )
+        worker.start()
+        if not self._analysis_polling:
+            self._analysis_polling = True
+            self._win.after(25, self._poll_analysis_requests)
 
     def show_header_filter_popup(self, column_index: int, x_root: int, y_root: int) -> None:
         self._popup_export_controller.show_header_filter_popup(column_index, x_root, y_root)
@@ -657,6 +713,106 @@ class _PreviewTableController(_PreviewRefreshControllerBase):
             self._on_visible_columns_changed(list(self._data.headers), list(self._view_state.visible_column_indices))
         if not header_filter_cleared and not sort_cleared:
             self.refresh()
+
+    def _on_filtered_refresh_message(self, message) -> None:
+        if self._processing_status_load_token != message.load_token:
+            return
+        if isinstance(message, _FilteredErrorUpdate):
+            self._clear_processing_status()
+            return
+        if isinstance(message, _FilteredCountUpdate):
+            self._clear_processing_status()
+            return
+        if isinstance(message, _FilteredPreviewUpdate) and message.total_rows is not None:
+            self._clear_processing_status()
+
+    def _set_processing_status(self, message: str) -> None:
+        self._processing_status_var.set(message)
+        self._processing_status_dialog = show_centered_processing_dialog(
+            self._win,
+            self._processing_status_dialog,
+            self._processing_status_var,
+            title="Processing CSV",
+            eyebrow_text="SESSION MERGE",
+            detail_text="Combining sessions and rebuilding the visible preview rows.",
+        )
+
+    def _clear_processing_status(self) -> None:
+        self._processing_status_var.set("")
+        self._processing_status_load_token = None
+        dialog = self._processing_status_dialog
+        self._processing_status_dialog = None
+        close_processing_dialog(self._win, dialog)
+
+    def _set_analysis_status(self, message: str) -> None:
+        self._analysis_status_var.set(message)
+        self._analysis_status_dialog = show_centered_processing_dialog(
+            self._win,
+            self._analysis_status_dialog,
+            self._analysis_status_var,
+            title="Preparing Analysis",
+            eyebrow_text="ANALYSIS",
+            detail_text="Collecting filtered rows and preparing chart summaries.",
+        )
+
+    def _clear_analysis_status(self) -> None:
+        self._analysis_status_var.set("")
+        dialog = self._analysis_status_dialog
+        self._analysis_status_dialog = None
+        close_processing_dialog(self._win, dialog)
+
+    def _cancel_pending_analysis_request(self) -> None:
+        if self._pending_analysis_tokens:
+            self._analysis_request_token += 1
+            self._pending_analysis_tokens.clear()
+        self._clear_analysis_status()
+
+    def _build_analysis_snapshot_in_background(
+        self,
+        request_token: int,
+        filter_state: _PreviewFilterState,
+        visible_column_indices: list[int],
+        numeric_column_indices: set[int],
+    ) -> None:
+        try:
+            analysis_pipeline = _PreviewDataPipeline(self._data)
+            filtered_rows = analysis_pipeline.filtered_rows_snapshot(filter_state)
+            snapshot = build_preview_analysis_snapshot(
+                self._data,
+                filtered_rows,
+                visible_column_indices,
+                numeric_column_indices,
+                filtering_active=filter_state.filtering_active,
+                combine_sessions=filter_state.combine_sessions,
+            )
+            self._analysis_queue.put(_AnalysisSnapshotReady(request_token=request_token, snapshot=snapshot))
+        except Exception as exc:
+            self._analysis_queue.put(_AnalysisSnapshotError(request_token=request_token, error=exc))
+
+    def _poll_analysis_requests(self) -> None:
+        if not self._win.winfo_exists():
+            return
+
+        while True:
+            try:
+                message = self._analysis_queue.get_nowait()
+            except queue.Empty:
+                break
+
+            self._pending_analysis_tokens.discard(message.request_token)
+            if message.request_token != self._analysis_request_token:
+                continue
+
+            self._clear_analysis_status()
+            if isinstance(message, _AnalysisSnapshotError):
+                messagebox.showerror("CSV analysis unavailable", str(message.error))
+                continue
+            open_csv_preview_analysis_dialog_from_snapshot(self._win, message.snapshot)
+
+        if self._pending_analysis_tokens:
+            self._win.after(25, self._poll_analysis_requests)
+            return
+        self._analysis_polling = False
 
     def _populate_rows_in_chunks(
         self,
@@ -756,6 +912,7 @@ def create_csv_preview_dialog(
     query_entry = ttk.Entry(filter_row, textvariable=query_var, width=24)
     query_entry.pack(side="left", padx=(6, 12))
     ttk.Label(filter_row, text="Press Enter to search").pack(side="left", padx=(0, 12))
+    ttk.Label(filter_row, text=_header_mode_text(data.has_header_row), anchor="e").pack(side="right")
 
     combine_sessions_supported = _detect_session_column(data.headers) is not None and _detect_quantity_column(data.headers) is not None
     combine_sessions_var = tk.BooleanVar(value=False)
@@ -810,7 +967,7 @@ def create_csv_preview_dialog(
     ttk.Button(button_row, text="Close", command=win.destroy).pack(side="right")
 
     query_var.trace_add("write", controller.on_query_changed)
-    combine_sessions_var.trace_add("write", controller.refresh)
+    combine_sessions_var.trace_add("write", controller.on_combine_sessions_changed)
     query_entry.bind("<Return>", controller.trigger_refresh_now, add="+")
     tree.bind("<ButtonRelease-1>", controller.on_tree_click, add="+")
     controller.refresh()
@@ -825,8 +982,9 @@ def open_csv_preview_dialog(
     *,
     width: int,
     height: int,
+    has_header_row: bool = True,
 ) -> tk.Toplevel:
-    data = load_csv_preview(csv_path)
+    data = load_csv_preview(csv_path, has_header_row=has_header_row)
     settings_store = SettingsStore()
     normalized_path = str(data.path)
     saved_state = settings_store.load_csv_preview_state(normalized_path)

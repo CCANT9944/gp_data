@@ -16,7 +16,7 @@ from .record_actions import RecordActions
 from .record_logic import filtered_records, record_matches_query
 from .storage_feedback import describe_backup_failure, describe_startup_storage_issue, describe_storage_error
 from .table import METRIC_LABELS, RecordTable
-from .view_helpers import clear_table_selection, focus_record_in_table, focus_widget, recalc_form_field6, restore_table_selection
+from .view_helpers import close_processing_dialog, clear_table_selection, focus_record_in_table, focus_widget, recalc_form_field6, restore_table_selection, show_centered_processing_dialog
 
 
 NEW_MODE_BANNER_BG = "#e7f1ff"
@@ -119,6 +119,9 @@ class GPDataApp(tk.Tk):
         ttk.Button(controls, text="Clear", command=self.on_clear_search).pack(side="right", padx=4)
         self._search_entry.pack(side="right", padx=4)
         ttk.Label(controls, text="Search").pack(side="right", padx=(4, 0))
+
+        self._csv_preview_status_var = tk.StringVar(value="")
+        self._csv_preview_status_dialog: tk.Toplevel | None = None
 
         self.row_menu = tk.Menu(self, tearoff=0)
         self.row_menu.add_command(label="Load into form", command=self.on_edit)
@@ -571,13 +574,20 @@ class GPDataApp(tk.Tk):
                 command=lambda value=saved_path: self.on_open_recent_csv_preview(value),
             )
 
-    def _open_csv_preview_path(self, csv_path: Path, *, remember: bool) -> None:
+    def _open_csv_preview_path(self, csv_path: Path, *, remember: bool, status_message: str = "Processing CSV...") -> None:
+        self._set_csv_preview_status(status_message)
         width, height = self._csv_preview_geometry()
         try:
-            open_csv_preview_dialog(self, csv_path, width=width, height=height)
+            has_header_row = self._resolve_csv_preview_has_header_row(csv_path, prompt=False)
+            if has_header_row is None:
+                return
+            open_csv_preview_dialog(self, csv_path, width=width, height=height, has_header_row=has_header_row)
         except CsvPreviewError as exc:
             messagebox.showerror("CSV preview unavailable", str(exc))
             return
+        finally:
+            self._clear_csv_preview_status()
+
         if remember:
             try:
                 self._settings.remember_csv_preview_path(str(csv_path))
@@ -586,6 +596,49 @@ class GPDataApp(tk.Tk):
                 self._warn_settings_save_failure("the recent CSV preview list", exc)
             self._update_open_last_csv_button_state()
 
+    def _set_csv_preview_status(self, message: str) -> None:
+        self._csv_preview_status_var.set(message)
+        self._csv_preview_status_dialog = show_centered_processing_dialog(
+            self,
+            self._csv_preview_status_dialog,
+            self._csv_preview_status_var,
+            title="Processing CSV",
+            eyebrow_text="CSV PREVIEW",
+            detail_text="Loading the preview, checking metadata, and preparing visible rows.",
+        )
+
+    def _clear_csv_preview_status(self) -> None:
+        self._csv_preview_status_var.set("")
+        dialog = self._csv_preview_status_dialog
+        self._csv_preview_status_dialog = None
+        close_processing_dialog(self, dialog)
+
+    def _resolve_csv_preview_has_header_row(self, csv_path: Path, *, prompt: bool) -> bool | None:
+        normalized_path = str(csv_path)
+        saved_choice = self._settings.load_csv_preview_has_header_row(normalized_path)
+        if saved_choice is not None and not prompt:
+            return saved_choice
+
+        remembered_text = ""
+        if saved_choice is not None:
+            remembered_text = "\n\nRemembered choice for this file: first row is {}headers.".format("" if saved_choice else "not ")
+        choice = messagebox.askyesnocancel(
+            "CSV header row",
+            "Does this CSV already contain a header row?\n\n"
+            "Yes: use the first row as column names.\n"
+            "No: generate Column 1, Column 2, Column 3, ... and keep the first row as data."
+            f"{remembered_text}",
+        )
+        if choice is None:
+            return None
+        has_header_row = bool(choice)
+        try:
+            self._settings.save_csv_preview_has_header_row(normalized_path, has_header_row)
+        except (OSError, TypeError, ValueError) as exc:
+            LOGGER.warning("Unable to persist CSV preview header mode", exc_info=True)
+            self._warn_settings_save_failure("the CSV header option", exc)
+        return has_header_row
+
     def on_open_csv_preview(self) -> None:
         path = filedialog.askopenfilename(
             title="Open CSV",
@@ -593,7 +646,9 @@ class GPDataApp(tk.Tk):
         )
         if not path:
             return
-        self._open_csv_preview_path(Path(path), remember=True)
+        if self._resolve_csv_preview_has_header_row(Path(path), prompt=True) is None:
+            return
+        self._open_csv_preview_path(Path(path), remember=True, status_message="Processing CSV...")
 
     def on_open_last_csv_preview(self) -> None:
         recent_paths = self._settings.load_csv_preview_recent_paths()
@@ -610,7 +665,7 @@ class GPDataApp(tk.Tk):
                 self._warn_settings_save_failure("the recent CSV preview list", exc)
             self._update_open_last_csv_button_state()
             return
-        self._open_csv_preview_path(csv_path, remember=True)
+        self._open_csv_preview_path(csv_path, remember=True, status_message="Processing last CSV...")
 
     def on_open_recent_csv_preview(self, saved_path: str) -> None:
         csv_path = Path(saved_path)
@@ -625,7 +680,7 @@ class GPDataApp(tk.Tk):
                 self._warn_settings_save_failure("the recent CSV preview list", exc)
             self._update_open_last_csv_button_state()
             return
-        self._open_csv_preview_path(csv_path, remember=True)
+        self._open_csv_preview_path(csv_path, remember=True, status_message="Processing recent CSV...")
 
     def on_export(self) -> None:
         path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files", "*.csv")])

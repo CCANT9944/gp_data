@@ -78,6 +78,9 @@ class _PreviewRefreshControllerBase:
     def _rebuild_tree_columns(self, previous_column_count: int) -> None:
         raise NotImplementedError
 
+    def _on_filtered_refresh_message(self, message: _FilteredRefreshMessage) -> None:
+        return
+
     def on_query_changed(self, *_args) -> None:
         if self._scheduled_refresh_id is not None:
             self._win.after_cancel(self._scheduled_refresh_id)
@@ -257,6 +260,8 @@ class _PreviewRefreshControllerBase:
                 message = self._filtered_refresh_queue.get_nowait()
             except queue.Empty:
                 break
+
+            self._on_filtered_refresh_message(message)
 
             if isinstance(message, _FilteredPreviewUpdate):
                 filtered_state = self._pending_filtered_refresh_filtered_state.get(message.load_token, False)

@@ -92,6 +92,24 @@ def test_build_category_chart_series_groups_other_bucket() -> None:
     assert len(series.labels) == 5
 
 
+def test_build_category_chart_series_disambiguates_existing_other_label() -> None:
+    data = _analysis_data(["Category"])
+    snapshot = build_preview_analysis_snapshot(
+        data,
+        [(value,) for value in ["Other", "Other", "Other", "Wine", "Wine", "Beer", "Beer", "Gin", "Rum"]],
+        [0],
+        set(),
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    series = build_category_chart_series(snapshot, 0, limit=4)
+
+    assert series is not None
+    assert series.labels.count("Other") == 1
+    assert any(label.startswith("Other (grouped") for label in series.labels)
+
+
 def test_build_numeric_bar_chart_series_uses_description_and_quantity_high_to_low() -> None:
     data = _analysis_data(["Description1", "Quantity1", "ClassName1"])
     snapshot = build_preview_analysis_snapshot(
@@ -158,6 +176,30 @@ def test_build_aggregated_chart_series_with_no_limit_keeps_all_labels() -> None:
     assert series is not None
     assert len(series.labels) == 14
     assert "Other" not in series.labels
+
+
+def test_build_aggregated_chart_series_disambiguates_existing_other_label() -> None:
+    data = _analysis_data(["Description1", "Quantity1"])
+    snapshot = build_preview_analysis_snapshot(
+        data,
+        [
+            ("Other", "8"),
+            ("Wine", "6"),
+            ("Beer", "4"),
+            ("Gin", "2"),
+            ("Rum", "1"),
+        ],
+        [0, 1],
+        {1},
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    series = build_aggregated_chart_series(snapshot, 0, value_column_index=1, limit=4)
+
+    assert series is not None
+    assert series.labels.count("Other") == 1
+    assert any(label.startswith("Other (grouped") for label in series.labels)
 
 
 def test_format_value_counts_summary_limits_entries() -> None:

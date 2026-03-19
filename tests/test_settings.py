@@ -192,6 +192,7 @@ def test_save_and_load_csv_preview_state_for_path(tmp_path: Path):
         visible_column_keys=["name#1", "quantity#1"],
         sort_column_key="quantity#1",
         sort_descending=True,
+        has_header_row=False,
     )
 
     settings.save_csv_preview_state(r"C:\data\stock.csv", state, p)
@@ -203,6 +204,16 @@ def test_save_and_load_csv_preview_state_for_path(tmp_path: Path):
     assert loaded.visible_column_keys == ["name#1", "quantity#1"]
     assert loaded.sort_column_key == "quantity#1"
     assert loaded.sort_descending is True
+    assert loaded.has_header_row is False
+
+
+def test_save_and_load_csv_preview_has_header_row_for_path(tmp_path: Path):
+    p = tmp_path / "settings.json"
+
+    settings.save_csv_preview_has_header_row(r"C:\data\stock.csv", False, p)
+
+    assert settings.load_csv_preview_has_header_row(r"C:\data\stock.csv", p) is False
+    assert settings.load_csv_preview_has_header_row(r"C:\data\sales.csv", p) is None
 
 
 def test_settings_store_preserves_csv_preview_last_path_during_other_updates(tmp_path: Path):

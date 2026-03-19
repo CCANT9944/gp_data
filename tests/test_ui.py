@@ -344,12 +344,14 @@ def test_open_csv_preview_launches_dialog(app_factory, tmp_path, monkeypatch):
     seen: dict[str, object] = {}
 
     monkeypatch.setattr("gp_data.ui.app.filedialog.askopenfilename", lambda **kwargs: str(csv_path))
+    monkeypatch.setattr("gp_data.ui.app.messagebox.askyesnocancel", lambda *args, **kwargs: True)
 
-    def fake_open(parent, csv_path, *, width, height):
+    def fake_open(parent, csv_path, *, width, height, has_header_row):
         seen["parent"] = parent
         seen["path"] = csv_path
         seen["width"] = width
         seen["height"] = height
+        seen["has_header_row"] = has_header_row
         return None
 
     monkeypatch.setattr("gp_data.ui.app.open_csv_preview_dialog", fake_open)
@@ -358,10 +360,12 @@ def test_open_csv_preview_launches_dialog(app_factory, tmp_path, monkeypatch):
 
     assert seen["parent"] is app
     assert seen["path"] == csv_path
+    assert seen["has_header_row"] is True
     assert int(seen["width"]) >= app.table.winfo_width()
     assert int(seen["height"]) >= app.table.winfo_height()
     assert app._settings.load_csv_preview_last_path() == str(csv_path)
     assert app._settings.load_csv_preview_recent_paths() == [str(csv_path)]
+    assert app._settings.load_csv_preview_has_header_row(str(csv_path)) is True
     assert str(app._open_last_csv_button.cget("state")) == "normal"
     assert str(app._open_recent_csv_button.cget("state")) == "normal"
     assert app._recent_csv_menu.entrycget(0, "label") == str(csv_path)
@@ -375,6 +379,32 @@ def test_open_csv_preview_cancel_does_not_launch_dialog(app_factory, tmp_path, m
     monkeypatch.setattr("gp_data.ui.app.open_csv_preview_dialog", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("dialog should not open")))
 
     app.on_open_csv_preview()
+
+
+def test_open_csv_preview_can_generate_default_headers_for_headerless_files(app_factory, tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setattr(settings_module, "DEFAULT_PATH", settings_path)
+    app = app_factory()
+    csv_path = tmp_path / "raw.csv"
+    csv_path.write_text("1,2,3\n4,5,6\n", encoding="utf-8")
+
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr("gp_data.ui.app.filedialog.askopenfilename", lambda **kwargs: str(csv_path))
+    monkeypatch.setattr("gp_data.ui.app.messagebox.askyesnocancel", lambda *args, **kwargs: False)
+
+    def fake_open(parent, csv_path, *, width, height, has_header_row):
+        seen["path"] = csv_path
+        seen["has_header_row"] = has_header_row
+        return None
+
+    monkeypatch.setattr("gp_data.ui.app.open_csv_preview_dialog", fake_open)
+
+    app.on_open_csv_preview()
+
+    assert seen["path"] == csv_path
+    assert seen["has_header_row"] is False
+    assert app._settings.load_csv_preview_has_header_row(str(csv_path)) is False
 
 
 def test_open_last_csv_button_enabled_from_saved_settings(tmp_path, monkeypatch):
@@ -421,17 +451,106 @@ def test_open_last_csv_preview_launches_saved_path(app_factory, tmp_path, monkey
 
     seen: dict[str, object] = {}
 
-    def fake_open(parent, csv_path, *, width, height):
+    def fake_open(parent, csv_path, *, width, height, has_header_row):
         seen["parent"] = parent
         seen["path"] = csv_path
+        seen["has_header_row"] = has_header_row
         return None
 
     monkeypatch.setattr("gp_data.ui.app.open_csv_preview_dialog", fake_open)
+    monkeypatch.setattr("gp_data.ui.app.messagebox.askyesnocancel", lambda *args, **kwargs: True)
 
     app.on_open_last_csv_preview()
 
     assert seen["parent"] is app
     assert seen["path"] == csv_path
+    assert seen["has_header_row"] is True
+
+
+def test_open_last_csv_preview_reuses_saved_header_mode(app_factory, tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setattr(settings_module, "DEFAULT_PATH", settings_path)
+    app = app_factory()
+    csv_path = tmp_path / "saved.csv"
+    csv_path.write_text("1,2,3\n4,5,6\n", encoding="utf-8")
+    app._settings.save_csv_preview_last_path(str(csv_path))
+    app._settings.save_csv_preview_has_header_row(str(csv_path), False)
+    app._update_open_last_csv_button_state()
+
+    seen: dict[str, object] = {}
+
+    def fake_open(parent, csv_path, *, width, height, has_header_row):
+        seen["path"] = csv_path
+        seen["has_header_row"] = has_header_row
+        return None
+
+    monkeypatch.setattr("gp_data.ui.app.open_csv_preview_dialog", fake_open)
+    monkeypatch.setattr(
+        "gp_data.ui.app.messagebox.askyesnocancel",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("header prompt should not be shown")),
+    )
+
+    app.on_open_last_csv_preview()
+
+    assert seen["path"] == csv_path
+    assert seen["has_header_row"] is False
+
+
+def test_open_last_csv_preview_shows_processing_message_while_loading(app_factory, tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setattr(settings_module, "DEFAULT_PATH", settings_path)
+    app = app_factory()
+    csv_path = tmp_path / "saved.csv"
+    csv_path.write_text("A,B\n1,2\n", encoding="utf-8")
+    app._settings.save_csv_preview_last_path(str(csv_path))
+    app._update_open_last_csv_button_state()
+
+    seen: dict[str, object] = {}
+
+    def fake_open(parent, csv_path, *, width, height, has_header_row):
+        dialog = parent._csv_preview_status_dialog
+        seen["dialog_exists"] = bool(dialog is not None and dialog.winfo_exists())
+        seen["dialog_title"] = dialog.title() if dialog is not None else ""
+        seen["status_during_open"] = parent._csv_preview_status_var.get()
+        seen["path"] = csv_path
+        seen["has_header_row"] = has_header_row
+        return None
+
+    monkeypatch.setattr("gp_data.ui.app.open_csv_preview_dialog", fake_open)
+    monkeypatch.setattr("gp_data.ui.app.messagebox.askyesnocancel", lambda *args, **kwargs: True)
+
+    app.on_open_last_csv_preview()
+
+    assert seen["path"] == csv_path
+    assert seen["has_header_row"] is True
+    assert seen["dialog_exists"] is True
+    assert seen["dialog_title"] == "Processing CSV"
+    assert seen["status_during_open"] == "Processing last CSV..."
+    assert app._csv_preview_status_var.get() == ""
+    assert app._csv_preview_status_dialog is None
+
+
+def test_csv_preview_processing_dialog_is_centered_over_app(app_factory):
+    app = app_factory(withdraw=False)
+    app.geometry("900x600+120+140")
+    app.update()
+
+    app._set_csv_preview_status("Processing last CSV...")
+
+    dialog = app._csv_preview_status_dialog
+    assert dialog is not None
+    app.update()
+    dialog.update_idletasks()
+
+    app_center_x = app.winfo_rootx() + (app.winfo_width() / 2)
+    app_center_y = app.winfo_rooty() + (app.winfo_height() / 2)
+    dialog_center_x = dialog.winfo_rootx() + (dialog.winfo_width() / 2)
+    dialog_center_y = dialog.winfo_rooty() + (dialog.winfo_height() / 2)
+
+    assert abs(dialog_center_x - app_center_x) <= 20
+    assert abs(dialog_center_y - app_center_y) <= 40
+
+    app._clear_csv_preview_status()
 
 
 def test_open_recent_csv_preview_launches_selected_saved_path(app_factory, tmp_path, monkeypatch):
@@ -443,13 +562,15 @@ def test_open_recent_csv_preview_launches_selected_saved_path(app_factory, tmp_p
     first_csv.write_text("A,B\n1,2\n", encoding="utf-8")
     second_csv.write_text("A,B\n3,4\n", encoding="utf-8")
     app._settings.save_csv_preview_recent_paths([str(first_csv), str(second_csv)])
+    app._settings.save_csv_preview_has_header_row(str(second_csv), True)
     app._update_open_last_csv_button_state()
 
     seen: dict[str, object] = {}
 
-    def fake_open(parent, csv_path, *, width, height):
+    def fake_open(parent, csv_path, *, width, height, has_header_row):
         seen["parent"] = parent
         seen["path"] = csv_path
+        seen["has_header_row"] = has_header_row
         return None
 
     monkeypatch.setattr("gp_data.ui.app.open_csv_preview_dialog", fake_open)
@@ -458,6 +579,7 @@ def test_open_recent_csv_preview_launches_selected_saved_path(app_factory, tmp_p
 
     assert seen["parent"] is app
     assert seen["path"] == second_csv
+    assert seen["has_header_row"] is True
     assert app._settings.load_csv_preview_recent_paths()[0] == str(second_csv)
 
 
