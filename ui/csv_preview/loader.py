@@ -18,6 +18,9 @@ PERSISTED_FULL_ROW_CACHE_MAX_FILE_BYTES = 32 * 1024 * 1024
 PREVIEW_CACHE_MAX_ENTRIES = 32
 _PREVIEW_CACHE: OrderedDict[tuple[str, int, int, bool], "CsvPreviewData"] = OrderedDict()
 
+type CacheKey = tuple[str, int, int]
+type PreviewCacheKey = tuple[str, int, int, bool]
+
 
 class CsvPreviewError(RuntimeError):
     pass
@@ -42,6 +45,24 @@ class CsvPreviewData:
         return self.row_total
 
 
+@dataclass(frozen=True)
+class _CachedPreviewMetadata:
+    encoding: str
+    headers: list[str]
+    row_total: int
+    has_header_row: bool
+    preview_rows: list[tuple[str, ...]] | None
+
+
+@dataclass(frozen=True)
+class _CachedFullRowData:
+    encoding: str
+    headers: list[str]
+    row_total: int
+    has_header_row: bool
+    rows: list[tuple[str, ...]]
+
+
 def _display_headers(header_row: list[str], column_count: int) -> list[str]:
     headers = list(header_row)
     for index in range(len(headers), column_count):
@@ -56,12 +77,12 @@ def _normalized_row(row: list[str], column_count: int) -> tuple[str, ...]:
     return tuple(normalized)
 
 
-def _cache_key(csv_path: Path) -> tuple[str, int, int]:
+def _cache_key(csv_path: Path) -> CacheKey:
     stat = csv_path.stat()
     return (str(csv_path.resolve()), stat.st_mtime_ns, stat.st_size)
 
 
-def _preview_cache_key(cache_key: tuple[str, int, int], has_header_row: bool) -> tuple[str, int, int, bool]:
+def _preview_cache_key(cache_key: CacheKey, has_header_row: bool) -> PreviewCacheKey:
     return (*cache_key, bool(has_header_row))
 
 
@@ -81,17 +102,31 @@ def _prioritized_encodings(cached_encoding: str | None):
     return tuple(prioritized)
 
 
-def _load_cached_preview_metadata(cache_key: tuple[str, int, int], csv_path: Path, has_header_row: bool) -> dict[str, object] | None:
-    sidecar_path = _metadata_sidecar_path(csv_path)
+def _load_sidecar_payload(sidecar_path: Path, *, compressed: bool = False) -> dict[str, object] | None:
     try:
-        with sidecar_path.open("r", encoding="utf-8") as sidecar_file:
-            payload = json.load(sidecar_file)
+        if compressed:
+            with gzip.open(sidecar_path, "rt", encoding="utf-8") as sidecar_file:
+                payload = json.load(sidecar_file)
+        else:
+            with sidecar_path.open("r", encoding="utf-8") as sidecar_file:
+                payload = json.load(sidecar_file)
     except (OSError, ValueError, json.JSONDecodeError):
         return None
 
-    if not isinstance(payload, dict):
+    return payload if isinstance(payload, dict) else None
+
+
+def _validated_sidecar_base(
+    payload: dict[str, object] | None,
+    cache_key: CacheKey,
+    has_header_row: bool,
+    *,
+    supported_versions: tuple[int, ...],
+) -> tuple[str, list[str], int, bool] | None:
+    if payload is None:
         return None
-    if payload.get("version") not in (1, _PREVIEW_METADATA_VERSION):
+
+    if payload.get("version") not in supported_versions:
         return None
     if payload.get("path") != cache_key[0] or payload.get("mtime_ns") != cache_key[1] or payload.get("size") != cache_key[2]:
         return None
@@ -99,7 +134,6 @@ def _load_cached_preview_metadata(cache_key: tuple[str, int, int], csv_path: Pat
     encoding = payload.get("encoding")
     headers = payload.get("headers")
     row_total = payload.get("row_total")
-    preview_rows = payload.get("preview_rows")
     cached_has_header_row = payload.get("has_header_row")
     if not isinstance(encoding, str) or not encoding:
         return None
@@ -110,73 +144,95 @@ def _load_cached_preview_metadata(cache_key: tuple[str, int, int], csv_path: Pat
     if cached_has_header_row is not None and (not isinstance(cached_has_header_row, bool) or cached_has_header_row != has_header_row):
         return None
 
-    normalized_preview_rows: list[tuple[str, ...]] | None = None
-    if preview_rows is not None:
-        if not isinstance(preview_rows, list) or len(preview_rows) > PREVIEW_ROW_SAMPLE_SIZE:
-            return None
-        normalized_preview_rows = []
-        for row in preview_rows:
-            if not isinstance(row, list) or not all(isinstance(value, str) for value in row):
-                return None
-            normalized_preview_rows.append(_normalized_row(row, len(headers)))
-
-    return {
-        "encoding": encoding,
-        "headers": list(headers),
-        "row_total": row_total,
-        "preview_rows": normalized_preview_rows,
-        "has_header_row": bool(cached_has_header_row) if isinstance(cached_has_header_row, bool) else True,
-    }
+    normalized_has_header_row = bool(cached_has_header_row) if isinstance(cached_has_header_row, bool) else True
+    return encoding, list(headers), row_total, normalized_has_header_row
 
 
-def _load_cached_full_row_cache(cache_key: tuple[str, int, int], csv_path: Path, has_header_row: bool) -> dict[str, object] | None:
-    sidecar_path = _row_cache_sidecar_path(csv_path)
-    try:
-        with gzip.open(sidecar_path, "rt", encoding="utf-8") as sidecar_file:
-            payload = json.load(sidecar_file)
-    except (OSError, ValueError, json.JSONDecodeError):
+def _normalized_cached_rows(
+    rows_payload: object,
+    *,
+    column_count: int,
+    expected_count: int | None = None,
+    max_count: int | None = None,
+) -> list[tuple[str, ...]] | None:
+    if not isinstance(rows_payload, list):
+        return None
+    if expected_count is not None and len(rows_payload) != expected_count:
+        return None
+    if max_count is not None and len(rows_payload) > max_count:
         return None
 
-    if not isinstance(payload, dict):
-        return None
-    if payload.get("version") != _ROW_CACHE_VERSION:
-        return None
-    if payload.get("path") != cache_key[0] or payload.get("mtime_ns") != cache_key[1] or payload.get("size") != cache_key[2]:
-        return None
-
-    encoding = payload.get("encoding")
-    headers = payload.get("headers")
-    row_total = payload.get("row_total")
-    rows = payload.get("rows")
-    cached_has_header_row = payload.get("has_header_row")
-    if not isinstance(encoding, str) or not encoding:
-        return None
-    if not isinstance(headers, list) or not headers or not all(isinstance(header, str) for header in headers):
-        return None
-    if not isinstance(row_total, int) or row_total < 0:
-        return None
-    if not isinstance(rows, list) or len(rows) != row_total:
-        return None
-    if cached_has_header_row is not None and (not isinstance(cached_has_header_row, bool) or cached_has_header_row != has_header_row):
-        return None
-
-    column_count = len(headers)
     normalized_rows: list[tuple[str, ...]] = []
-    for row in rows:
+    for row in rows_payload:
         if not isinstance(row, list) or not all(isinstance(value, str) for value in row):
             return None
         normalized_rows.append(_normalized_row(row, column_count))
-
-    return {
-        "encoding": encoding,
-        "headers": list(headers),
-        "row_total": row_total,
-        "rows": normalized_rows,
-        "has_header_row": bool(cached_has_header_row) if isinstance(cached_has_header_row, bool) else True,
-    }
+    return normalized_rows
 
 
-def _store_cached_preview_metadata(cache_key: tuple[str, int, int], data: CsvPreviewData) -> None:
+def _load_cached_preview_metadata(cache_key: CacheKey, csv_path: Path, has_header_row: bool) -> _CachedPreviewMetadata | None:
+    payload = _load_sidecar_payload(_metadata_sidecar_path(csv_path))
+    base = _validated_sidecar_base(
+        payload,
+        cache_key,
+        has_header_row,
+        supported_versions=(1, _PREVIEW_METADATA_VERSION),
+    )
+    if base is None:
+        return None
+
+    encoding, headers, row_total, normalized_has_header_row = base
+    preview_rows_payload = payload.get("preview_rows") if payload is not None else None
+    preview_rows = None
+    if preview_rows_payload is not None:
+        preview_rows = _normalized_cached_rows(
+            preview_rows_payload,
+            column_count=len(headers),
+            max_count=PREVIEW_ROW_SAMPLE_SIZE,
+        )
+        if preview_rows is None:
+            return None
+
+    return _CachedPreviewMetadata(
+        encoding=encoding,
+        headers=headers,
+        row_total=row_total,
+        has_header_row=normalized_has_header_row,
+        preview_rows=preview_rows,
+    )
+
+
+def _load_cached_full_row_cache(cache_key: CacheKey, csv_path: Path, has_header_row: bool) -> _CachedFullRowData | None:
+    payload = _load_sidecar_payload(_row_cache_sidecar_path(csv_path), compressed=True)
+    base = _validated_sidecar_base(
+        payload,
+        cache_key,
+        has_header_row,
+        supported_versions=(_ROW_CACHE_VERSION,),
+    )
+    if base is None:
+        return None
+
+    encoding, headers, row_total, normalized_has_header_row = base
+    rows_payload = payload.get("rows") if payload is not None else None
+    rows = _normalized_cached_rows(
+        rows_payload,
+        column_count=len(headers),
+        expected_count=row_total,
+    )
+    if rows is None:
+        return None
+
+    return _CachedFullRowData(
+        encoding=encoding,
+        headers=headers,
+        row_total=row_total,
+        has_header_row=normalized_has_header_row,
+        rows=rows,
+    )
+
+
+def _store_cached_preview_metadata(cache_key: CacheKey, data: CsvPreviewData) -> None:
     sidecar_path = _metadata_sidecar_path(data.path)
     if data.row_total is None or data.row_total <= PREVIEW_ROW_SAMPLE_SIZE:
         try:
@@ -203,7 +259,7 @@ def _store_cached_preview_metadata(cache_key: tuple[str, int, int], data: CsvPre
         return
 
 
-def _store_cached_full_row_cache(cache_key: tuple[str, int, int], data: CsvPreviewData, rows: list[tuple[str, ...]] | None) -> None:
+def _store_cached_full_row_cache(cache_key: CacheKey, data: CsvPreviewData, rows: list[tuple[str, ...]] | None) -> None:
     sidecar_path = _row_cache_sidecar_path(data.path)
     if (
         rows is None
@@ -236,7 +292,7 @@ def _store_cached_full_row_cache(cache_key: tuple[str, int, int], data: CsvPrevi
         return
 
 
-def _store_cached_preview(cache_key: tuple[str, int, int, bool], data: CsvPreviewData) -> None:
+def _store_cached_preview(cache_key: PreviewCacheKey, data: CsvPreviewData) -> None:
     resolved_path = cache_key[0]
     has_header_row = cache_key[3]
     stale_keys = [key for key in _PREVIEW_CACHE if key[0] == resolved_path and key[3] == has_header_row and key != cache_key]
@@ -284,9 +340,9 @@ def load_cached_csv_row_cache(data: CsvPreviewData) -> list[tuple[str, ...]] | N
     cached = _load_cached_full_row_cache(cache_key, data.path, data.has_header_row)
     if cached is None:
         return None
-    if cached["encoding"] != data.encoding or cached["headers"] != data.headers or cached["row_total"] != data.row_count:
+    if cached.encoding != data.encoding or cached.headers != data.headers or cached.row_total != data.row_count:
         return None
-    return list(cached["rows"])
+    return list(cached.rows)
 
 
 def resolve_csv_preview_metadata(data: CsvPreviewData) -> CsvPreviewData:
@@ -300,7 +356,7 @@ def resolve_csv_preview_metadata(data: CsvPreviewData) -> CsvPreviewData:
 
     column_count = len(first_row)
     row_total = 0 if data.has_header_row else 1
-    cache_key: tuple[str, int, int] | None = None
+    cache_key: CacheKey | None = None
     full_row_candidates: list[list[str]] | None = None
     try:
         cache_key = _cache_key(data.path)
@@ -358,13 +414,13 @@ def load_csv_preview(path: str | Path, *, has_header_row: bool = True) -> CsvPre
         return cached
 
     cached_metadata = _load_cached_preview_metadata(cache_key, csv_path, has_header_row)
-    if cached_metadata is not None and cached_metadata.get("preview_rows") is not None:
-        rows = list(cached_metadata["preview_rows"])
-        row_total = cached_metadata["row_total"]
+    if cached_metadata is not None and cached_metadata.preview_rows is not None:
+        rows = list(cached_metadata.preview_rows)
+        row_total = cached_metadata.row_total
         data = CsvPreviewData(
             path=csv_path,
-            encoding=str(cached_metadata["encoding"]),
-            headers=list(cached_metadata["headers"]),
+            encoding=cached_metadata.encoding,
+            headers=list(cached_metadata.headers),
             rows=rows,
             row_total=row_total,
             fully_cached=row_total is not None and row_total <= len(rows),
@@ -380,7 +436,7 @@ def load_csv_preview(path: str | Path, *, has_header_row: bool = True) -> CsvPre
     row_total: int | None = 0
     column_count = 0
 
-    for encoding in _prioritized_encodings(cached_metadata["encoding"] if cached_metadata is not None else None):
+    for encoding in _prioritized_encodings(cached_metadata.encoding if cached_metadata is not None else None):
         try:
             row_iter = _iter_csv_file_rows(csv_path, encoding)
             first_row = next(row_iter, None)
@@ -413,7 +469,7 @@ def load_csv_preview(path: str | Path, *, has_header_row: bool = True) -> CsvPre
     if column_count == 0:
         raise CsvPreviewError("The selected CSV file does not contain any columns.")
 
-    cached_headers = None if cached_metadata is None else cached_metadata["headers"]
+    cached_headers = None if cached_metadata is None else cached_metadata.headers
     if isinstance(cached_headers, list) and len(cached_headers) >= column_count:
         column_count = len(cached_headers)
         headers = list(cached_headers)
@@ -421,7 +477,7 @@ def load_csv_preview(path: str | Path, *, has_header_row: bool = True) -> CsvPre
         headers = _display_headers(first_row if has_header_row else [], column_count)
 
     if row_total is None and cached_metadata is not None:
-        cached_row_total = cached_metadata["row_total"]
+        cached_row_total = cached_metadata.row_total
         if isinstance(cached_row_total, int) and cached_row_total > PREVIEW_ROW_SAMPLE_SIZE:
             row_total = cached_row_total
 

@@ -16,7 +16,7 @@ from .record_actions import RecordActions
 from .record_logic import filtered_records, record_matches_query
 from .storage_feedback import describe_backup_failure, describe_startup_storage_issue, describe_storage_error
 from .table import METRIC_LABELS, RecordTable
-from .view_helpers import close_processing_dialog, clear_table_selection, focus_record_in_table, focus_widget, recalc_form_field6, restore_table_selection, show_centered_processing_dialog
+from .view_helpers import ProcessingDialogHandle, clear_table_selection, focus_record_in_table, focus_widget, recalc_form_field6, restore_table_selection
 
 
 NEW_MODE_BANNER_BG = "#e7f1ff"
@@ -120,8 +120,12 @@ class GPDataApp(tk.Tk):
         self._search_entry.pack(side="right", padx=4)
         ttk.Label(controls, text="Search").pack(side="right", padx=(4, 0))
 
-        self._csv_preview_status_var = tk.StringVar(value="")
-        self._csv_preview_status_dialog: tk.Toplevel | None = None
+        self._csv_preview_status = ProcessingDialogHandle(
+            self,
+            title="Processing CSV",
+            eyebrow_text="CSV PREVIEW",
+            detail_text="Loading the preview, checking metadata, and preparing visible rows.",
+        )
 
         self.row_menu = tk.Menu(self, tearoff=0)
         self.row_menu.add_command(label="Load into form", command=self.on_edit)
@@ -574,13 +578,25 @@ class GPDataApp(tk.Tk):
                 command=lambda value=saved_path: self.on_open_recent_csv_preview(value),
             )
 
-    def _open_csv_preview_path(self, csv_path: Path, *, remember: bool, status_message: str = "Processing CSV...") -> None:
+    @property
+    def _csv_preview_status_var(self) -> tk.StringVar:
+        return self._csv_preview_status.message_var
+
+    @property
+    def _csv_preview_status_dialog(self) -> tk.Toplevel | None:
+        return self._csv_preview_status.dialog
+
+    def _open_csv_preview_path(
+        self,
+        csv_path: Path,
+        *,
+        remember: bool,
+        has_header_row: bool,
+        status_message: str = "Processing CSV...",
+    ) -> None:
         self._set_csv_preview_status(status_message)
         width, height = self._csv_preview_geometry()
         try:
-            has_header_row = self._resolve_csv_preview_has_header_row(csv_path, prompt=False)
-            if has_header_row is None:
-                return
             open_csv_preview_dialog(self, csv_path, width=width, height=height, has_header_row=has_header_row)
         except CsvPreviewError as exc:
             messagebox.showerror("CSV preview unavailable", str(exc))
@@ -597,21 +613,10 @@ class GPDataApp(tk.Tk):
             self._update_open_last_csv_button_state()
 
     def _set_csv_preview_status(self, message: str) -> None:
-        self._csv_preview_status_var.set(message)
-        self._csv_preview_status_dialog = show_centered_processing_dialog(
-            self,
-            self._csv_preview_status_dialog,
-            self._csv_preview_status_var,
-            title="Processing CSV",
-            eyebrow_text="CSV PREVIEW",
-            detail_text="Loading the preview, checking metadata, and preparing visible rows.",
-        )
+        self._csv_preview_status.show(message)
 
     def _clear_csv_preview_status(self) -> None:
-        self._csv_preview_status_var.set("")
-        dialog = self._csv_preview_status_dialog
-        self._csv_preview_status_dialog = None
-        close_processing_dialog(self, dialog)
+        self._csv_preview_status.clear()
 
     def _resolve_csv_preview_has_header_row(self, csv_path: Path, *, prompt: bool) -> bool | None:
         normalized_path = str(csv_path)
@@ -646,9 +651,10 @@ class GPDataApp(tk.Tk):
         )
         if not path:
             return
-        if self._resolve_csv_preview_has_header_row(Path(path), prompt=True) is None:
+        has_header_row = self._resolve_csv_preview_has_header_row(Path(path), prompt=True)
+        if has_header_row is None:
             return
-        self._open_csv_preview_path(Path(path), remember=True, status_message="Processing CSV...")
+        self._open_csv_preview_path(Path(path), remember=True, has_header_row=has_header_row, status_message="Processing CSV...")
 
     def on_open_last_csv_preview(self) -> None:
         recent_paths = self._settings.load_csv_preview_recent_paths()
@@ -665,7 +671,10 @@ class GPDataApp(tk.Tk):
                 self._warn_settings_save_failure("the recent CSV preview list", exc)
             self._update_open_last_csv_button_state()
             return
-        self._open_csv_preview_path(csv_path, remember=True, status_message="Processing last CSV...")
+        has_header_row = self._resolve_csv_preview_has_header_row(csv_path, prompt=False)
+        if has_header_row is None:
+            return
+        self._open_csv_preview_path(csv_path, remember=True, has_header_row=has_header_row, status_message="Processing last CSV...")
 
     def on_open_recent_csv_preview(self, saved_path: str) -> None:
         csv_path = Path(saved_path)
@@ -680,7 +689,10 @@ class GPDataApp(tk.Tk):
                 self._warn_settings_save_failure("the recent CSV preview list", exc)
             self._update_open_last_csv_button_state()
             return
-        self._open_csv_preview_path(csv_path, remember=True, status_message="Processing recent CSV...")
+        has_header_row = self._resolve_csv_preview_has_header_row(csv_path, prompt=False)
+        if has_header_row is None:
+            return
+        self._open_csv_preview_path(csv_path, remember=True, has_header_row=has_header_row, status_message="Processing recent CSV...")
 
     def on_export(self) -> None:
         path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files", "*.csv")])

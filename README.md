@@ -160,7 +160,7 @@ python main.py cleanup
 - `ui/app.py`: top-level Tkinter controller
 - `ui/csv_preview/`: raw CSV preview package for loading and showing external CSV files in a separate window
 - `ui/record_actions.py`: record lookup and add/save/delete action flows
-- `ui/view_helpers.py`: shared UI focus, recalc, and table-selection helpers
+- `ui/view_helpers.py`: shared UI focus, recalc, table-selection, and processing-dialog helpers
 - `ui/`: the rest of the Tkinter application code
 - `data_manager/`: CSV and SQLite persistence layer
 - `models.py`: record model and calculated fields
@@ -177,7 +177,7 @@ python main.py cleanup
 - `ui/csv_preview/pipeline.py`: owns preview search, filtering, sort, combine-session, and cache decisions that should stay independent from Tk widgets.
 - `ui/csv_preview/popup_controller.py`: owns header popup and preview export behavior, including async distinct-value loading and exact-value filter application.
 - `ui/csv_preview/refresh_controller.py`: owns metadata refresh, filtered refresh polling, loading placeholders, and header-filter prewarm orchestration for the preview table.
-- `ui/csv_preview/dialog.py`: owns Tk window creation, view state, and Treeview rendering, while bridging to the extracted helper, pipeline, refresh, and popup-controller layers.
+- `ui/csv_preview/dialog.py`: owns Tk window creation, view state, and Treeview rendering, while delegating processing-dialog reuse and background analysis snapshot preparation to smaller helper objects.
 
 ## Testing
 

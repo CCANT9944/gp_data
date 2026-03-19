@@ -222,6 +222,7 @@ What it does:
 
 - opens the CSV in a separate window
 - shows a clear centered processing message while the CSV is opening, while sessions are being combined, and while analysis is being prepared
+- uses the same processing-message style across those long CSV actions, and the message closes automatically when that step finishes
 - shows all columns from the file
 - shows the first preview rows immediately for large files so the window opens faster
 - can generate Column 1, Column 2, Column 3, and so on when the file does not have real headers

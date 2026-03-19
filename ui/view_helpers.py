@@ -23,6 +23,49 @@ class _ProcessingDialogState:
 _PROCESSING_DIALOG_STATE: WeakKeyDictionary[tk.Toplevel, _ProcessingDialogState] = WeakKeyDictionary()
 
 
+class ProcessingDialogHandle:
+    def __init__(
+        self,
+        parent: tk.Misc,
+        *,
+        title: str,
+        eyebrow_text: str = "LOADING",
+        detail_text: str,
+    ) -> None:
+        self._parent = parent
+        self._title = title
+        self._eyebrow_text = eyebrow_text
+        self._detail_text = detail_text
+        self._message_var = tk.StringVar(value="")
+        self._dialog: tk.Toplevel | None = None
+
+    @property
+    def message_var(self) -> tk.StringVar:
+        return self._message_var
+
+    @property
+    def dialog(self) -> tk.Toplevel | None:
+        return self._dialog
+
+    def show(self, message: str) -> tk.Toplevel:
+        self._message_var.set(message)
+        self._dialog = show_centered_processing_dialog(
+            self._parent,
+            self._dialog,
+            self._message_var,
+            title=self._title,
+            eyebrow_text=self._eyebrow_text,
+            detail_text=self._detail_text,
+        )
+        return self._dialog
+
+    def clear(self) -> None:
+        self._message_var.set("")
+        dialog = self._dialog
+        self._dialog = None
+        close_processing_dialog(self._parent, dialog)
+
+
 def show_centered_processing_dialog(
     parent: tk.Misc,
     dialog: tk.Toplevel | None,
