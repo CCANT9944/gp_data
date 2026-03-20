@@ -252,6 +252,7 @@ Important notes:
 - the app also remembers whether each CSV path uses a real header row or generated column names, so Last CSV and Recent CSVs reopen the same way
 - the app also remembers which preview columns you left visible for each CSV path and restores them by column header when possible if the same file is reordered later
 - the app remembers the active preview sort for each CSV path and shows that active sort in the preview summary line
+- reopening a CSV through Last CSV or Recent CSVs restores that saved preview state together, so the same header mode, visible columns, and sort come back for that file
 - reopening the same unchanged CSV is faster while the app is still open
 - reopening the same unchanged CSV after restarting the app is also faster because the viewer can reuse stored preview rows, and some moderate-sized files can also reuse a stored full-row cache for later searches
 - repeated searches on larger CSVs can also speed up after the viewer builds a temporary in-memory search index when the file size is still reasonable for your machine
@@ -298,9 +299,7 @@ This includes:
 - the GP row highlight threshold
 - the last CSV preview path used by Last CSV
 - the recent CSV preview paths used by Recent CSVs
-- the visible preview columns remembered for each CSV path, with header-aware restore when possible for reordered CSVs
-- the active preview sort remembered for each CSV path
-- the remembered header-row choice for each CSV path
+- the saved raw CSV preview state for each CSV path, including visible columns, active sort, and remembered header-row choice, with header-aware restore when possible for reordered CSVs
 
 Important:
 

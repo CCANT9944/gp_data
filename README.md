@@ -164,7 +164,7 @@ python main.py cleanup
 - `ui/app_form_mode_controller.py`: form-mode banner and edit/new-item button-state logic
 - `ui/app_table_display_controller.py`: type filter, GP highlight, column labels, and column-visibility controls
 - `ui/app_record_controllers.py`: record list refresh/selection flow plus add/edit/save/delete form actions
-- `ui/csv_preview/`: raw CSV preview package for loading and showing external CSV files in a separate window
+- `ui/csv_preview/`: raw CSV preview package split into loader, dialog, controller, helper, state, and analysis modules
 - `ui/record_actions.py`: record lookup and add/save/delete action flows
 - `ui/view_helpers.py`: shared UI focus, recalc, table-selection, and processing-dialog helpers
 - `ui/`: the rest of the Tkinter application code
@@ -186,10 +186,18 @@ python main.py cleanup
 - `ui/csv_preview/helpers.py`: holds pure preview helpers for column identity, numeric detection, row summaries, and sort/query formatting so those rules stay separate from Tk widget code.
 - `ui/csv_preview/analysis.py`: builds analysis snapshots, numeric summaries, and top-value chart series from the current filtered preview rows.
 - `ui/csv_preview/analysis_dialog.py`: owns the separate analysis dialog and its summary-table, bar-chart, pie-chart, bar-range, and bar-orientation views.
+- `ui/csv_preview/analysis_launcher.py`: prepares filtered analysis snapshots in the background and opens the analysis dialog when the snapshot is ready.
+- `ui/csv_preview/dialog_support.py`: holds generic Treeview, export-path, and widget helpers used by the preview window.
 - `ui/csv_preview/pipeline.py`: owns preview search, filtering, sort, combine-session, and cache decisions that should stay independent from Tk widgets.
+- `ui/csv_preview/preview_pipeline.py`: provides the dialog-facing preview pipeline class while still routing runtime hooks through the dialog module for test and compatibility stability.
+- `ui/csv_preview/preview_settings.py`: restores remembered preview columns and sort per CSV path and builds the save callbacks used by the preview window.
+- `ui/csv_preview/preview_state.py`: holds the preview summary and view-state dataclasses used by the table controller.
 - `ui/csv_preview/popup_controller.py`: owns header popup and preview export behavior, including async distinct-value loading and exact-value filter application.
 - `ui/csv_preview/refresh_controller.py`: owns metadata refresh, filtered refresh polling, loading placeholders, and header-filter prewarm orchestration for the preview table.
-- `ui/csv_preview/dialog.py`: owns Tk window creation, view state, and Treeview rendering, while delegating processing-dialog reuse and background analysis snapshot preparation to smaller helper objects.
+- `ui/csv_preview/row_combiner.py`: owns combined-session row iteration and pre-header-filter row generation for the preview pipeline.
+- `ui/csv_preview/table_controller.py`: owns the preview table controller and popup-export adapter used by the dialog.
+- `ui/csv_preview/table_helpers.py`: owns the column chooser dialog, visible-column manager, and chunked Treeview row renderer.
+- `ui/csv_preview/dialog.py`: remains the public preview entrypoint and compatibility surface, while delegating most preview behavior to the narrower modules above.
 
 ## Main App Architecture
 
