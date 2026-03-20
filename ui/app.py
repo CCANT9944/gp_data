@@ -32,6 +32,247 @@ WINDOW_SCREEN_MARGIN = 80
 LOGGER = logging.getLogger(__name__)
 
 
+class _CsvPreviewLaunchController:
+    def __init__(
+        self,
+        app: "GPDataApp",
+        settings: SettingsStore,
+        open_last_csv_button: ttk.Button,
+        open_recent_csv_button: ttk.Menubutton,
+        recent_csv_menu: tk.Menu,
+        warn_settings_save_failure,
+        get_geometry,
+        set_status,
+        clear_status,
+    ) -> None:
+        self._app = app
+        self._settings = settings
+        self._open_last_csv_button = open_last_csv_button
+        self._open_recent_csv_button = open_recent_csv_button
+        self._recent_csv_menu = recent_csv_menu
+        self._warn_settings_save_failure = warn_settings_save_failure
+        self._get_geometry = get_geometry
+        self._set_status = set_status
+        self._clear_status = clear_status
+
+    def update_open_last_csv_button_state(self) -> None:
+        recent_paths = self._settings.load_csv_preview_recent_paths()
+        existing_paths = [path for path in recent_paths if Path(path).exists()]
+        last_path = existing_paths[0] if existing_paths else None
+
+        if existing_paths != recent_paths or self._settings.load_csv_preview_last_path() != last_path:
+            try:
+                self._settings.update(csv_preview_last_path=last_path, csv_preview_recent_paths=existing_paths)
+            except (OSError, TypeError, ValueError) as exc:
+                LOGGER.warning("Unable to normalize remembered CSV preview paths", exc_info=True)
+                self._warn_settings_save_failure("the recent CSV preview list", exc)
+
+        state = "normal" if existing_paths else "disabled"
+        self._open_last_csv_button.config(state=state)
+        self._open_recent_csv_button.config(state=state)
+
+        self._recent_csv_menu.delete(0, "end")
+        for saved_path in existing_paths:
+            self._recent_csv_menu.add_command(
+                label=saved_path,
+                command=lambda value=saved_path: self._app.on_open_recent_csv_preview(value),
+            )
+
+    def open_csv_preview_path(
+        self,
+        csv_path: Path,
+        *,
+        remember: bool,
+        has_header_row: bool,
+        status_message: str,
+    ) -> None:
+        self._set_status(status_message)
+        width, height = self._get_geometry()
+        try:
+            open_csv_preview_dialog(self._app, csv_path, width=width, height=height, has_header_row=has_header_row)
+        except CsvPreviewError as exc:
+            messagebox.showerror("CSV preview unavailable", str(exc))
+            return
+        finally:
+            self._clear_status()
+
+        if remember:
+            try:
+                self._settings.remember_csv_preview_path(str(csv_path))
+            except (OSError, TypeError, ValueError) as exc:
+                LOGGER.warning("Unable to persist recent CSV preview paths", exc_info=True)
+                self._warn_settings_save_failure("the recent CSV preview list", exc)
+            self.update_open_last_csv_button_state()
+
+    def resolve_csv_preview_has_header_row(self, csv_path: Path, *, prompt: bool) -> bool | None:
+        normalized_path = str(csv_path)
+        saved_choice = self._settings.load_csv_preview_has_header_row(normalized_path)
+        if saved_choice is not None and not prompt:
+            return saved_choice
+
+        remembered_text = ""
+        if saved_choice is not None:
+            remembered_text = "\n\nRemembered choice for this file: first row is {}headers.".format("" if saved_choice else "not ")
+        choice = messagebox.askyesnocancel(
+            "CSV header row",
+            "Does this CSV already contain a header row?\n\n"
+            "Yes: use the first row as column names.\n"
+            "No: generate Column 1, Column 2, Column 3, ... and keep the first row as data."
+            f"{remembered_text}",
+        )
+        if choice is None:
+            return None
+        has_header_row = bool(choice)
+        try:
+            self._settings.save_csv_preview_has_header_row(normalized_path, has_header_row)
+        except (OSError, TypeError, ValueError) as exc:
+            LOGGER.warning("Unable to persist CSV preview header mode", exc_info=True)
+            self._warn_settings_save_failure("the CSV header option", exc)
+        return has_header_row
+
+    def on_open_csv_preview(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Open CSV",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        has_header_row = self.resolve_csv_preview_has_header_row(Path(path), prompt=True)
+        if has_header_row is None:
+            return
+        self.open_csv_preview_path(Path(path), remember=True, has_header_row=has_header_row, status_message="Processing CSV...")
+
+    def on_open_last_csv_preview(self) -> None:
+        recent_paths = self._settings.load_csv_preview_recent_paths()
+        if not recent_paths:
+            self.update_open_last_csv_button_state()
+            return
+        csv_path = Path(recent_paths[0])
+        if not csv_path.exists():
+            messagebox.showerror("CSV preview unavailable", "The remembered CSV file could not be found.")
+            try:
+                self._settings.save_csv_preview_recent_paths([path for path in recent_paths if path != str(csv_path)])
+            except (OSError, TypeError, ValueError) as exc:
+                LOGGER.warning("Unable to clear missing remembered CSV preview path", exc_info=True)
+                self._warn_settings_save_failure("the recent CSV preview list", exc)
+            self.update_open_last_csv_button_state()
+            return
+        has_header_row = self.resolve_csv_preview_has_header_row(csv_path, prompt=False)
+        if has_header_row is None:
+            return
+        self.open_csv_preview_path(csv_path, remember=True, has_header_row=has_header_row, status_message="Processing last CSV...")
+
+    def on_open_recent_csv_preview(self, saved_path: str) -> None:
+        csv_path = Path(saved_path)
+        if not csv_path.exists():
+            messagebox.showerror("CSV preview unavailable", "The selected recent CSV file could not be found.")
+            try:
+                self._settings.save_csv_preview_recent_paths(
+                    [path for path in self._settings.load_csv_preview_recent_paths() if path != saved_path]
+                )
+            except (OSError, TypeError, ValueError) as exc:
+                LOGGER.warning("Unable to clear missing recent CSV preview path", exc_info=True)
+                self._warn_settings_save_failure("the recent CSV preview list", exc)
+            self.update_open_last_csv_button_state()
+            return
+        has_header_row = self.resolve_csv_preview_has_header_row(csv_path, prompt=False)
+        if has_header_row is None:
+            return
+        self.open_csv_preview_path(csv_path, remember=True, has_header_row=has_header_row, status_message="Processing recent CSV...")
+
+
+class _AppStorageActionsController:
+    def __init__(self, app: "GPDataApp", data_manager: DataManager, show_storage_error, load_records) -> None:
+        self._app = app
+        self._data_manager = data_manager
+        self._show_storage_error = show_storage_error
+        self._load_records = load_records
+
+    def on_export(self, displayed_records: list[Record]) -> None:
+        path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files", "*.csv")])
+        if not path:
+            return
+        try:
+            if displayed_records:
+                tmp = CSVDataManager(Path(path))
+                tmp._write_all(displayed_records)
+            else:
+                self._data_manager.export_csv(Path(path))
+            messagebox.showinfo("Export", f"Exported to {path}")
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._show_storage_error("Export failed", "export records", Path(path), exc)
+
+    def on_manage_backups(self):
+        return open_manage_backups_dialog(self._app, self._data_manager, on_restored=self._load_records)
+
+
+class _FormModeController:
+    def __init__(
+        self,
+        form: InputForm,
+        table: RecordTable,
+        form_mode_var: tk.StringVar,
+        form_mode_label: tk.Label,
+        save_changes_button: ttk.Button,
+        delete_selected_button: ttk.Button,
+        record_by_id,
+    ) -> None:
+        self._form = form
+        self._table = table
+        self._form_mode_var = form_mode_var
+        self._form_mode_label = form_mode_label
+        self._save_changes_button = save_changes_button
+        self._delete_selected_button = delete_selected_button
+        self._record_by_id = record_by_id
+
+    def on_form_dirty_change(self, _is_dirty: bool) -> None:
+        self.update()
+
+    def update(self, record: Record | None = None) -> None:
+        current_record_id = self._form.current_record_id
+        selected_record_id = self._table.get_selected_id()
+        dirty = self._form.is_dirty()
+        self._delete_selected_button.config(state="normal" if selected_record_id else "disabled")
+        if current_record_id is None:
+            self._save_changes_button.config(state="disabled")
+            text = "NEW ITEM MODE"
+            bg = NEW_MODE_BANNER_BG
+            fg = NEW_MODE_BANNER_FG
+            if dirty:
+                text = "NEW ITEM MODE (UNSAVED CHANGES)"
+                bg = DIRTY_MODE_BANNER_BG
+                fg = DIRTY_MODE_BANNER_FG
+            self._set_banner(text, bg, fg)
+            return
+        if record is None or record.id != current_record_id:
+            record = self._record_by_id(current_record_id)
+        self._save_changes_button.config(state="normal")
+        if record is None:
+            text = "EDITING SELECTED ITEM"
+            bg = EDIT_MODE_BANNER_BG
+            fg = EDIT_MODE_BANNER_FG
+            if dirty:
+                text = f"{text} (UNSAVED CHANGES)"
+                bg = DIRTY_MODE_BANNER_BG
+                fg = DIRTY_MODE_BANNER_FG
+            self._set_banner(text, bg, fg)
+            return
+        left = (record.field1 or "").strip() or "(blank)"
+        right = (record.field2 or "").strip() or "(blank)"
+        text = f"EDITING: {left} / {right}"
+        bg = EDIT_MODE_BANNER_BG
+        fg = EDIT_MODE_BANNER_FG
+        if dirty:
+            text = f"{text} (UNSAVED CHANGES)"
+            bg = DIRTY_MODE_BANNER_BG
+            fg = DIRTY_MODE_BANNER_FG
+        self._set_banner(text, bg, fg)
+
+    def _set_banner(self, text: str, bg: str, fg: str) -> None:
+        self._form_mode_var.set(text)
+        self._form_mode_label.config(bg=bg, fg=fg)
+
+
 class GPDataApp(tk.Tk):
     def __init__(self, storage_path: Path | None = None):
         super().__init__()
@@ -73,7 +314,7 @@ class GPDataApp(tk.Tk):
             on_rename=self.on_labels_changed,
             on_submit=self.on_form_submit,
             save_labels_callback=self._settings.save_labels,
-            on_dirty_change=self._on_form_dirty_change,
+            on_dirty_change=lambda is_dirty: None,
         )
         self.form.pack(fill="y", expand=False)
         self._form_mode_var = tk.StringVar(value="NEW ITEM MODE")
@@ -126,6 +367,33 @@ class GPDataApp(tk.Tk):
             eyebrow_text="CSV PREVIEW",
             detail_text="Loading the preview, checking metadata, and preparing visible rows.",
         )
+        self._csv_preview_launch = _CsvPreviewLaunchController(
+            self,
+            self._settings,
+            self._open_last_csv_button,
+            self._open_recent_csv_button,
+            self._recent_csv_menu,
+            self._warn_settings_save_failure,
+            self._csv_preview_geometry,
+            self._set_csv_preview_status,
+            self._clear_csv_preview_status,
+        )
+        self._storage_actions = _AppStorageActionsController(
+            self,
+            self.data_manager,
+            self._show_storage_error,
+            self.load_records,
+        )
+        self._form_mode = _FormModeController(
+            self.form,
+            self.table,
+            self._form_mode_var,
+            self._form_mode_label,
+            self._save_changes_button,
+            self._delete_selected_button,
+            self._record_actions.record_by_id,
+        )
+        self.form.on_dirty_change = self._on_form_dirty_change
 
         self.row_menu = tk.Menu(self, tearoff=0)
         self.row_menu.add_command(label="Load into form", command=self.on_edit)
@@ -245,47 +513,10 @@ class GPDataApp(tk.Tk):
         )
 
     def _on_form_dirty_change(self, is_dirty: bool) -> None:
-        self._update_form_mode_ui()
+        self._form_mode.on_form_dirty_change(is_dirty)
 
     def _update_form_mode_ui(self, record: Record | None = None) -> None:
-        current_record_id = self.form.current_record_id
-        selected_record_id = self.table.get_selected_id()
-        dirty = self.form.is_dirty()
-        self._delete_selected_button.config(state="normal" if selected_record_id else "disabled")
-        if current_record_id is None:
-            self._save_changes_button.config(state="disabled")
-            text = "NEW ITEM MODE"
-            bg = NEW_MODE_BANNER_BG
-            fg = NEW_MODE_BANNER_FG
-            if dirty:
-                text = "NEW ITEM MODE (UNSAVED CHANGES)"
-                bg = DIRTY_MODE_BANNER_BG
-                fg = DIRTY_MODE_BANNER_FG
-            self._set_form_mode_banner(text, bg, fg)
-            return
-        if record is None or record.id != current_record_id:
-            record = self._record_actions.record_by_id(current_record_id)
-        self._save_changes_button.config(state="normal")
-        if record is None:
-            text = "EDITING SELECTED ITEM"
-            bg = EDIT_MODE_BANNER_BG
-            fg = EDIT_MODE_BANNER_FG
-            if dirty:
-                text = f"{text} (UNSAVED CHANGES)"
-                bg = DIRTY_MODE_BANNER_BG
-                fg = DIRTY_MODE_BANNER_FG
-            self._set_form_mode_banner(text, bg, fg)
-            return
-        left = (record.field1 or "").strip() or "(blank)"
-        right = (record.field2 or "").strip() or "(blank)"
-        text = f"EDITING: {left} / {right}"
-        bg = EDIT_MODE_BANNER_BG
-        fg = EDIT_MODE_BANNER_FG
-        if dirty:
-            text = f"{text} (UNSAVED CHANGES)"
-            bg = DIRTY_MODE_BANNER_BG
-            fg = DIRTY_MODE_BANNER_FG
-        self._set_form_mode_banner(text, bg, fg)
+        self._form_mode.update(record)
 
     def _set_form_mode_banner(self, text: str, bg: str, fg: str) -> None:
         self._form_mode_var.set(text)
@@ -556,27 +787,7 @@ class GPDataApp(tk.Tk):
         return max(self.table.winfo_width(), 900), max(self.table.winfo_height(), 500)
 
     def _update_open_last_csv_button_state(self) -> None:
-        recent_paths = self._settings.load_csv_preview_recent_paths()
-        existing_paths = [path for path in recent_paths if Path(path).exists()]
-        last_path = existing_paths[0] if existing_paths else None
-
-        if existing_paths != recent_paths or self._settings.load_csv_preview_last_path() != last_path:
-            try:
-                self._settings.update(csv_preview_last_path=last_path, csv_preview_recent_paths=existing_paths)
-            except (OSError, TypeError, ValueError) as exc:
-                LOGGER.warning("Unable to normalize remembered CSV preview paths", exc_info=True)
-                self._warn_settings_save_failure("the recent CSV preview list", exc)
-
-        state = "normal" if existing_paths else "disabled"
-        self._open_last_csv_button.config(state=state)
-        self._open_recent_csv_button.config(state=state)
-
-        self._recent_csv_menu.delete(0, "end")
-        for saved_path in existing_paths:
-            self._recent_csv_menu.add_command(
-                label=saved_path,
-                command=lambda value=saved_path: self.on_open_recent_csv_preview(value),
-            )
+        self._csv_preview_launch.update_open_last_csv_button_state()
 
     @property
     def _csv_preview_status_var(self) -> tk.StringVar:
@@ -594,23 +805,12 @@ class GPDataApp(tk.Tk):
         has_header_row: bool,
         status_message: str = "Processing CSV...",
     ) -> None:
-        self._set_csv_preview_status(status_message)
-        width, height = self._csv_preview_geometry()
-        try:
-            open_csv_preview_dialog(self, csv_path, width=width, height=height, has_header_row=has_header_row)
-        except CsvPreviewError as exc:
-            messagebox.showerror("CSV preview unavailable", str(exc))
-            return
-        finally:
-            self._clear_csv_preview_status()
-
-        if remember:
-            try:
-                self._settings.remember_csv_preview_path(str(csv_path))
-            except (OSError, TypeError, ValueError) as exc:
-                LOGGER.warning("Unable to persist recent CSV preview paths", exc_info=True)
-                self._warn_settings_save_failure("the recent CSV preview list", exc)
-            self._update_open_last_csv_button_state()
+        self._csv_preview_launch.open_csv_preview_path(
+            csv_path,
+            remember=remember,
+            has_header_row=has_header_row,
+            status_message=status_message,
+        )
 
     def _set_csv_preview_status(self, message: str) -> None:
         self._csv_preview_status.show(message)
@@ -619,97 +819,22 @@ class GPDataApp(tk.Tk):
         self._csv_preview_status.clear()
 
     def _resolve_csv_preview_has_header_row(self, csv_path: Path, *, prompt: bool) -> bool | None:
-        normalized_path = str(csv_path)
-        saved_choice = self._settings.load_csv_preview_has_header_row(normalized_path)
-        if saved_choice is not None and not prompt:
-            return saved_choice
-
-        remembered_text = ""
-        if saved_choice is not None:
-            remembered_text = "\n\nRemembered choice for this file: first row is {}headers.".format("" if saved_choice else "not ")
-        choice = messagebox.askyesnocancel(
-            "CSV header row",
-            "Does this CSV already contain a header row?\n\n"
-            "Yes: use the first row as column names.\n"
-            "No: generate Column 1, Column 2, Column 3, ... and keep the first row as data."
-            f"{remembered_text}",
-        )
-        if choice is None:
-            return None
-        has_header_row = bool(choice)
-        try:
-            self._settings.save_csv_preview_has_header_row(normalized_path, has_header_row)
-        except (OSError, TypeError, ValueError) as exc:
-            LOGGER.warning("Unable to persist CSV preview header mode", exc_info=True)
-            self._warn_settings_save_failure("the CSV header option", exc)
-        return has_header_row
+        return self._csv_preview_launch.resolve_csv_preview_has_header_row(csv_path, prompt=prompt)
 
     def on_open_csv_preview(self) -> None:
-        path = filedialog.askopenfilename(
-            title="Open CSV",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
-        )
-        if not path:
-            return
-        has_header_row = self._resolve_csv_preview_has_header_row(Path(path), prompt=True)
-        if has_header_row is None:
-            return
-        self._open_csv_preview_path(Path(path), remember=True, has_header_row=has_header_row, status_message="Processing CSV...")
+        self._csv_preview_launch.on_open_csv_preview()
 
     def on_open_last_csv_preview(self) -> None:
-        recent_paths = self._settings.load_csv_preview_recent_paths()
-        if not recent_paths:
-            self._update_open_last_csv_button_state()
-            return
-        csv_path = Path(recent_paths[0])
-        if not csv_path.exists():
-            messagebox.showerror("CSV preview unavailable", "The remembered CSV file could not be found.")
-            try:
-                self._settings.save_csv_preview_recent_paths([path for path in recent_paths if path != str(csv_path)])
-            except (OSError, TypeError, ValueError) as exc:
-                LOGGER.warning("Unable to clear missing remembered CSV preview path", exc_info=True)
-                self._warn_settings_save_failure("the recent CSV preview list", exc)
-            self._update_open_last_csv_button_state()
-            return
-        has_header_row = self._resolve_csv_preview_has_header_row(csv_path, prompt=False)
-        if has_header_row is None:
-            return
-        self._open_csv_preview_path(csv_path, remember=True, has_header_row=has_header_row, status_message="Processing last CSV...")
+        self._csv_preview_launch.on_open_last_csv_preview()
 
     def on_open_recent_csv_preview(self, saved_path: str) -> None:
-        csv_path = Path(saved_path)
-        if not csv_path.exists():
-            messagebox.showerror("CSV preview unavailable", "The selected recent CSV file could not be found.")
-            try:
-                self._settings.save_csv_preview_recent_paths(
-                    [path for path in self._settings.load_csv_preview_recent_paths() if path != saved_path]
-                )
-            except (OSError, TypeError, ValueError) as exc:
-                LOGGER.warning("Unable to clear missing recent CSV preview path", exc_info=True)
-                self._warn_settings_save_failure("the recent CSV preview list", exc)
-            self._update_open_last_csv_button_state()
-            return
-        has_header_row = self._resolve_csv_preview_has_header_row(csv_path, prompt=False)
-        if has_header_row is None:
-            return
-        self._open_csv_preview_path(csv_path, remember=True, has_header_row=has_header_row, status_message="Processing recent CSV...")
+        self._csv_preview_launch.on_open_recent_csv_preview(saved_path)
 
     def on_export(self) -> None:
-        path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files", "*.csv")])
-        if not path:
-            return
-        try:
-            if self._displayed_records:
-                tmp = CSVDataManager(Path(path))
-                tmp._write_all(self._displayed_records)
-            else:
-                self.data_manager.export_csv(Path(path))
-            messagebox.showinfo("Export", f"Exported to {path}")
-        except (OSError, RuntimeError, ValueError) as exc:
-            self._show_storage_error("Export failed", "export records", Path(path), exc)
+        self._storage_actions.on_export(self._displayed_records)
 
     def on_manage_backups(self) -> None:
-        return open_manage_backups_dialog(self, self.data_manager, on_restored=self.load_records)
+        return self._storage_actions.on_manage_backups()
 
     def on_labels_changed(self, labels: Sequence[str]) -> None:
         self.table.update_column_labels(labels)

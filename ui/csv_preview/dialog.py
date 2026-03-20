@@ -196,6 +196,170 @@ class _PreviewViewState:
 
 
 @dataclass(frozen=True)
+class _PreviewDialogWidgets:
+    win: tk.Toplevel
+    filter_row: ttk.Frame
+    summary_var: tk.StringVar
+    query_var: tk.StringVar
+    query_entry: ttk.Entry
+    combine_sessions_var: tk.BooleanVar
+    tree: ttk.Treeview
+    button_row: ttk.Frame
+
+
+class _PreviewColumnManager:
+    def __init__(
+        self,
+        win: tk.Toplevel,
+        tree: ttk.Treeview,
+        all_column_ids: list[str],
+        view_state: _PreviewViewState,
+        get_data,
+        popup_export_controller: _PreviewPopupExportControllerBase,
+        on_visible_columns_changed=None,
+        on_sort_changed=None,
+    ) -> None:
+        self._win = win
+        self._tree = tree
+        self._all_column_ids = all_column_ids
+        self._view_state = view_state
+        self._get_data = get_data
+        self._popup_export_controller = popup_export_controller
+        self._on_visible_columns_changed = on_visible_columns_changed
+        self._on_sort_changed = on_sort_changed
+
+    def notify_sort_changed(self) -> None:
+        if not callable(self._on_sort_changed):
+            return
+        data = self._get_data()
+        self._on_sort_changed(list(data.headers), self._view_state.sort_column_index, self._view_state.sort_descending)
+
+    def update_tree_headings(self) -> None:
+        data = self._get_data()
+        for index, column_id in enumerate(self._all_column_ids):
+            header = data.headers[index]
+            if self._view_state.sort_column_index == index:
+                indicator = " ▼" if self._view_state.sort_descending else " ▲"
+            else:
+                indicator = ""
+            self._tree.heading(column_id, text=f"{header}{indicator}")
+
+    def rebuild_tree_columns(self, previous_column_count: int) -> None:
+        data = self._get_data()
+        previous_all_visible = self._view_state.visible_column_indices == list(range(previous_column_count))
+        self._all_column_ids[:] = _column_ids(data)
+        self._tree.configure(columns=self._all_column_ids)
+        for column_id, header in zip(self._all_column_ids, data.headers):
+            self._tree.heading(column_id, text=header)
+            self._tree.column(column_id, width=_column_width(header), minwidth=MIN_COLUMN_WIDTH, stretch=False, anchor="w")
+
+        if previous_all_visible:
+            self._view_state.visible_column_indices = list(range(data.column_count))
+        else:
+            self._view_state.visible_column_indices = _normalized_visible_column_indices(
+                data.column_count,
+                self._view_state.visible_column_indices,
+            )
+        if self._view_state.sort_column_index is not None and self._view_state.sort_column_index >= data.column_count:
+            self._view_state.set_sort(None)
+            self.notify_sort_changed()
+        self.update_tree_headings()
+
+    def open_column_dialog(self, on_apply) -> None:
+        data = self._get_data()
+        _open_column_visibility_dialog(self._win, data.headers, self._view_state.visible_column_indices, on_apply)
+
+    def apply_visible_columns(self, visible_indices: list[int], *, clear_header_filter, refresh) -> None:
+        data = self._get_data()
+        header_filter_cleared, sort_cleared = self._view_state.apply_visible_columns(self._all_column_ids, visible_indices)
+        if sort_cleared:
+            self.notify_sort_changed()
+        if header_filter_cleared:
+            clear_header_filter()
+        elif sort_cleared:
+            self._popup_export_controller.destroy_header_filter_popup()
+            refresh()
+        if callable(self._on_visible_columns_changed):
+            self._on_visible_columns_changed(list(data.headers), list(self._view_state.visible_column_indices))
+        if not header_filter_cleared and not sort_cleared:
+            refresh()
+
+
+class _PreviewRowRenderer:
+    def __init__(
+        self,
+        win: tk.Toplevel,
+        tree: ttk.Treeview,
+        view_state: _PreviewViewState,
+        update_summary_label,
+    ) -> None:
+        self._win = win
+        self._tree = tree
+        self._view_state = view_state
+        self._update_summary_label = update_summary_label
+
+    def populate_rows_in_chunks(
+        self,
+        load_token: int,
+        render_token: int,
+        displayed_rows: list[tuple[str, ...]],
+        filtered: bool,
+        total_visible_rows: int | None,
+        start_index: int,
+        render_started_at: float,
+        *,
+        current_load_token: int,
+        current_render_token: int,
+        schedule_next,
+    ) -> None:
+        if load_token != current_load_token:
+            return
+        if render_token != current_render_token:
+            return
+        if not self._win.winfo_exists() or not self._tree.winfo_exists():
+            return
+
+        end_index = min(start_index + ROW_INSERT_CHUNK_SIZE, len(displayed_rows))
+        children = list(self._tree.get_children())
+        for row_index, row in enumerate(displayed_rows[start_index:end_index], start=start_index):
+            if row_index < len(children):
+                self._tree.item(children[row_index], values=row)
+                continue
+            self._tree.insert("", "end", values=row)
+
+        if end_index >= len(displayed_rows) and len(children) > len(displayed_rows):
+            self._tree.delete(*children[len(displayed_rows):])
+
+        self._view_state.summary.apply_loaded_chunk(
+            filtered=filtered,
+            total_visible_rows=total_visible_rows,
+            displayed_rows=len(displayed_rows),
+            loaded_rows=end_index,
+        )
+        self._update_summary_label()
+        if end_index < len(displayed_rows):
+            self._win.after_idle(
+                schedule_next,
+                load_token,
+                render_token,
+                displayed_rows,
+                filtered,
+                total_visible_rows,
+                end_index,
+                render_started_at,
+            )
+            return
+
+        _log_preview_performance(
+            "render rows",
+            render_started_at,
+            rows=len(displayed_rows),
+            filtered=filtered,
+            visible_columns=len(self._view_state.visible_column_indices),
+        )
+
+
+@dataclass(frozen=True)
 class _AnalysisSnapshotReady:
     request_token: int
     snapshot: PreviewAnalysisSnapshot
@@ -307,6 +471,53 @@ class _AnalysisSnapshotCoordinator:
             self._win.after(25, self._poll)
             return
         self._polling = False
+
+
+class _PreviewAnalysisLauncher:
+    def __init__(
+        self,
+        win: tk.Toplevel,
+        get_data,
+        get_filter_state,
+        get_visible_column_indices,
+        is_numeric_column,
+    ) -> None:
+        self._get_data = get_data
+        self._get_filter_state = get_filter_state
+        self._get_visible_column_indices = get_visible_column_indices
+        self._is_numeric_column = is_numeric_column
+        self._coordinator = _AnalysisSnapshotCoordinator(win)
+
+    @property
+    def status_var(self) -> tk.StringVar:
+        return self._coordinator.status_var
+
+    @property
+    def status_dialog(self) -> tk.Toplevel | None:
+        return self._coordinator.status_dialog
+
+    def cancel(self) -> None:
+        self._coordinator.cancel()
+
+    def request_state(self) -> tuple[_PreviewFilterState, list[int], set[int]]:
+        filter_state = self._get_filter_state()
+        visible_column_indices = list(self._get_visible_column_indices())
+        numeric_column_indices = {
+            index
+            for index in visible_column_indices
+            if self._is_numeric_column(index)
+        }
+        return filter_state, visible_column_indices, numeric_column_indices
+
+    def open_dialog(self) -> None:
+        self.cancel()
+        filter_state, visible_column_indices, numeric_column_indices = self.request_state()
+        self._coordinator.request(
+            self._get_data(),
+            filter_state,
+            visible_column_indices,
+            numeric_column_indices,
+        )
 
 
 def _column_width(header: str) -> int:
@@ -621,6 +832,29 @@ class _PreviewTableController(_PreviewRefreshControllerBase):
         self._on_visible_columns_changed = on_visible_columns_changed
         self._on_sort_changed = on_sort_changed
         self._popup_export_controller = _PreviewPopupExportController(self)
+        self._column_manager = _PreviewColumnManager(
+            win,
+            tree,
+            self._all_column_ids,
+            self._view_state,
+            lambda: self._data,
+            self._popup_export_controller,
+            on_visible_columns_changed=on_visible_columns_changed,
+            on_sort_changed=on_sort_changed,
+        )
+        self._row_renderer = _PreviewRowRenderer(
+            win,
+            tree,
+            self._view_state,
+            self._update_summary_label,
+        )
+        self._analysis_launcher = _PreviewAnalysisLauncher(
+            win,
+            lambda: self._data,
+            self._current_filter_state,
+            lambda: self._view_state.visible_column_indices,
+            self._pipeline.is_numeric_sort_column,
+        )
         self._processing_status = ProcessingDialogHandle(
             win,
             title="Processing CSV",
@@ -628,7 +862,6 @@ class _PreviewTableController(_PreviewRefreshControllerBase):
             detail_text="Combining sessions and rebuilding the visible preview rows.",
         )
         self._processing_status_load_token: int | None = None
-        self._analysis_coordinator = _AnalysisSnapshotCoordinator(win)
         self._initialize_refresh_state()
 
     @property
@@ -649,11 +882,11 @@ class _PreviewTableController(_PreviewRefreshControllerBase):
 
     @property
     def _analysis_status_var(self) -> tk.StringVar:
-        return self._analysis_coordinator.status_var
+        return self._analysis_launcher.status_var
 
     @property
     def _analysis_status_dialog(self) -> tk.Toplevel | None:
-        return self._analysis_coordinator.status_dialog
+        return self._analysis_launcher.status_dialog
 
     def _rendered_row_limit(self) -> int:
         return _rendered_preview_row_limit(self._data.column_count)
@@ -682,9 +915,7 @@ class _PreviewTableController(_PreviewRefreshControllerBase):
         return f"Sorted by {header} ({direction})"
 
     def _notify_sort_changed(self) -> None:
-        if not callable(self._on_sort_changed):
-            return
-        self._on_sort_changed(list(self._data.headers), self._view_state.sort_column_index, self._view_state.sort_descending)
+        self._column_manager.notify_sort_changed()
 
     def set_header_filter(self, column_index: int | None, value: str | None) -> None:
         self._view_state.set_header_filter(column_index, value)
@@ -725,27 +956,13 @@ class _PreviewTableController(_PreviewRefreshControllerBase):
         super().refresh(*_args)
 
     def _analysis_request_state(self) -> tuple[_PreviewFilterState, list[int], set[int]]:
-        filter_state = self._current_filter_state()
-        visible_column_indices = list(self._view_state.visible_column_indices)
-        numeric_column_indices = {
-            index
-            for index in visible_column_indices
-            if self._pipeline.is_numeric_sort_column(index)
-        }
-        return filter_state, visible_column_indices, numeric_column_indices
+        return self._analysis_launcher.request_state()
 
     def export_current_view_as_csv(self) -> None:
         self._popup_export_controller.export_current_view_as_csv()
 
     def open_analysis_dialog(self) -> None:
-        self._cancel_pending_analysis_request()
-        filter_state, visible_column_indices, numeric_column_indices = self._analysis_request_state()
-        self._analysis_coordinator.request(
-            self._data,
-            filter_state,
-            visible_column_indices,
-            numeric_column_indices,
-        )
+        self._analysis_launcher.open_dialog()
 
     def show_header_filter_popup(self, column_index: int, x_root: int, y_root: int) -> None:
         self._popup_export_controller.show_header_filter_popup(column_index, x_root, y_root)
@@ -780,50 +997,20 @@ class _PreviewTableController(_PreviewRefreshControllerBase):
             return None
 
     def _update_tree_headings(self) -> None:
-        for index, column_id in enumerate(self._all_column_ids):
-            header = self._data.headers[index]
-            if self._view_state.sort_column_index == index:
-                indicator = " ▼" if self._view_state.sort_descending else " ▲"
-            else:
-                indicator = ""
-            self._tree.heading(column_id, text=f"{header}{indicator}")
+        self._column_manager.update_tree_headings()
 
     def _rebuild_tree_columns(self, previous_column_count: int) -> None:
-        previous_all_visible = self._view_state.visible_column_indices == list(range(previous_column_count))
-        self._all_column_ids = _column_ids(self._data)
-        self._tree.configure(columns=self._all_column_ids)
-        for column_id, header in zip(self._all_column_ids, self._data.headers):
-            self._tree.heading(column_id, text=header)
-            self._tree.column(column_id, width=_column_width(header), minwidth=MIN_COLUMN_WIDTH, stretch=False, anchor="w")
-
-        if previous_all_visible:
-            self._view_state.visible_column_indices = list(range(self._data.column_count))
-        else:
-            self._view_state.visible_column_indices = _normalized_visible_column_indices(
-                self._data.column_count,
-                self._view_state.visible_column_indices,
-            )
-        if self._view_state.sort_column_index is not None and self._view_state.sort_column_index >= self._data.column_count:
-            self._view_state.set_sort(None)
-            self._notify_sort_changed()
-        self._update_tree_headings()
+        self._column_manager.rebuild_tree_columns(previous_column_count)
 
     def open_column_dialog(self) -> None:
-        _open_column_visibility_dialog(self._win, self._data.headers, self._view_state.visible_column_indices, self._apply_visible_columns)
+        self._column_manager.open_column_dialog(self._apply_visible_columns)
 
     def _apply_visible_columns(self, visible_indices: list[int]) -> None:
-        header_filter_cleared, sort_cleared = self._view_state.apply_visible_columns(self._all_column_ids, visible_indices)
-        if sort_cleared:
-            self._notify_sort_changed()
-        if header_filter_cleared:
-            self.clear_header_filter()
-        elif sort_cleared:
-            self._popup_export_controller.destroy_header_filter_popup()
-            self.refresh()
-        if callable(self._on_visible_columns_changed):
-            self._on_visible_columns_changed(list(self._data.headers), list(self._view_state.visible_column_indices))
-        if not header_filter_cleared and not sort_cleared:
-            self.refresh()
+        self._column_manager.apply_visible_columns(
+            visible_indices,
+            clear_header_filter=self.clear_header_filter,
+            refresh=self.refresh,
+        )
 
     def _on_filtered_refresh_message(self, message) -> None:
         if self._processing_status_load_token != message.load_token:
@@ -844,7 +1031,7 @@ class _PreviewTableController(_PreviewRefreshControllerBase):
         self._processing_status.clear()
 
     def _cancel_pending_analysis_request(self) -> None:
-        self._analysis_coordinator.cancel()
+        self._analysis_launcher.cancel()
 
     def _populate_rows_in_chunks(
         self,
@@ -856,65 +1043,27 @@ class _PreviewTableController(_PreviewRefreshControllerBase):
         start_index: int,
         render_started_at: float,
     ) -> None:
-        if load_token != self._load_token:
-            return
-        if render_token != self._render_token:
-            return
-        if not self._win.winfo_exists() or not self._tree.winfo_exists():
-            return
-
-        end_index = min(start_index + ROW_INSERT_CHUNK_SIZE, len(displayed_rows))
-        children = list(self._tree.get_children())
-        for row_index, row in enumerate(displayed_rows[start_index:end_index], start=start_index):
-            if row_index < len(children):
-                self._tree.item(children[row_index], values=row)
-                continue
-            self._tree.insert("", "end", values=row)
-
-        if end_index >= len(displayed_rows) and len(children) > len(displayed_rows):
-            self._tree.delete(*children[len(displayed_rows):])
-
-        self._view_state.summary.apply_loaded_chunk(
-            filtered=filtered,
-            total_visible_rows=total_visible_rows,
-            displayed_rows=len(displayed_rows),
-            loaded_rows=end_index,
-        )
-        self._update_summary_label()
-        if end_index < len(displayed_rows):
-            self._win.after_idle(
-                self._populate_rows_in_chunks,
-                load_token,
-                render_token,
-                displayed_rows,
-                filtered,
-                total_visible_rows,
-                end_index,
-                render_started_at,
-            )
-            return
-
-        _log_preview_performance(
-            "render rows",
+        self._row_renderer.populate_rows_in_chunks(
+            load_token,
+            render_token,
+            displayed_rows,
+            filtered,
+            total_visible_rows,
+            start_index,
             render_started_at,
-            rows=len(displayed_rows),
-            filtered=filtered,
-            visible_columns=len(self._view_state.visible_column_indices),
+            current_load_token=self._load_token,
+            current_render_token=self._render_token,
+            schedule_next=self._populate_rows_in_chunks,
         )
 
 
-def create_csv_preview_dialog(
+def _build_preview_dialog_widgets(
     parent: tk.Misc,
     data: CsvPreviewData,
     *,
     width: int,
     height: int,
-    initial_visible_column_indices: list[int] | None = None,
-    initial_sort_column_index: int | None = None,
-    initial_sort_descending: bool = False,
-    on_visible_columns_changed=None,
-    on_sort_changed=None,
-) -> tk.Toplevel:
+) -> _PreviewDialogWidgets:
     win = tk.Toplevel(parent)
     win.title(f"CSV Preview - {data.path.name}")
     win.geometry(f"{max(width, MIN_PREVIEW_WIDTH)}x{max(height, MIN_PREVIEW_HEIGHT)}")
@@ -967,13 +1116,42 @@ def create_csv_preview_dialog(
     y_scroll.grid(row=0, column=1, sticky="ns")
     x_scroll.grid(row=1, column=0, sticky="ew")
 
+    button_row = ttk.Frame(container)
+    button_row.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+
+    return _PreviewDialogWidgets(
+        win=win,
+        filter_row=filter_row,
+        summary_var=summary_var,
+        query_var=query_var,
+        query_entry=query_entry,
+        combine_sessions_var=combine_sessions_var,
+        tree=tree,
+        button_row=button_row,
+    )
+
+
+def create_csv_preview_dialog(
+    parent: tk.Misc,
+    data: CsvPreviewData,
+    *,
+    width: int,
+    height: int,
+    initial_visible_column_indices: list[int] | None = None,
+    initial_sort_column_index: int | None = None,
+    initial_sort_descending: bool = False,
+    on_visible_columns_changed=None,
+    on_sort_changed=None,
+) -> tk.Toplevel:
+    widgets = _build_preview_dialog_widgets(parent, data, width=width, height=height)
+
     controller = _PreviewTableController(
-        win,
-        tree,
+        widgets.win,
+        widgets.tree,
         data,
-        summary_var,
-        query_var,
-        combine_sessions_var,
+        widgets.summary_var,
+        widgets.query_var,
+        widgets.combine_sessions_var,
         _column_ids(data),
         initial_visible_column_indices=initial_visible_column_indices,
         initial_sort_column_index=initial_sort_column_index,
@@ -981,31 +1159,29 @@ def create_csv_preview_dialog(
         on_visible_columns_changed=on_visible_columns_changed,
         on_sort_changed=on_sort_changed,
     )
-    win._csv_preview_controller = controller  # type: ignore[attr-defined]
+    widgets.win._csv_preview_controller = controller  # type: ignore[attr-defined]
 
     def _clear_filters() -> None:
-        query_var.set("")
-        combine_sessions_var.set(False)
+        widgets.query_var.set("")
+        widgets.combine_sessions_var.set(False)
         controller.clear_sort()
         controller.clear_header_filter()
 
-    ttk.Button(filter_row, text="Columns", command=controller.open_column_dialog).pack(side="left", padx=(0, 12))
-    ttk.Button(filter_row, text="Save As CSV", command=controller.export_current_view_as_csv).pack(side="left", padx=(0, 12))
-    ttk.Button(filter_row, text="Analyze", command=controller.open_analysis_dialog).pack(side="left", padx=(0, 12))
-    ttk.Button(filter_row, text="Clear filters", command=_clear_filters).pack(side="left")
+    ttk.Button(widgets.filter_row, text="Columns", command=controller.open_column_dialog).pack(side="left", padx=(0, 12))
+    ttk.Button(widgets.filter_row, text="Save As CSV", command=controller.export_current_view_as_csv).pack(side="left", padx=(0, 12))
+    ttk.Button(widgets.filter_row, text="Analyze", command=controller.open_analysis_dialog).pack(side="left", padx=(0, 12))
+    ttk.Button(widgets.filter_row, text="Clear filters", command=_clear_filters).pack(side="left")
 
-    button_row = ttk.Frame(container)
-    button_row.grid(row=3, column=0, sticky="ew", pady=(8, 0))
-    ttk.Button(button_row, text="Close", command=win.destroy).pack(side="right")
+    ttk.Button(widgets.button_row, text="Close", command=widgets.win.destroy).pack(side="right")
 
-    query_var.trace_add("write", controller.on_query_changed)
-    combine_sessions_var.trace_add("write", controller.on_combine_sessions_changed)
-    query_entry.bind("<Return>", controller.trigger_refresh_now, add="+")
-    tree.bind("<ButtonRelease-1>", controller.on_tree_click, add="+")
+    widgets.query_var.trace_add("write", controller.on_query_changed)
+    widgets.combine_sessions_var.trace_add("write", controller.on_combine_sessions_changed)
+    widgets.query_entry.bind("<Return>", controller.trigger_refresh_now, add="+")
+    widgets.tree.bind("<ButtonRelease-1>", controller.on_tree_click, add="+")
     controller.refresh()
-    query_entry.focus_set()
+    widgets.query_entry.focus_set()
 
-    return win
+    return widgets.win
 
 
 def open_csv_preview_dialog(
