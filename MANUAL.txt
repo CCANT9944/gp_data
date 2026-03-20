@@ -198,6 +198,8 @@ You can also manage backups from the UI:
 3. Preview it.
 4. Restore or delete it.
 
+Manage backups only works with backups created for the storage file you currently have open.
+
 There is no separate Restore backup button on the main window now.
 Restore is done from Manage backups.
 
@@ -259,7 +261,9 @@ Important notes:
 - Analyze uses only the rows that currently match the preview, so if you search, exact-filter a column, or combine sessions first, the analysis window reflects that current result instead of the original full CSV
 - Analyze only includes columns that are currently visible in the preview window
 - bar charts in Analyze can show negative values, but pie charts only work with positive values
-- bar charts show all grouped items for the chosen visible label and value columns in highest-to-lowest order, and the chart scrolls horizontally when needed
+- bar charts can show all grouped items or just the first or last 5, 10, or 20 items for the chosen visible label and value columns in highest-to-lowest order
+- bar charts can be switched between vertical and horizontal layouts
+- vertical bar charts scroll horizontally when needed, and horizontal bar charts scroll vertically when needed
 - pie charts keep the most important slices visible and group the smaller remainder into Other so the chart stays readable
 - Save As CSV creates a new CSV file from what the preview currently shows logically, and the original imported file stays unchanged
 - Save As CSV opens in your shared `Favorites\csv_exports` folder by default, and the folder is created automatically if needed

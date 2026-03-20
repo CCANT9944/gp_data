@@ -46,6 +46,7 @@ numeric change history per item.
 - The raw CSV viewer also shows a small header-mode label so you can see whether the file is using `Row 1` headers or generated column names.
 - The raw CSV viewer includes an `Analyze` action that opens a separate analysis window for the current preview result, using only the rows that currently match the preview filters, the active combine-sessions state, and the columns that are still visible.
 - The analysis window can show a summary table or bar and pie charts so you can inspect top visible values without exporting the CSV first; bar charts can show negative values, while pie charts only render positive values.
+- Bar charts in the analysis window can be limited to `All`, `First 5`, `First 10`, `First 20`, `Last 5`, `Last 10`, or `Last 20` items, and can be switched between vertical and horizontal layouts.
 - `Save As CSV` creates a new CSV file from the current preview state, including the current search, exact column filter, combined rows, and visible columns, without changing the original imported file, and it defaults to your shared `Favorites/csv_exports` folder.
 - The raw CSV viewer can also combine session-based rows, such as `Lunch` and `Dinner`, into one product row when the file has detectable session and quantity columns, including numeric export columns with generic names like `Textbox73`.
 - For very large CSVs, the preview window opens from an initial sample first and only renders the first slice of matching rows so the window stays responsive, with a lower live row cap for very wide files to keep navigation smoother.
@@ -62,7 +63,7 @@ numeric change history per item.
 - If you try to delete a selected row while the main form has unsaved edits, the app asks whether those form edits should be discarded first.
 - If you confirm `Delete selected`, the row is removed and the form returns to new-item mode.
 - Export writes the currently displayed rows.
-- Restore from the UI is handled through `Manage backups`, which includes preview, restore, and delete operations.
+- Restore from the UI is handled through `Manage backups`, which includes preview, restore, and delete operations for backups created for the current storage file.
 - Table layout is customizable:
   - drag headers to reorder columns
   - resize columns and keep the new widths
@@ -173,7 +174,7 @@ python main.py cleanup
 - `ui/csv_preview/loader.py`: loads CSV preview data, manages restart-safe preview sidecars, and can reuse persisted preview rows or persisted full-row caches for unchanged files.
 - `ui/csv_preview/helpers.py`: holds pure preview helpers for column identity, numeric detection, row summaries, and sort/query formatting so those rules stay separate from Tk widget code.
 - `ui/csv_preview/analysis.py`: builds analysis snapshots, numeric summaries, and top-value chart series from the current filtered preview rows.
-- `ui/csv_preview/analysis_dialog.py`: owns the separate analysis dialog and its summary-table, bar-chart, and pie-chart views.
+- `ui/csv_preview/analysis_dialog.py`: owns the separate analysis dialog and its summary-table, bar-chart, pie-chart, bar-range, and bar-orientation views.
 - `ui/csv_preview/pipeline.py`: owns preview search, filtering, sort, combine-session, and cache decisions that should stay independent from Tk widgets.
 - `ui/csv_preview/popup_controller.py`: owns header popup and preview export behavior, including async distinct-value loading and exact-value filter application.
 - `ui/csv_preview/refresh_controller.py`: owns metadata refresh, filtered refresh polling, loading placeholders, and header-filter prewarm orchestration for the preview table.
@@ -200,5 +201,5 @@ GUI-related tests skip automatically if Tk is not available in the current envir
 - `settings.json` is intentionally ignored by Git so personal layout changes are not committed.
 - Duplicate warnings are advisory: the GUI can still allow a duplicate if the user explicitly confirms it.
 - Older duplicate rows already stored in the database are not merged automatically.
-- In the GUI, restore is available from `Manage backups` rather than from a separate main-window restore button.
+- In the GUI, restore is available from `Manage backups` rather than from a separate main-window restore button, and those actions are limited to backups that belong to the current storage file.
 - The README is a technical overview. For normal day-to-day usage, see `MANUAL.txt`.
