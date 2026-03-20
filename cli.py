@@ -10,7 +10,6 @@ from typing import Iterable, Optional
 from pydantic import ValidationError
 
 from .data_manager import DataManager
-from .ui import GPDataApp
 
 
 CSV_PREVIEW_DEBUG_ENV = "GP_DATA_CSV_PREVIEW_DEBUG"
@@ -112,6 +111,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run_gui(storage_path: Optional[Path] = None) -> None:
+    from .ui import GPDataApp
+
     app = GPDataApp(storage_path)
     app.run()
 

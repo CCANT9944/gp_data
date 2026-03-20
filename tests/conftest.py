@@ -1,9 +1,11 @@
 import os
-import tkinter as tk
+
+try:
+    import tkinter as tk
+except ModuleNotFoundError:
+    tk = None
 
 import pytest
-
-from gp_data.ui import GPDataApp
 
 
 GUI_TEST_FILES = {
@@ -27,6 +29,17 @@ def _running_in_ci() -> bool:
     return os.getenv("GITHUB_ACTIONS") == "true" or os.getenv("CI") == "true"
 
 
+def _tk_available() -> bool:
+    return tk is not None
+
+
+def pytest_ignore_collect(collection_path, config):
+    name = getattr(collection_path, "name", None)
+    if name is None:
+        name = getattr(collection_path, "basename", None)
+    return bool(name in GUI_TEST_FILES and (_running_in_ci() or not _tk_available()))
+
+
 def pytest_collection_modifyitems(config, items):
     if not _running_in_ci():
         return
@@ -38,6 +51,8 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture
 def tk_root():
+    if tk is None:
+        pytest.skip("Tkinter is not available in this environment")
     try:
         root = tk.Tk()
     except tk.TclError:
@@ -55,9 +70,13 @@ def tk_root():
 
 @pytest.fixture
 def app_factory(tmp_path):
-    apps: list[GPDataApp] = []
+    apps: list[object] = []
 
     def create_app(*, storage_path=None, withdraw=True, **kwargs):
+        if tk is None:
+            pytest.skip("Tkinter is not available in this environment")
+        from gp_data.ui import GPDataApp
+
         path = storage_path or (tmp_path / "data.db")
         try:
             app = GPDataApp(storage_path=path, **kwargs)
