@@ -235,6 +235,17 @@ def test_settings_store_remember_csv_preview_path_moves_path_to_front(tmp_path: 
     assert updated.csv_preview_recent_paths == [r"C:\data\stock.csv", r"C:\data\sales.csv"]
 
 
+def test_settings_store_uses_current_default_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    expected_path = tmp_path / "settings.json"
+    monkeypatch.setattr(settings, "DEFAULT_PATH", expected_path)
+
+    store = settings.SettingsStore()
+    store.save_labels(["A", "B", "C", "D", "E", "F", "G"])
+
+    assert store.path == expected_path
+    assert settings.load_labels(expected_path) == ["A", "B", "C", "D", "E", "F", "G"]
+
+
 def test_load_settings_backfills_recent_csv_paths_from_legacy_last_path(tmp_path: Path):
     p = tmp_path / "settings.json"
     p.write_text('{"csv_preview_last_path": "C:\\\\data\\\\sales.csv"}', encoding="utf-8")

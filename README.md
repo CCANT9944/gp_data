@@ -158,14 +158,25 @@ python main.py cleanup
 
 - `main.py`: compatibility entrypoint
 - `cli.py`: command-line logic
-- `ui/app.py`: top-level Tkinter controller
+- `ui/app.py`: top-level Tkinter shell that wires the main window together
+- `ui/app_csv_preview_controller.py`: remembered CSV path, header-mode, and preview-launch actions
+- `ui/app_storage_controller.py`: export and manage-backups actions
+- `ui/app_form_mode_controller.py`: form-mode banner and edit/new-item button-state logic
+- `ui/app_table_display_controller.py`: type filter, GP highlight, column labels, and column-visibility controls
+- `ui/app_record_controllers.py`: record list refresh/selection flow plus add/edit/save/delete form actions
 - `ui/csv_preview/`: raw CSV preview package for loading and showing external CSV files in a separate window
 - `ui/record_actions.py`: record lookup and add/save/delete action flows
 - `ui/view_helpers.py`: shared UI focus, recalc, table-selection, and processing-dialog helpers
 - `ui/`: the rest of the Tkinter application code
 - `data_manager/`: CSV and SQLite persistence layer
 - `models.py`: record model and calculated fields
-- `settings.json`: local saved labels and table layout preferences
+- `settings.py`: public settings facade used by the app and tests
+- `settings_store.py`: settings persistence and per-CSV remembered state storage
+- `settings_normalization.py`: settings normalization and backfill rules for old or partial settings data
+- `settings_types.py`: immutable settings dataclasses
+- `settings_defaults.py`: default labels, layout, and preview-setting constants
+- `settings_facade.py`: module-level compatibility wrappers behind the public `settings.py` API
+- `settings.json`: local saved labels, layout preferences, GP highlight preference, and remembered CSV preview state
 - `MANUAL.txt`: plain-language user guide
 - `BUG_HUNTING.md`: manual and test checklist for finding regressions
 
@@ -179,6 +190,20 @@ python main.py cleanup
 - `ui/csv_preview/popup_controller.py`: owns header popup and preview export behavior, including async distinct-value loading and exact-value filter application.
 - `ui/csv_preview/refresh_controller.py`: owns metadata refresh, filtered refresh polling, loading placeholders, and header-filter prewarm orchestration for the preview table.
 - `ui/csv_preview/dialog.py`: owns Tk window creation, view state, and Treeview rendering, while delegating processing-dialog reuse and background analysis snapshot preparation to smaller helper objects.
+
+## Main App Architecture
+
+- `ui/app.py` is now mainly a wiring layer for the root window, widget creation, and public callbacks.
+- Main-window behaviors are split into small focused controllers so backup/export, CSV preview launch, table display state, form-mode state, and record list/form actions are easier to reason about independently.
+- The compatibility re-export shims in `ui/app_controllers.py` and `ui/app_display_controllers.py` exist to keep imports stable while the concrete code lives in narrower modules.
+
+## Settings Architecture
+
+- `settings.py` remains the public module that callers import from.
+- `settings_store.py` owns reading, writing, and updating saved settings.
+- `settings_normalization.py` owns defaults, normalization, and backfill rules so malformed or older settings still load safely.
+- `settings_facade.py` provides the module-level `load_*` and `save_*` helper bindings without putting that boilerplate back into `settings.py`.
+- `settings.SettingsStore` still resolves its default path through `settings.DEFAULT_PATH`, which keeps tests and UI flows compatible when that default path is monkeypatched.
 
 ## Testing
 

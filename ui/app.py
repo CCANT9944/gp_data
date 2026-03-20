@@ -6,17 +6,21 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Sequence
 
-from ..data_manager import CSVDataManager, DataManager
+from ..data_manager import DataManager
 from ..models import Record, calculate_field6
 from ..settings import SettingsStore
+from .app_csv_preview_controller import _CsvPreviewLaunchController
+from .app_form_mode_controller import _FormModeController
+from .app_record_controllers import _RecordFormActionsController, _RecordListController
+from .app_storage_controller import _AppStorageActionsController
+from .app_table_display_controller import _TableDisplayController
 from .backup_dialog import open_manage_backups_dialog
 from .csv_preview import CsvPreviewError, open_csv_preview_dialog
 from .form import InputForm
 from .record_actions import RecordActions
-from .record_logic import filtered_records, record_matches_query
 from .storage_feedback import describe_backup_failure, describe_startup_storage_issue, describe_storage_error
-from .table import METRIC_LABELS, RecordTable
-from .view_helpers import ProcessingDialogHandle, clear_table_selection, focus_record_in_table, focus_widget, recalc_form_field6, restore_table_selection
+from .table import RecordTable
+from .view_helpers import ProcessingDialogHandle, focus_record_in_table
 
 
 NEW_MODE_BANNER_BG = "#e7f1ff"
@@ -32,247 +36,6 @@ WINDOW_SCREEN_MARGIN = 80
 LOGGER = logging.getLogger(__name__)
 
 
-class _CsvPreviewLaunchController:
-    def __init__(
-        self,
-        app: "GPDataApp",
-        settings: SettingsStore,
-        open_last_csv_button: ttk.Button,
-        open_recent_csv_button: ttk.Menubutton,
-        recent_csv_menu: tk.Menu,
-        warn_settings_save_failure,
-        get_geometry,
-        set_status,
-        clear_status,
-    ) -> None:
-        self._app = app
-        self._settings = settings
-        self._open_last_csv_button = open_last_csv_button
-        self._open_recent_csv_button = open_recent_csv_button
-        self._recent_csv_menu = recent_csv_menu
-        self._warn_settings_save_failure = warn_settings_save_failure
-        self._get_geometry = get_geometry
-        self._set_status = set_status
-        self._clear_status = clear_status
-
-    def update_open_last_csv_button_state(self) -> None:
-        recent_paths = self._settings.load_csv_preview_recent_paths()
-        existing_paths = [path for path in recent_paths if Path(path).exists()]
-        last_path = existing_paths[0] if existing_paths else None
-
-        if existing_paths != recent_paths or self._settings.load_csv_preview_last_path() != last_path:
-            try:
-                self._settings.update(csv_preview_last_path=last_path, csv_preview_recent_paths=existing_paths)
-            except (OSError, TypeError, ValueError) as exc:
-                LOGGER.warning("Unable to normalize remembered CSV preview paths", exc_info=True)
-                self._warn_settings_save_failure("the recent CSV preview list", exc)
-
-        state = "normal" if existing_paths else "disabled"
-        self._open_last_csv_button.config(state=state)
-        self._open_recent_csv_button.config(state=state)
-
-        self._recent_csv_menu.delete(0, "end")
-        for saved_path in existing_paths:
-            self._recent_csv_menu.add_command(
-                label=saved_path,
-                command=lambda value=saved_path: self._app.on_open_recent_csv_preview(value),
-            )
-
-    def open_csv_preview_path(
-        self,
-        csv_path: Path,
-        *,
-        remember: bool,
-        has_header_row: bool,
-        status_message: str,
-    ) -> None:
-        self._set_status(status_message)
-        width, height = self._get_geometry()
-        try:
-            open_csv_preview_dialog(self._app, csv_path, width=width, height=height, has_header_row=has_header_row)
-        except CsvPreviewError as exc:
-            messagebox.showerror("CSV preview unavailable", str(exc))
-            return
-        finally:
-            self._clear_status()
-
-        if remember:
-            try:
-                self._settings.remember_csv_preview_path(str(csv_path))
-            except (OSError, TypeError, ValueError) as exc:
-                LOGGER.warning("Unable to persist recent CSV preview paths", exc_info=True)
-                self._warn_settings_save_failure("the recent CSV preview list", exc)
-            self.update_open_last_csv_button_state()
-
-    def resolve_csv_preview_has_header_row(self, csv_path: Path, *, prompt: bool) -> bool | None:
-        normalized_path = str(csv_path)
-        saved_choice = self._settings.load_csv_preview_has_header_row(normalized_path)
-        if saved_choice is not None and not prompt:
-            return saved_choice
-
-        remembered_text = ""
-        if saved_choice is not None:
-            remembered_text = "\n\nRemembered choice for this file: first row is {}headers.".format("" if saved_choice else "not ")
-        choice = messagebox.askyesnocancel(
-            "CSV header row",
-            "Does this CSV already contain a header row?\n\n"
-            "Yes: use the first row as column names.\n"
-            "No: generate Column 1, Column 2, Column 3, ... and keep the first row as data."
-            f"{remembered_text}",
-        )
-        if choice is None:
-            return None
-        has_header_row = bool(choice)
-        try:
-            self._settings.save_csv_preview_has_header_row(normalized_path, has_header_row)
-        except (OSError, TypeError, ValueError) as exc:
-            LOGGER.warning("Unable to persist CSV preview header mode", exc_info=True)
-            self._warn_settings_save_failure("the CSV header option", exc)
-        return has_header_row
-
-    def on_open_csv_preview(self) -> None:
-        path = filedialog.askopenfilename(
-            title="Open CSV",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
-        )
-        if not path:
-            return
-        has_header_row = self.resolve_csv_preview_has_header_row(Path(path), prompt=True)
-        if has_header_row is None:
-            return
-        self.open_csv_preview_path(Path(path), remember=True, has_header_row=has_header_row, status_message="Processing CSV...")
-
-    def on_open_last_csv_preview(self) -> None:
-        recent_paths = self._settings.load_csv_preview_recent_paths()
-        if not recent_paths:
-            self.update_open_last_csv_button_state()
-            return
-        csv_path = Path(recent_paths[0])
-        if not csv_path.exists():
-            messagebox.showerror("CSV preview unavailable", "The remembered CSV file could not be found.")
-            try:
-                self._settings.save_csv_preview_recent_paths([path for path in recent_paths if path != str(csv_path)])
-            except (OSError, TypeError, ValueError) as exc:
-                LOGGER.warning("Unable to clear missing remembered CSV preview path", exc_info=True)
-                self._warn_settings_save_failure("the recent CSV preview list", exc)
-            self.update_open_last_csv_button_state()
-            return
-        has_header_row = self.resolve_csv_preview_has_header_row(csv_path, prompt=False)
-        if has_header_row is None:
-            return
-        self.open_csv_preview_path(csv_path, remember=True, has_header_row=has_header_row, status_message="Processing last CSV...")
-
-    def on_open_recent_csv_preview(self, saved_path: str) -> None:
-        csv_path = Path(saved_path)
-        if not csv_path.exists():
-            messagebox.showerror("CSV preview unavailable", "The selected recent CSV file could not be found.")
-            try:
-                self._settings.save_csv_preview_recent_paths(
-                    [path for path in self._settings.load_csv_preview_recent_paths() if path != saved_path]
-                )
-            except (OSError, TypeError, ValueError) as exc:
-                LOGGER.warning("Unable to clear missing recent CSV preview path", exc_info=True)
-                self._warn_settings_save_failure("the recent CSV preview list", exc)
-            self.update_open_last_csv_button_state()
-            return
-        has_header_row = self.resolve_csv_preview_has_header_row(csv_path, prompt=False)
-        if has_header_row is None:
-            return
-        self.open_csv_preview_path(csv_path, remember=True, has_header_row=has_header_row, status_message="Processing recent CSV...")
-
-
-class _AppStorageActionsController:
-    def __init__(self, app: "GPDataApp", data_manager: DataManager, show_storage_error, load_records) -> None:
-        self._app = app
-        self._data_manager = data_manager
-        self._show_storage_error = show_storage_error
-        self._load_records = load_records
-
-    def on_export(self, displayed_records: list[Record]) -> None:
-        path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files", "*.csv")])
-        if not path:
-            return
-        try:
-            if displayed_records:
-                tmp = CSVDataManager(Path(path))
-                tmp._write_all(displayed_records)
-            else:
-                self._data_manager.export_csv(Path(path))
-            messagebox.showinfo("Export", f"Exported to {path}")
-        except (OSError, RuntimeError, ValueError) as exc:
-            self._show_storage_error("Export failed", "export records", Path(path), exc)
-
-    def on_manage_backups(self):
-        return open_manage_backups_dialog(self._app, self._data_manager, on_restored=self._load_records)
-
-
-class _FormModeController:
-    def __init__(
-        self,
-        form: InputForm,
-        table: RecordTable,
-        form_mode_var: tk.StringVar,
-        form_mode_label: tk.Label,
-        save_changes_button: ttk.Button,
-        delete_selected_button: ttk.Button,
-        record_by_id,
-    ) -> None:
-        self._form = form
-        self._table = table
-        self._form_mode_var = form_mode_var
-        self._form_mode_label = form_mode_label
-        self._save_changes_button = save_changes_button
-        self._delete_selected_button = delete_selected_button
-        self._record_by_id = record_by_id
-
-    def on_form_dirty_change(self, _is_dirty: bool) -> None:
-        self.update()
-
-    def update(self, record: Record | None = None) -> None:
-        current_record_id = self._form.current_record_id
-        selected_record_id = self._table.get_selected_id()
-        dirty = self._form.is_dirty()
-        self._delete_selected_button.config(state="normal" if selected_record_id else "disabled")
-        if current_record_id is None:
-            self._save_changes_button.config(state="disabled")
-            text = "NEW ITEM MODE"
-            bg = NEW_MODE_BANNER_BG
-            fg = NEW_MODE_BANNER_FG
-            if dirty:
-                text = "NEW ITEM MODE (UNSAVED CHANGES)"
-                bg = DIRTY_MODE_BANNER_BG
-                fg = DIRTY_MODE_BANNER_FG
-            self._set_banner(text, bg, fg)
-            return
-        if record is None or record.id != current_record_id:
-            record = self._record_by_id(current_record_id)
-        self._save_changes_button.config(state="normal")
-        if record is None:
-            text = "EDITING SELECTED ITEM"
-            bg = EDIT_MODE_BANNER_BG
-            fg = EDIT_MODE_BANNER_FG
-            if dirty:
-                text = f"{text} (UNSAVED CHANGES)"
-                bg = DIRTY_MODE_BANNER_BG
-                fg = DIRTY_MODE_BANNER_FG
-            self._set_banner(text, bg, fg)
-            return
-        left = (record.field1 or "").strip() or "(blank)"
-        right = (record.field2 or "").strip() or "(blank)"
-        text = f"EDITING: {left} / {right}"
-        bg = EDIT_MODE_BANNER_BG
-        fg = EDIT_MODE_BANNER_FG
-        if dirty:
-            text = f"{text} (UNSAVED CHANGES)"
-            bg = DIRTY_MODE_BANNER_BG
-            fg = DIRTY_MODE_BANNER_FG
-        self._set_banner(text, bg, fg)
-
-    def _set_banner(self, text: str, bg: str, fg: str) -> None:
-        self._form_mode_var.set(text)
-        self._form_mode_label.config(bg=bg, fg=fg)
-
-
 class GPDataApp(tk.Tk):
     def __init__(self, storage_path: Path | None = None):
         super().__init__()
@@ -280,8 +43,6 @@ class GPDataApp(tk.Tk):
 
         self.data_manager = DataManager(storage_path)
         self._settings = SettingsStore()
-        self._displayed_records: list[Record] = []
-        self._type_filter_value: str | None = None
         self._type_filter_menu_value = tk.StringVar(value="")
         self._settings_warning_keys: set[str] = set()
         self._record_actions = RecordActions(
@@ -377,12 +138,30 @@ class GPDataApp(tk.Tk):
             self._csv_preview_geometry,
             self._set_csv_preview_status,
             self._clear_csv_preview_status,
+            lambda: filedialog.askopenfilename(
+                title="Open CSV",
+                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            ),
+            lambda title, message: messagebox.askyesnocancel(title, message),
+            lambda title, message: messagebox.showerror(title, message),
+            lambda csv_path, width, height, has_header_row: open_csv_preview_dialog(
+                self,
+                csv_path,
+                width=width,
+                height=height,
+                has_header_row=has_header_row,
+            ),
+            CsvPreviewError,
+            self.on_open_recent_csv_preview,
         )
         self._storage_actions = _AppStorageActionsController(
             self,
             self.data_manager,
             self._show_storage_error,
             self.load_records,
+            lambda: filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files", "*.csv")]),
+            lambda title, message: messagebox.showinfo(title, message),
+            lambda: open_manage_backups_dialog(self, self.data_manager, on_restored=self.load_records),
         )
         self._form_mode = _FormModeController(
             self.form,
@@ -392,6 +171,12 @@ class GPDataApp(tk.Tk):
             self._save_changes_button,
             self._delete_selected_button,
             self._record_actions.record_by_id,
+            NEW_MODE_BANNER_BG,
+            NEW_MODE_BANNER_FG,
+            EDIT_MODE_BANNER_BG,
+            EDIT_MODE_BANNER_FG,
+            DIRTY_MODE_BANNER_BG,
+            DIRTY_MODE_BANNER_FG,
         )
         self.form.on_dirty_change = self._on_form_dirty_change
 
@@ -408,11 +193,47 @@ class GPDataApp(tk.Tk):
         self._gp_highlight_menu.add_command(label="Custom...", command=self._prompt_custom_gp_highlight_threshold)
         self._gp_highlight_menu.add_command(label="Clear GP highlight", command=lambda: self._set_gp_highlight_threshold(None))
         self._type_filter_menu = tk.Menu(self, tearoff=0)
+        self._table_display = _TableDisplayController(
+            self,
+            self._settings,
+            self.data_manager,
+            self.form,
+            self.table,
+            self._gp_highlight_menu,
+            self._type_filter_menu,
+            self._type_filter_menu_value,
+            self._warn_settings_save_failure,
+            self.load_records,
+            self._current_search_query,
+            lambda *args, **kwargs: simpledialog.askstring(*args, **kwargs),
+            lambda title, message: messagebox.showerror(title, message),
+            lambda title, message: messagebox.showinfo(title, message),
+        )
+        self._record_list = _RecordListController(
+            self.data_manager,
+            self.form,
+            self.table,
+            self._search_entry,
+            self._record_actions,
+            self._show_storage_error,
+            self._update_form_mode_ui,
+            self._confirm_discard_form_changes,
+            self._sort_records_for_display,
+            self._filtered_records,
+            self._record_matches_current_filter,
+        )
+        self._record_form_actions = _RecordFormActionsController(
+            self.form,
+            self.table,
+            self._record_actions,
+            self._confirm_discard_form_changes,
+            self._confirm_duplicate_record,
+            self._update_form_mode_ui,
+            lambda title, message: messagebox.askyesno(title, message),
+        )
         self.table.bind("<<TreeviewSelect>>", self._on_table_select)
         self.table.bind("<Button-3>", self._on_row_right_click)
         self.protocol("WM_DELETE_WINDOW", self.on_close)
-
-        self._suspend_table_select = False
         self._update_open_last_csv_button_state()
         self.table.set_gp_highlight_threshold(gp_highlight_threshold)
         self._apply_initial_window_geometry()
@@ -484,25 +305,7 @@ class GPDataApp(tk.Tk):
         self._refresh_saved_record(record)
 
     def _on_table_select(self, event=None) -> None:
-        if self._suspend_table_select:
-            return
-        sel_id = self.table.get_selected_id()
-        if not sel_id:
-            return
-        current_record_id = self.form.current_record_id
-        if sel_id != current_record_id and self.form.is_dirty():
-            if not self._confirm_discard_form_changes():
-                self._suspend_table_select = True
-                try:
-                    restore_table_selection(self.table, current_record_id)
-                finally:
-                    self._suspend_table_select = False
-                return
-        record = self._record_actions.record_by_id(sel_id)
-        if record is None:
-            return
-        self.form.set_values(record.to_dict())
-        self._update_form_mode_ui(record)
+        self._record_list.on_table_select(event)
 
     def _confirm_discard_form_changes(self) -> bool:
         if not self.form.is_dirty():
@@ -526,26 +329,13 @@ class GPDataApp(tk.Tk):
         return self._search_entry.get().strip().lower()
 
     def _normalized_type_value(self, value: str | None) -> str:
-        return (value or "").strip().lower()
+        return self._table_display.normalized_type_value(value)
 
     def _record_type_options(self, records: list[Record]) -> list[str]:
-        return sorted(
-            {
-                (record.field1 or "").strip()
-                for record in records
-                if (record.field1 or "").strip()
-            },
-            key=str.lower,
-        )
+        return self._table_display.record_type_options(records)
 
     def _apply_type_filter(self, records: list[Record]) -> list[Record]:
-        if not self._type_filter_value:
-            return records
-        return [
-            record
-            for record in records
-            if self._normalized_type_value(record.field1) == self._type_filter_value
-        ]
+        return self._table_display.apply_type_filter(records)
 
     def _sort_records_for_display(self, records: list[Record]) -> list[Record]:
         return sorted(
@@ -555,91 +345,25 @@ class GPDataApp(tk.Tk):
         )
 
     def _set_type_filter(self, value: str | None) -> None:
-        self._type_filter_value = value
-        self._type_filter_menu_value.set(value or "")
-        self.load_records()
+        self._table_display.set_type_filter(value)
 
     def _show_type_filter_menu(self) -> None:
-        records = self.data_manager.load_all()
-        type_options = self._record_type_options(records)
-
-        self._type_filter_menu.delete(0, "end")
-        if type_options:
-            for type_name in type_options:
-                normalized_value = self._normalized_type_value(type_name)
-                self._type_filter_menu.add_radiobutton(
-                    label=type_name,
-                    value=normalized_value,
-                    variable=self._type_filter_menu_value,
-                    command=lambda value=normalized_value: self._set_type_filter(value),
-                )
-        else:
-            self._type_filter_menu.add_command(label="No types available", state="disabled")
-
-        self._type_filter_menu.add_separator()
-        self._type_filter_menu.add_command(label="Remove type filter", command=lambda: self._set_type_filter(None))
-
-        try:
-            self._type_filter_menu.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
-        except tk.TclError:
-            LOGGER.debug("Unable to show type filter menu", exc_info=True)
-        finally:
-            try:
-                self._type_filter_menu.grab_release()
-            except tk.TclError:
-                LOGGER.debug("Unable to release type filter menu grab", exc_info=True)
+        self._table_display.show_type_filter_menu()
 
     def _filtered_records(self, records: list[Record]) -> list[Record]:
-        return filtered_records(self._apply_type_filter(records), self._current_search_query())
+        return self._table_display.filtered_records(records)
 
     def _record_matches_current_filter(self, record: Record) -> bool:
-        query = self._current_search_query()
-        filtered_records_for_query = self._apply_type_filter(self.data_manager.load_all())
-        if self._type_filter_value and self._normalized_type_value(record.field1) != self._type_filter_value:
-            return False
-        return record_matches_query(record, query, filtered_records_for_query)
+        return self._table_display.record_matches_current_filter(record)
 
     def _set_gp_highlight_threshold(self, threshold: float | None) -> None:
-        self.table.set_gp_highlight_threshold(threshold)
-        try:
-            self._settings.save_gp_highlight_threshold(threshold)
-        except (OSError, TypeError, ValueError) as exc:
-            LOGGER.warning("Unable to persist GP highlight threshold", exc_info=True)
-            self._warn_settings_save_failure("the GP highlight preference", exc)
+        self._table_display.set_gp_highlight_threshold(threshold)
 
     def _prompt_custom_gp_highlight_threshold(self) -> None:
-        current_threshold = self.table.get_gp_highlight_threshold()
-        initial_value = "" if current_threshold is None else f"{current_threshold:g}"
-        response = simpledialog.askstring(
-            "Highlight GP rows",
-            "Highlight rows with GP smaller than what percentage?\n\nEnter a number like 70 or 70.5.\nLeave blank to clear highlighting.",
-            parent=self,
-            initialvalue=initial_value,
-        )
-        if response is None:
-            return
-        text = response.strip().rstrip("%")
-        if not text:
-            self._set_gp_highlight_threshold(None)
-            return
-        try:
-            threshold = float(text)
-        except ValueError:
-            messagebox.showerror("Invalid GP threshold", "Enter a GP percentage like 70 or 70.5.")
-            return
-        if threshold < 0 or threshold > 100:
-            messagebox.showerror("Invalid GP threshold", "GP highlight threshold must be between 0 and 100.")
-            return
-        self._set_gp_highlight_threshold(threshold)
+        self._table_display.prompt_custom_gp_highlight_threshold()
 
     def _show_gp_highlight_menu(self) -> None:
-        try:
-            self._gp_highlight_menu.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
-        finally:
-            try:
-                self._gp_highlight_menu.grab_release()
-            except tk.TclError:
-                LOGGER.debug("Unable to release GP highlight menu grab", exc_info=True)
+        self._table_display.show_gp_highlight_menu()
 
     def _on_table_heading_click(self, column_name: str) -> None:
         if column_name == "gp":
@@ -649,133 +373,37 @@ class GPDataApp(tk.Tk):
             self._show_type_filter_menu()
 
     def _refresh_saved_record(self, record: Record) -> None:
-        still_visible = self._record_matches_current_filter(record)
-        previous_index = next((index for index, existing in enumerate(self._displayed_records) if existing.id == record.id), None)
-        self._displayed_records = [existing for existing in self._displayed_records if existing.id != record.id]
-
-        if still_visible:
-            if self.table.exists(record.id):
-                if previous_index is not None and previous_index <= len(self._displayed_records):
-                    self._displayed_records.insert(previous_index, record)
-                else:
-                    self._displayed_records.append(record)
-                self.table.update_record(record)
-            else:
-                self.load_records()
-                return
-            try:
-                self.table.selection_set(record.id)
-            except tk.TclError:
-                LOGGER.debug("Unable to restore table selection for %s", record.id, exc_info=True)
-            return
-
-        if self.table.exists(record.id):
-            try:
-                self.table.delete(record.id)
-            except tk.TclError:
-                LOGGER.debug("Unable to remove hidden record %s from the table; reloading rows", record.id, exc_info=True)
-                self.load_records()
+        self._record_list.refresh_saved_record(record)
 
     def load_records(self) -> None:
-        try:
-            records = self.data_manager.load_all()
-        except (OSError, RuntimeError, ValueError) as exc:
-            LOGGER.warning("Unable to load records", exc_info=True)
-            self._displayed_records = []
-            self.table.load([])
-            self._update_form_mode_ui()
-            self._show_storage_error("Storage unavailable", "load records", self.data_manager.path, exc)
-            return
-        displayed = self._sort_records_for_display(self._filtered_records(records))
-        self._displayed_records = displayed
-        self.table.load(displayed)
-        self._update_form_mode_ui()
+        self._record_list.load_records()
 
     def on_search(self) -> None:
-        self.load_records()
+        self._record_list.on_search()
 
     def on_clear_search(self) -> None:
-        self._search_entry.delete(0, "end")
-        self.load_records()
+        self._record_list.on_clear_search()
 
     def on_new_item(self) -> None:
-        if not self._confirm_discard_form_changes():
-            return
-        self._reset_to_new_item()
+        self._record_form_actions.on_new_item()
 
     def _reset_to_new_item(self) -> None:
-        self.form.clear()
-        clear_table_selection(self.table)
-        self._update_form_mode_ui()
-        first_field = self.form.entries.get("field1")
-        focus_widget(first_field)
+        self._record_form_actions.reset_to_new_item()
 
     def on_form_submit(self) -> None:
-        if self.form.current_record_id:
-            self.on_save_changes()
-            return
-        self.on_add()
+        self._record_form_actions.on_form_submit()
 
     def on_add(self) -> None:
-        recalc_form_field6(self.form, "adding a new item")
-        data = self.form.get_values()
-        rec = self._record_actions.build_record_or_show_error(data)
-        if rec is None:
-            return
-
-        if not self._confirm_duplicate_record(rec, action_text="add another record"):
-            return
-        self._record_actions.save_new_record(rec)
+        self._record_form_actions.on_add()
 
     def on_edit(self) -> None:
-        record = self._record_actions.record_or_show_missing_error(
-            self.table.get_selected_id(),
-            selection_message="Please select a record to edit.",
-        )
-        if record is None:
-            return
-        self.form.set_values(record.to_dict())
-        self._update_form_mode_ui(record)
-        first_field = self.form.entries.get("field1")
-        focus_widget(first_field)
+        self._record_form_actions.on_edit()
 
     def on_save_changes(self) -> None:
-        record = self._record_actions.record_or_show_missing_error(
-            self.form.current_record_id or self.table.get_selected_id(),
-            selection_message="Please select a record to edit.",
-        )
-        if record is None:
-            return
-        recalc_form_field6(self.form, "saving changes")
-        values = self.form.get_values()
-        updated = self._record_actions.build_record_or_show_error(values, record_id=record.id, created_at=record.created_at)
-        if updated is None:
-            return
-        self._record_actions.save_existing_record(
-            record,
-            updated,
-            duplicate_action_text="save this edit",
-            backup_action="saving this edit",
-            error_title="Save failed",
-            error_action="save the edited record",
-        )
+        self._record_form_actions.on_save_changes()
 
     def on_delete(self) -> None:
-        sel_id = self._record_actions.record_id_or_show_selection_error(
-            self.table.get_selected_id(),
-            "Please select a record to delete.",
-        )
-        if sel_id is None:
-            return
-        if self.form.is_dirty() and not self._confirm_discard_form_changes():
-            return
-        if messagebox.askyesno("Confirm", "Delete selected record?"):
-            self._record_actions.delete_record(
-                sel_id,
-                backup_action="deleting this record",
-                error_title="Delete failed",
-                error_action="delete the selected record",
-            )
+        self._record_form_actions.on_delete()
 
     def on_close(self) -> None:
         if not self._confirm_discard_form_changes():
@@ -831,69 +459,28 @@ class GPDataApp(tk.Tk):
         self._csv_preview_launch.on_open_recent_csv_preview(saved_path)
 
     def on_export(self) -> None:
-        self._storage_actions.on_export(self._displayed_records)
+        self._storage_actions.on_export(self._record_list.displayed_records)
 
     def on_manage_backups(self) -> None:
         return self._storage_actions.on_manage_backups()
 
     def on_labels_changed(self, labels: Sequence[str]) -> None:
-        self.table.update_column_labels(labels)
+        self._table_display.on_labels_changed(labels)
 
     def on_column_order_changed(self, columns: Sequence[str]) -> None:
-        try:
-            self._settings.save_column_order(list(columns))
-        except (OSError, TypeError, ValueError) as exc:
-            LOGGER.warning("Unable to persist column order", exc_info=True)
-            self._warn_settings_save_failure("the column order", exc)
+        self._table_display.on_column_order_changed(columns)
 
     def on_column_widths_changed(self, column_widths: dict[str, int]) -> None:
-        try:
-            self._settings.save_column_widths(column_widths)
-        except (OSError, TypeError, ValueError) as exc:
-            LOGGER.warning("Unable to persist column widths", exc_info=True)
-            self._warn_settings_save_failure("the column widths", exc)
+        self._table_display.on_column_widths_changed(column_widths)
 
     def on_visible_columns_changed(self, visible_columns: Sequence[str]) -> None:
-        try:
-            self._settings.save_visible_columns(list(visible_columns))
-        except (OSError, TypeError, ValueError) as exc:
-            LOGGER.warning("Unable to persist visible columns", exc_info=True)
-            self._warn_settings_save_failure("the visible columns", exc)
+        self._table_display.on_visible_columns_changed(visible_columns)
 
     def _column_label(self, column: str) -> str:
-        if column.startswith("field") and column[5:].isdigit():
-            idx = int(column[5:]) - 1
-            if 0 <= idx < len(self.form.labels):
-                return self.form.labels[idx]
-        return METRIC_LABELS.get(column, column)
+        return self._table_display.column_label(column)
 
     def on_manage_columns(self) -> None:
-        win = tk.Toplevel(self)
-        win.title("Columns")
-        win.geometry("320x360")
-
-        body = ttk.Frame(win)
-        body.pack(fill="both", expand=True, padx=10, pady=10)
-
-        visible = set(self.table.get_visible_columns())
-        vars_by_column: dict[str, tk.BooleanVar] = {}
-        for row, column in enumerate(self.table.get_column_order()):
-            var = tk.BooleanVar(value=column in visible)
-            vars_by_column[column] = var
-            ttk.Checkbutton(body, text=self._column_label(column), variable=var).grid(row=row, column=0, sticky="w", pady=2)
-
-        def apply_columns() -> None:
-            selected = [column for column in self.table.get_column_order() if vars_by_column[column].get()]
-            if not selected:
-                messagebox.showinfo("Columns", "At least one column must stay visible.")
-                return
-            self.table.set_visible_columns(selected)
-            win.destroy()
-
-        buttons = ttk.Frame(win)
-        buttons.pack(fill="x", padx=10, pady=(0, 10))
-        ttk.Button(buttons, text="Apply", command=apply_columns).pack(side="right", padx=4)
-        ttk.Button(buttons, text="Cancel", command=win.destroy).pack(side="right", padx=4)
+        self._table_display.on_manage_columns()
 
     def _on_table_commit(self, record_id: str, col: str, new_value: str) -> None:
         try:

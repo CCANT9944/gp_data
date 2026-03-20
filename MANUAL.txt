@@ -295,6 +295,7 @@ This includes:
 - column order
 - column widths
 - visible columns
+- the GP row highlight threshold
 - the last CSV preview path used by Last CSV
 - the recent CSV preview paths used by Recent CSVs
 - the visible preview columns remembered for each CSV path, with header-aware restore when possible for reordered CSVs
@@ -336,7 +337,7 @@ If the CSV viewer does not reopen the file you expect:
 - if the first row is being treated the wrong way, reopen it with Open CSV and answer the header-row question differently
 
 
-14. CURRENT LIMITATIONS
+15. CURRENT LIMITATIONS
 
 - The main form shows recent numeric changes; full history is available from View full history.
 - At least one table column must stay visible.
@@ -344,7 +345,7 @@ If the CSV viewer does not reopen the file you expect:
 - GUI tests may be skipped on systems without Tk support, but the app itself still targets Tkinter.
 
 
-15. QUICK DAILY WORKFLOW
+16. QUICK DAILY WORKFLOW
 
 1. Start the app with python main.py
 2. Search or select an item
