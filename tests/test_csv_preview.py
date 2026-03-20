@@ -598,6 +598,255 @@ def test_open_csv_preview_analysis_dialog_bar_chart_shows_all_items_with_scroll(
     dialog.destroy()
 
 
+def test_open_csv_preview_analysis_dialog_bar_chart_can_limit_to_first_10_items(tk_root):
+    analysis_path = loader_module.Path("analysis.csv")
+    dialog = analysis_dialog_module.open_csv_preview_analysis_dialog(
+        tk_root,
+        loader_module.CsvPreviewData(
+            path=analysis_path,
+            encoding="utf-8",
+            headers=["Name", "Quantity"],
+            rows=[],
+            row_total=30,
+            fully_cached=True,
+        ),
+        [(f"Cocktail {index}", str(index)) for index in range(1, 31)],
+        [0, 1],
+        {1},
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    combo_boxes = _find_widgets(dialog, ttk.Combobox)
+    assert len(combo_boxes) >= 4
+
+    view_box = combo_boxes[0]
+    bar_range_box = combo_boxes[3]
+    view_box.set("Bar chart")
+    view_box.event_generate("<<ComboboxSelected>>")
+    bar_range_box.set("First 10")
+    bar_range_box.event_generate("<<ComboboxSelected>>")
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    canvas = _find_descendant(dialog, tk.Canvas)
+    assert canvas is not None
+    label_texts = [
+        str(canvas.itemcget(item_id, "text"))
+        for item_id in canvas.find_all()
+        if canvas.type(item_id) == "text" and "Cocktail" in str(canvas.itemcget(item_id, "text"))
+    ]
+    assert len(label_texts) == 10
+    assert "Cocktail 30" in label_texts
+    assert "Cocktail 21" in label_texts
+    assert "Cocktail 20" not in label_texts
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_analysis_dialog_bar_chart_can_limit_to_first_5_items(tk_root):
+    analysis_path = loader_module.Path("analysis.csv")
+    dialog = analysis_dialog_module.open_csv_preview_analysis_dialog(
+        tk_root,
+        loader_module.CsvPreviewData(
+            path=analysis_path,
+            encoding="utf-8",
+            headers=["Name", "Quantity"],
+            rows=[],
+            row_total=30,
+            fully_cached=True,
+        ),
+        [(f"Cocktail {index}", str(index)) for index in range(1, 31)],
+        [0, 1],
+        {1},
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    combo_boxes = _find_widgets(dialog, ttk.Combobox)
+    assert len(combo_boxes) >= 4
+
+    view_box = combo_boxes[0]
+    bar_range_box = combo_boxes[3]
+    view_box.set("Bar chart")
+    view_box.event_generate("<<ComboboxSelected>>")
+    bar_range_box.set("First 5")
+    bar_range_box.event_generate("<<ComboboxSelected>>")
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    canvas = _find_descendant(dialog, tk.Canvas)
+    assert canvas is not None
+    label_texts = [
+        str(canvas.itemcget(item_id, "text"))
+        for item_id in canvas.find_all()
+        if canvas.type(item_id) == "text" and "Cocktail" in str(canvas.itemcget(item_id, "text"))
+    ]
+    assert len(label_texts) == 5
+    assert "Cocktail 30" in label_texts
+    assert "Cocktail 26" in label_texts
+    assert "Cocktail 25" not in label_texts
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_analysis_dialog_bar_chart_can_limit_to_last_10_items(tk_root):
+    analysis_path = loader_module.Path("analysis.csv")
+    dialog = analysis_dialog_module.open_csv_preview_analysis_dialog(
+        tk_root,
+        loader_module.CsvPreviewData(
+            path=analysis_path,
+            encoding="utf-8",
+            headers=["Name", "Quantity"],
+            rows=[],
+            row_total=30,
+            fully_cached=True,
+        ),
+        [(f"Cocktail {index}", str(index)) for index in range(1, 31)],
+        [0, 1],
+        {1},
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    combo_boxes = _find_widgets(dialog, ttk.Combobox)
+    assert len(combo_boxes) >= 4
+
+    view_box = combo_boxes[0]
+    bar_range_box = combo_boxes[3]
+    view_box.set("Bar chart")
+    view_box.event_generate("<<ComboboxSelected>>")
+    bar_range_box.set("Last 10")
+    bar_range_box.event_generate("<<ComboboxSelected>>")
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    canvas = _find_descendant(dialog, tk.Canvas)
+    assert canvas is not None
+    label_texts = [
+        str(canvas.itemcget(item_id, "text"))
+        for item_id in canvas.find_all()
+        if canvas.type(item_id) == "text" and "Cocktail" in str(canvas.itemcget(item_id, "text"))
+    ]
+    assert len(label_texts) == 10
+    assert "Cocktail 10" in label_texts
+    assert "Cocktail 1" in label_texts
+    assert "Cocktail 11" not in label_texts
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_analysis_dialog_bar_chart_can_limit_to_last_5_items(tk_root):
+    analysis_path = loader_module.Path("analysis.csv")
+    dialog = analysis_dialog_module.open_csv_preview_analysis_dialog(
+        tk_root,
+        loader_module.CsvPreviewData(
+            path=analysis_path,
+            encoding="utf-8",
+            headers=["Name", "Quantity"],
+            rows=[],
+            row_total=30,
+            fully_cached=True,
+        ),
+        [(f"Cocktail {index}", str(index)) for index in range(1, 31)],
+        [0, 1],
+        {1},
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    combo_boxes = _find_widgets(dialog, ttk.Combobox)
+    assert len(combo_boxes) >= 4
+
+    view_box = combo_boxes[0]
+    bar_range_box = combo_boxes[3]
+    view_box.set("Bar chart")
+    view_box.event_generate("<<ComboboxSelected>>")
+    bar_range_box.set("Last 5")
+    bar_range_box.event_generate("<<ComboboxSelected>>")
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    canvas = _find_descendant(dialog, tk.Canvas)
+    assert canvas is not None
+    label_texts = [
+        str(canvas.itemcget(item_id, "text"))
+        for item_id in canvas.find_all()
+        if canvas.type(item_id) == "text" and "Cocktail" in str(canvas.itemcget(item_id, "text"))
+    ]
+    assert len(label_texts) == 5
+    assert "Cocktail 5" in label_texts
+    assert "Cocktail 1" in label_texts
+    assert "Cocktail 6" not in label_texts
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_analysis_dialog_bar_chart_can_switch_to_horizontal_orientation(tk_root):
+    analysis_path = loader_module.Path("analysis.csv")
+    dialog = analysis_dialog_module.open_csv_preview_analysis_dialog(
+        tk_root,
+        loader_module.CsvPreviewData(
+            path=analysis_path,
+            encoding="utf-8",
+            headers=["Name", "Quantity"],
+            rows=[],
+            row_total=50,
+            fully_cached=True,
+        ),
+        [(f"Cocktail {index}", str(index)) for index in range(1, 51)],
+        [0, 1],
+        {1},
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    combo_boxes = _find_widgets(dialog, ttk.Combobox)
+    assert len(combo_boxes) >= 5
+
+    view_box = combo_boxes[0]
+    orientation_box = combo_boxes[4]
+    view_box.set("Bar chart")
+    view_box.event_generate("<<ComboboxSelected>>")
+    orientation_box.set("Horizontal")
+    orientation_box.event_generate("<<ComboboxSelected>>")
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    canvas = _find_descendant(dialog, tk.Canvas)
+    assert canvas is not None
+
+    label_item_ids = [
+        item_id
+        for item_id in canvas.find_all()
+        if canvas.type(item_id) == "text" and "Cocktail" in str(canvas.itemcget(item_id, "text"))
+    ]
+    assert label_item_ids
+    assert all(str(canvas.itemcget(item_id, "angle")) in {"0", "0.0", ""} for item_id in label_item_ids)
+    assert all(str(canvas.itemcget(item_id, "anchor")) == "e" for item_id in label_item_ids)
+
+    bar_item_ids = [
+        item_id
+        for item_id in canvas.find_all()
+        if canvas.type(item_id) == "rectangle" and str(canvas.itemcget(item_id, "fill"))
+    ]
+    assert bar_item_ids
+
+    label_boxes = [canvas.bbox(item_id) for item_id in label_item_ids if canvas.bbox(item_id) is not None]
+    bar_coords = [canvas.coords(item_id) for item_id in bar_item_ids]
+    label_centers = sorted((bbox[1] + bbox[3]) / 2 for bbox in label_boxes)
+    bar_centers = sorted((coords[1] + coords[3]) / 2 for coords in bar_coords)
+    assert len(label_centers) == len(bar_centers)
+    assert all(abs(label_center - bar_center) <= 1.0 for label_center, bar_center in zip(label_centers, bar_centers, strict=False))
+    assert all(bbox[2] < min(coords[0], coords[2]) for bbox, coords in zip(sorted(label_boxes, key=lambda box: (box[1] + box[3]) / 2), sorted(bar_coords, key=lambda bar: (bar[1] + bar[3]) / 2), strict=False))
+
+    scrollregion = [float(value) for value in str(canvas.cget("scrollregion")).split()]
+    assert len(scrollregion) == 4
+    assert scrollregion[3] > canvas.winfo_height()
+
+    dialog.destroy()
+
+
 def test_open_csv_preview_analysis_dialog_pie_chart_groups_smaller_items_into_other(tk_root):
     analysis_path = loader_module.Path("analysis.csv")
     dialog = analysis_dialog_module.open_csv_preview_analysis_dialog(

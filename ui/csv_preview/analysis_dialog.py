@@ -24,6 +24,28 @@ ANALYSIS_WINDOW_HEIGHT = 680
 VIEW_SUMMARY = "Summary"
 VIEW_BAR = "Bar chart"
 VIEW_PIE = "Pie chart"
+BAR_ORIENTATION_VERTICAL = "Vertical"
+BAR_ORIENTATION_HORIZONTAL = "Horizontal"
+BAR_ORIENTATION_OPTIONS = (
+    BAR_ORIENTATION_VERTICAL,
+    BAR_ORIENTATION_HORIZONTAL,
+)
+BAR_RANGE_ALL = "All"
+BAR_RANGE_FIRST_5 = "First 5"
+BAR_RANGE_FIRST_10 = "First 10"
+BAR_RANGE_FIRST_20 = "First 20"
+BAR_RANGE_LAST_5 = "Last 5"
+BAR_RANGE_LAST_10 = "Last 10"
+BAR_RANGE_LAST_20 = "Last 20"
+BAR_RANGE_OPTIONS = (
+    BAR_RANGE_ALL,
+    BAR_RANGE_FIRST_5,
+    BAR_RANGE_FIRST_10,
+    BAR_RANGE_FIRST_20,
+    BAR_RANGE_LAST_5,
+    BAR_RANGE_LAST_10,
+    BAR_RANGE_LAST_20,
+)
 SUMMARY_COLUMNS = (
     "column",
     "type",
@@ -47,6 +69,67 @@ CHART_COLORS = (
     "#ff9da7",
 )
 COUNT_ROWS_LABEL = "Count rows"
+
+
+def _slice_bar_chart_series(series: PreviewAggregatedChartSeries, selection: str) -> PreviewAggregatedChartSeries:
+    if selection == BAR_RANGE_FIRST_5:
+        limit = 5
+        labels = series.labels[:limit]
+        values = series.values[:limit]
+    elif selection == BAR_RANGE_FIRST_10:
+        limit = 10
+        labels = series.labels[:limit]
+        values = series.values[:limit]
+    elif selection == BAR_RANGE_FIRST_20:
+        limit = 20
+        labels = series.labels[:limit]
+        values = series.values[:limit]
+    elif selection == BAR_RANGE_LAST_5:
+        limit = 5
+        labels = series.labels[-limit:]
+        values = series.values[-limit:]
+    elif selection == BAR_RANGE_LAST_10:
+        limit = 10
+        labels = series.labels[-limit:]
+        values = series.values[-limit:]
+    elif selection == BAR_RANGE_LAST_20:
+        limit = 20
+        labels = series.labels[-limit:]
+        values = series.values[-limit:]
+    else:
+        labels = list(series.labels)
+        values = list(series.values)
+
+    return PreviewAggregatedChartSeries(
+        label_column_index=series.label_column_index,
+        label_column_label=series.label_column_label,
+        value_column_index=series.value_column_index,
+        value_column_label=series.value_column_label,
+        labels=labels,
+        values=values,
+    )
+
+
+def _bar_chart_range_description(selection: str) -> str:
+    if selection == BAR_RANGE_FIRST_5:
+        return "first 5"
+    if selection == BAR_RANGE_FIRST_10:
+        return "first 10"
+    if selection == BAR_RANGE_FIRST_20:
+        return "first 20"
+    if selection == BAR_RANGE_LAST_5:
+        return "last 5"
+    if selection == BAR_RANGE_LAST_10:
+        return "last 10"
+    if selection == BAR_RANGE_LAST_20:
+        return "last 20"
+    return "all items"
+
+
+def _bar_chart_message(series: PreviewAggregatedChartSeries, selection: str) -> str:
+    if selection == BAR_RANGE_ALL:
+        return f"{series.value_column_label} by {series.label_column_label} (highest to lowest)"
+    return f"{series.value_column_label} by {series.label_column_label} ({_bar_chart_range_description(selection)}, highest to lowest)"
 
 
 def _analysis_subtitle(snapshot: PreviewAnalysisSnapshot) -> str:
@@ -97,6 +180,7 @@ def _draw_empty_chart(canvas: tk.Canvas, message: str) -> None:
     width, height = _chart_canvas_size(canvas)
     canvas.configure(scrollregion=(0, 0, width, height))
     canvas.xview_moveto(0)
+    canvas.yview_moveto(0)
     canvas.create_text(
         width / 2,
         height / 2,
@@ -108,7 +192,7 @@ def _draw_empty_chart(canvas: tk.Canvas, message: str) -> None:
     )
 
 
-def _draw_bar_chart(canvas: tk.Canvas, series: PreviewAggregatedChartSeries) -> None:
+def _draw_vertical_bar_chart(canvas: tk.Canvas, series: PreviewAggregatedChartSeries) -> None:
     _clear_chart(canvas)
     viewport_width, height = _chart_canvas_size(canvas)
     label_texts = [_compact_filter_popup_label(label, max_length=20) for label in series.labels]
@@ -197,6 +281,100 @@ def _draw_bar_chart(canvas: tk.Canvas, series: PreviewAggregatedChartSeries) -> 
         label_box = canvas.bbox(label_id)
         if label_box is not None and label_box[1] < chart_bottom + label_padding:
             canvas.move(label_id, 0, (chart_bottom + label_padding) - label_box[1])
+
+
+def _draw_horizontal_bar_chart(canvas: tk.Canvas, series: PreviewAggregatedChartSeries) -> None:
+    _clear_chart(canvas)
+    width, viewport_height = _chart_canvas_size(canvas)
+    label_texts = [_compact_filter_popup_label(label, max_length=24) for label in series.labels]
+    max_label_length = max((len(label) for label in label_texts), default=0)
+    left = max(164, min(320, 88 + (max_label_length * 6)))
+    right = 96
+    top = 36
+    bottom = 28
+    count = len(series.values)
+    gap = 12
+    bar_height = 16
+    content_height = top + bottom + gap + count * (bar_height + gap)
+    if content_height < viewport_height:
+        gap = max(gap, (viewport_height - top - bottom - (count * bar_height)) // max(count + 1, 1))
+        content_height = viewport_height
+
+    chart_left = left
+    chart_right = width - right
+    chart_width = max(chart_right - chart_left, 120)
+    max_value = max(series.values, default=None)
+    min_value = min(series.values, default=None)
+    if max_value is None or min_value is None:
+        _draw_empty_chart(canvas, "No chartable values are available for the selected columns.")
+        return
+    chart_min = min(min_value, Decimal("0"))
+    chart_max = max(max_value, Decimal("0"))
+    if chart_min == chart_max:
+        _draw_empty_chart(canvas, "No chartable values are available for the selected columns.")
+        return
+    chart_range_float = float(chart_max - chart_min)
+
+    def _x_for(value: Decimal) -> float:
+        return chart_left + ((float(value - chart_min) / chart_range_float) * chart_width)
+
+    baseline_x = _x_for(Decimal("0"))
+    canvas.configure(scrollregion=(0, 0, width, content_height))
+    canvas.xview_moveto(0)
+    canvas.yview_moveto(0)
+
+    canvas.create_line(chart_left, top, chart_left, content_height - bottom, fill="#9ca3af")
+    canvas.create_line(baseline_x, top, baseline_x, content_height - bottom, fill="#9ca3af")
+
+    tick_count = 4
+    for tick in range(tick_count + 1):
+        value = chart_min + ((chart_max - chart_min) * Decimal(tick) / Decimal(tick_count))
+        x = _x_for(value)
+        grid_color = "#9ca3af" if value == 0 else "#eef2f7"
+        canvas.create_line(x, top, x, content_height - bottom, fill=grid_color)
+        canvas.create_text(
+            x,
+            top - 12,
+            text=format_decimal_summary(value),
+            anchor="s",
+            fill="#6b7280",
+            font=("Segoe UI", 9),
+        )
+
+    start_y = top + gap
+    for index, (label, value) in enumerate(zip(label_texts, series.values, strict=False)):
+        y0 = start_y + index * (bar_height + gap)
+        y1 = y0 + bar_height
+        value_x = _x_for(value)
+        x0 = min(value_x, baseline_x)
+        x1 = max(value_x, baseline_x)
+        color = CHART_COLORS[index % len(CHART_COLORS)]
+        canvas.create_rectangle(x0, y0, x1, y1, fill=color, outline="")
+        value_text_x = x1 + 8 if value >= 0 else x0 - 8
+        value_anchor = "w" if value >= 0 else "e"
+        canvas.create_text(
+            value_text_x,
+            (y0 + y1) / 2,
+            text=format_decimal_summary(value),
+            anchor=value_anchor,
+            fill="#374151",
+            font=("Segoe UI", 8, "bold"),
+        )
+        canvas.create_text(
+            chart_left - 10,
+            (y0 + y1) / 2,
+            text=label,
+            anchor="e",
+            fill="#374151",
+            font=("Segoe UI", 9),
+        )
+
+
+def _draw_bar_chart(canvas: tk.Canvas, series: PreviewAggregatedChartSeries, orientation: str) -> None:
+    if orientation == BAR_ORIENTATION_HORIZONTAL:
+        _draw_horizontal_bar_chart(canvas, series)
+        return
+    _draw_vertical_bar_chart(canvas, series)
 
 
 def _draw_aggregated_pie_chart(canvas: tk.Canvas, series: PreviewAggregatedChartSeries) -> None:
@@ -331,6 +509,18 @@ def open_csv_preview_analysis_dialog_from_snapshot(
     value_var.set(preferred_value.label if preferred_value is not None else COUNT_ROWS_LABEL)
     value_box.pack(side="left", padx=(6, 0))
 
+    bar_range_var = tk.StringVar(value=BAR_RANGE_ALL)
+    ttk.Label(control_row, text="Bar range").pack(side="left", padx=(12, 0))
+    bar_range_box = ttk.Combobox(control_row, textvariable=bar_range_var, state="disabled", width=12)
+    bar_range_box["values"] = BAR_RANGE_OPTIONS
+    bar_range_box.pack(side="left", padx=(6, 0))
+
+    bar_orientation_var = tk.StringVar(value=BAR_ORIENTATION_VERTICAL)
+    ttk.Label(control_row, text="Orientation").pack(side="left", padx=(12, 0))
+    bar_orientation_box = ttk.Combobox(control_row, textvariable=bar_orientation_var, state="disabled", width=12)
+    bar_orientation_box["values"] = BAR_ORIENTATION_OPTIONS
+    bar_orientation_box.pack(side="left", padx=(6, 0))
+
     content_frame = ttk.Frame(container)
     content_frame.grid(row=2, column=0, sticky="nsew")
     content_frame.columnconfigure(0, weight=1)
@@ -383,10 +573,13 @@ def open_csv_preview_analysis_dialog_from_snapshot(
         row=0, column=0, sticky="ew", pady=(0, 8)
     )
     chart_x_scroll = ttk.Scrollbar(chart_frame, orient="horizontal")
+    chart_y_scroll = ttk.Scrollbar(chart_frame, orient="vertical")
     chart_canvas = tk.Canvas(chart_frame, background="white", highlightthickness=0)
-    chart_canvas.configure(xscrollcommand=chart_x_scroll.set)
+    chart_canvas.configure(xscrollcommand=chart_x_scroll.set, yscrollcommand=chart_y_scroll.set)
     chart_x_scroll.configure(command=chart_canvas.xview)
+    chart_y_scroll.configure(command=chart_canvas.yview)
     chart_canvas.grid(row=1, column=0, sticky="nsew")
+    chart_y_scroll.grid(row=1, column=1, sticky="ns")
     chart_x_scroll.grid(row=2, column=0, sticky="ew")
 
     column_label_to_index = {column.label: column.index for column in snapshot.columns}
@@ -407,10 +600,18 @@ def open_csv_preview_analysis_dialog_from_snapshot(
             chart_x_scroll.grid_remove()
             chart_canvas.xview_moveto(0)
 
+    def _set_chart_y_scrollbar(enabled: bool) -> None:
+        if enabled:
+            chart_y_scroll.grid()
+        else:
+            chart_y_scroll.grid_remove()
+            chart_canvas.yview_moveto(0)
+
     def _render_chart() -> None:
         label_column_index = _selected_label_column_index()
         if label_column_index is None:
             _set_chart_x_scrollbar(False)
+            _set_chart_y_scrollbar(False)
             chart_message_var.set("Choose a visible label column to render a chart.")
             _draw_empty_chart(chart_canvas, "Choose a visible label column to render a chart.")
             return
@@ -425,35 +626,52 @@ def open_csv_preview_analysis_dialog_from_snapshot(
         )
         if series is None:
             _set_chart_x_scrollbar(False)
+            _set_chart_y_scrollbar(False)
             chart_message_var.set("No chartable values are available for the selected columns.")
             _draw_empty_chart(chart_canvas, "No chartable values are available for the selected columns.")
             return
 
         if selected_view == VIEW_BAR:
-            _set_chart_x_scrollbar(True)
-            chart_message_var.set(f"{series.value_column_label} by {series.label_column_label} (highest to lowest)")
-            _draw_bar_chart(chart_canvas, series)
+            series = _slice_bar_chart_series(series, bar_range_var.get())
+            if bar_orientation_var.get() == BAR_ORIENTATION_HORIZONTAL:
+                _set_chart_x_scrollbar(False)
+                _set_chart_y_scrollbar(True)
+            else:
+                _set_chart_x_scrollbar(True)
+                _set_chart_y_scrollbar(False)
+            chart_message_var.set(_bar_chart_message(series, bar_range_var.get()))
+            _draw_bar_chart(chart_canvas, series, bar_orientation_var.get())
             return
 
         _set_chart_x_scrollbar(False)
+        _set_chart_y_scrollbar(False)
         chart_message_var.set(f"{series.value_column_label} by {series.label_column_label}")
         if selected_view == VIEW_PIE:
             _draw_aggregated_pie_chart(chart_canvas, series)
             return
-        _draw_bar_chart(chart_canvas, series)
+        _draw_bar_chart(chart_canvas, series, BAR_ORIENTATION_VERTICAL)
 
     def _update_view(*_args) -> None:
         selected_output = output_var.get()
         if selected_output == VIEW_SUMMARY:
             _set_chart_x_scrollbar(False)
+            _set_chart_y_scrollbar(False)
             label_box.configure(state="disabled")
             value_box.configure(state="disabled")
+            bar_range_box.configure(state="disabled")
+            bar_orientation_box.configure(state="disabled")
             chart_frame.grid_forget()
             summary_frame.grid(row=0, column=0, sticky="nsew")
             return
 
         label_box.configure(state="readonly")
         value_box.configure(state="readonly")
+        if selected_output == VIEW_BAR:
+            bar_range_box.configure(state="readonly")
+            bar_orientation_box.configure(state="readonly")
+        else:
+            bar_range_box.configure(state="disabled")
+            bar_orientation_box.configure(state="disabled")
         summary_frame.grid_forget()
         chart_frame.grid(row=0, column=0, sticky="nsew")
         _render_chart()
@@ -465,6 +683,8 @@ def open_csv_preview_analysis_dialog_from_snapshot(
     output_box.bind("<<ComboboxSelected>>", _update_view, add="+")
     label_box.bind("<<ComboboxSelected>>", _update_view, add="+")
     value_box.bind("<<ComboboxSelected>>", _update_view, add="+")
+    bar_range_box.bind("<<ComboboxSelected>>", _update_view, add="+")
+    bar_orientation_box.bind("<<ComboboxSelected>>", _update_view, add="+")
     chart_canvas.bind("<Configure>", _on_chart_resize, add="+")
     _update_view()
 

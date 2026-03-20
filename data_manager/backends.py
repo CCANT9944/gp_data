@@ -206,7 +206,7 @@ class CSVDataManager:
         return backup_ops.list_backups(self.path)
 
     def delete_backup(self, backup: Path) -> None:
-        backup_ops.delete_backup(backup)
+        backup_ops.delete_backup(self.path, backup)
 
     def restore_from_backup(self, backup: Path) -> Path:
         return backup_ops.restore_from_backup(self.path, backup)
@@ -338,7 +338,7 @@ class SQLiteDataManager:
         return backup_ops.list_backups(self.path)
 
     def delete_backup(self, backup: Path) -> None:
-        backup_ops.delete_backup(backup)
+        backup_ops.delete_backup(self.path, backup)
 
     def restore_from_backup(self, backup: Path) -> Path:
         return backup_ops.restore_from_backup(self.path, backup, after_restore=self._reset_conn)

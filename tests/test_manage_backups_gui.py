@@ -129,3 +129,16 @@ def test_build_backup_preview_for_sqlite_backup(tmp_path):
     assert "Type: SQLite backup" in preview
     assert "Records: 1" in preview
     assert "one" in preview.lower()
+
+
+def test_build_backup_preview_for_sqlite_backup_with_uri_special_characters_in_name(tmp_path):
+    p = tmp_path / "data#archive.db"
+    dm = DataManager(p)
+    dm.save(Record(field1='one', field2='first'))
+    backup = dm.create_timestamped_backup()
+
+    preview = _build_backup_preview(backup)
+
+    assert "Type: SQLite backup" in preview
+    assert "Records: 1" in preview
+    assert "one" in preview.lower()

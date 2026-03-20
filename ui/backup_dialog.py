@@ -50,7 +50,7 @@ def _preview_metadata(path: Path) -> list[str]:
 def _build_sqlite_backup_preview(path: Path) -> str:
     lines = _preview_metadata(path)
     lines.append("Type: SQLite backup")
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
     try:
         cur = conn.cursor()
         cur.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")

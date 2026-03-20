@@ -81,7 +81,9 @@ def test_create_timestamped_backup_logs_prune_failures_and_keeps_new_backup(tmp_
 
 def test_restore_from_backup_does_not_overwrite_live_file_when_pre_restore_copy_fails(tmp_path: Path, monkeypatch):
     path = tmp_path / "data.db"
-    backup = tmp_path / "data.db.20260316T120000000000Z.bak"
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    backup = backup_dir / "data.db.20260316T120000000000Z.bak"
     path.write_text("live-data", encoding="utf-8")
     backup.write_text("backup-data", encoding="utf-8")
 
@@ -95,3 +97,28 @@ def test_restore_from_backup_does_not_overwrite_live_file_when_pre_restore_copy_
 
     assert path.read_text(encoding="utf-8") == "live-data"
     assert not path.with_name(path.name + ".pre_restore.bak").exists()
+
+
+def test_restore_from_backup_rejects_paths_outside_expected_backup_locations(tmp_path: Path):
+    path = tmp_path / "data.db"
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    path.write_text("live-data", encoding="utf-8")
+
+    unexpected = tmp_path / "other.db.20260316T120000000000Z.bak"
+    unexpected.write_text("backup-data", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Backup path"):
+        backup_ops.restore_from_backup(path, unexpected)
+
+
+def test_delete_backup_rejects_paths_outside_expected_backup_locations(tmp_path: Path):
+    path = tmp_path / "data.db"
+    path.write_text("live-data", encoding="utf-8")
+    unexpected = tmp_path / "unrelated.bak"
+    unexpected.write_text("backup-data", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Backup path"):
+        backup_ops.delete_backup(path, unexpected)
+
+    assert unexpected.exists()
