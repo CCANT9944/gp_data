@@ -957,6 +957,220 @@ def test_open_csv_preview_analysis_dialog_pie_chart_rejects_negative_values(tk_r
     dialog.destroy()
 
 
+def test_open_csv_preview_analysis_dialog_histogram_renders_numeric_distribution(tk_root):
+    analysis_path = loader_module.Path("analysis.csv")
+    dialog = analysis_dialog_module.open_csv_preview_analysis_dialog(
+        tk_root,
+        loader_module.CsvPreviewData(
+            path=analysis_path,
+            encoding="utf-8",
+            headers=["Quantity"],
+            rows=[],
+            row_total=10,
+            fully_cached=True,
+        ),
+        [(str(value),) for value in range(1, 11)],
+        [0],
+        {0},
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    combo_boxes = _find_widgets(dialog, ttk.Combobox)
+    assert len(combo_boxes) >= 6
+
+    view_box = combo_boxes[0]
+    value_box = combo_boxes[2]
+    bins_box = combo_boxes[5]
+    view_box.set("Histogram")
+    view_box.event_generate("<<ComboboxSelected>>")
+    value_box.set("1: Quantity")
+    value_box.event_generate("<<ComboboxSelected>>")
+    bins_box.set("5")
+    bins_box.event_generate("<<ComboboxSelected>>")
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    canvas = _find_descendant(dialog, tk.Canvas)
+    assert canvas is not None
+    assert _find_label_with_text(dialog, "Distribution of 1: Quantity across 5 bins") is not None
+    assert _find_label_with_text(dialog, "Bins group nearby values together") is not None
+    assert _find_label_with_text(dialog, "Blue bins show the main distribution") is not None
+
+    bar_item_ids = [
+        item_id
+        for item_id in canvas.find_all()
+        if canvas.type(item_id) == "rectangle" and str(canvas.itemcget(item_id, "fill"))
+    ]
+    assert len(bar_item_ids) == 5
+    assert any(text == "2" for text in _canvas_texts(canvas))
+
+    axis_y = max(
+        canvas.coords(item_id)[1]
+        for item_id in canvas.find_all()
+        if canvas.type(item_id) == "line" and len(canvas.coords(item_id)) == 4 and canvas.coords(item_id)[1] == canvas.coords(item_id)[3]
+    )
+    label_item_ids = [
+        item_id
+        for item_id in canvas.find_all()
+        if canvas.type(item_id) == "text" and " - " in str(canvas.itemcget(item_id, "text"))
+    ]
+    assert label_item_ids
+    assert all(canvas.bbox(item_id)[1] >= axis_y + 10 for item_id in label_item_ids if canvas.bbox(item_id) is not None)
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_analysis_dialog_places_bins_control_on_second_row(tk_root):
+    analysis_path = loader_module.Path("analysis.csv")
+    dialog = analysis_dialog_module.open_csv_preview_analysis_dialog(
+        tk_root,
+        loader_module.CsvPreviewData(
+            path=analysis_path,
+            encoding="utf-8",
+            headers=["Quantity"],
+            rows=[],
+            row_total=10,
+            fully_cached=True,
+        ),
+        [(str(value),) for value in range(1, 11)],
+        [0],
+        {0},
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    combo_boxes = _find_widgets(dialog, ttk.Combobox)
+    assert len(combo_boxes) >= 6
+
+    bins_box = combo_boxes[5]
+    assert str(bins_box.winfo_manager()) == "grid"
+    assert int(bins_box.grid_info()["row"]) == 1
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_analysis_dialog_histogram_uses_auto_bins_by_default(tk_root):
+    analysis_path = loader_module.Path("analysis.csv")
+    dialog = analysis_dialog_module.open_csv_preview_analysis_dialog(
+        tk_root,
+        loader_module.CsvPreviewData(
+            path=analysis_path,
+            encoding="utf-8",
+            headers=["Quantity"],
+            rows=[],
+            row_total=10,
+            fully_cached=True,
+        ),
+        [(str(value),) for value in range(1, 11)],
+        [0],
+        {0},
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    combo_boxes = _find_widgets(dialog, ttk.Combobox)
+    assert len(combo_boxes) >= 6
+
+    view_box = combo_boxes[0]
+    bins_box = combo_boxes[5]
+    view_box.set("Histogram")
+    view_box.event_generate("<<ComboboxSelected>>")
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    assert bins_box.get() == "Auto"
+    assert _find_label_with_text(dialog, "Auto chose 3 bins") is not None
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_analysis_dialog_histogram_highlights_outlier_bins(tk_root):
+    analysis_path = loader_module.Path("analysis.csv")
+    dialog = analysis_dialog_module.open_csv_preview_analysis_dialog(
+        tk_root,
+        loader_module.CsvPreviewData(
+            path=analysis_path,
+            encoding="utf-8",
+            headers=["Quantity"],
+            rows=[],
+            row_total=10,
+            fully_cached=True,
+        ),
+        [(str(value),) for value in [1, 2, 3, 4, 5, 6, 7, 8, 9, 100]],
+        [0],
+        {0},
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    combo_boxes = _find_widgets(dialog, ttk.Combobox)
+    assert len(combo_boxes) >= 6
+
+    view_box = combo_boxes[0]
+    value_box = combo_boxes[2]
+    bins_box = combo_boxes[5]
+    view_box.set("Histogram")
+    view_box.event_generate("<<ComboboxSelected>>")
+    value_box.set("1: Quantity")
+    value_box.event_generate("<<ComboboxSelected>>")
+    bins_box.set("5")
+    bins_box.event_generate("<<ComboboxSelected>>")
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    canvas = _find_descendant(dialog, tk.Canvas)
+    assert canvas is not None
+    assert _find_label_with_text(dialog, "Red bins include outlier values") is not None
+
+    rectangle_item_ids = [
+        item_id
+        for item_id in canvas.find_all()
+        if canvas.type(item_id) == "rectangle" and str(canvas.itemcget(item_id, "fill"))
+    ]
+    assert any(
+        str(canvas.itemcget(item_id, "fill")) == analysis_dialog_module.HISTOGRAM_OUTLIER_FILL
+        for item_id in rectangle_item_ids
+    )
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_analysis_dialog_histogram_requires_numeric_value_column(tk_root):
+    analysis_path = loader_module.Path("analysis.csv")
+    dialog = analysis_dialog_module.open_csv_preview_analysis_dialog(
+        tk_root,
+        loader_module.CsvPreviewData(
+            path=analysis_path,
+            encoding="utf-8",
+            headers=["Category"],
+            rows=[],
+            row_total=3,
+            fully_cached=True,
+        ),
+        [("Beer",), ("Wine",), ("Spritz",)],
+        [0],
+        set(),
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    combo_boxes = _find_widgets(dialog, ttk.Combobox)
+    assert len(combo_boxes) >= 6
+
+    view_box = combo_boxes[0]
+    view_box.set("Histogram")
+    view_box.event_generate("<<ComboboxSelected>>")
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    canvas = _find_descendant(dialog, tk.Canvas)
+    assert canvas is not None
+    assert "Choose a numeric value column to render a histogram." in _canvas_texts(canvas)
+
+    dialog.destroy()
+
+
 def test_load_csv_preview_reuses_cached_data_for_unchanged_file(tmp_path):
     csv_path = tmp_path / "wide.csv"
     csv_path.write_text("A,B\n1,2\n", encoding="utf-8")

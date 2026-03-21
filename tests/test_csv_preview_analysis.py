@@ -4,6 +4,7 @@ from pathlib import Path
 from gp_data.ui.csv_preview.analysis import (
     build_aggregated_chart_series,
     build_category_chart_series,
+    build_histogram_series,
     build_numeric_bar_chart_series,
     build_preview_analysis_snapshot,
     format_value_counts_summary,
@@ -200,6 +201,101 @@ def test_build_aggregated_chart_series_disambiguates_existing_other_label() -> N
     assert series is not None
     assert series.labels.count("Other") == 1
     assert any(label.startswith("Other (grouped") for label in series.labels)
+
+
+def test_build_histogram_series_buckets_numeric_values() -> None:
+    data = _analysis_data(["Quantity"])
+    snapshot = build_preview_analysis_snapshot(
+        data,
+        [(str(value),) for value in range(1, 11)],
+        [0],
+        {0},
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    series = build_histogram_series(snapshot, 0, bin_count=5)
+
+    assert series is not None
+    assert series.value_column_label == "1: Quantity"
+    assert series.bin_count == 5
+    assert series.auto_bin_count is False
+    assert series.counts == [2, 2, 2, 2, 2]
+    assert len(series.labels) == 5
+    assert series.labels[0] == "1 - 2.8"
+    assert series.labels[-1] == "8.2 - 10"
+
+
+def test_build_histogram_series_collapses_constant_values_to_single_bucket() -> None:
+    data = _analysis_data(["Quantity"])
+    snapshot = build_preview_analysis_snapshot(
+        data,
+        [("5",), ("5",), ("5",)],
+        [0],
+        {0},
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    series = build_histogram_series(snapshot, 0, bin_count=8)
+
+    assert series is not None
+    assert series.bin_count == 1
+    assert series.labels == ["5"]
+    assert series.counts == [3]
+
+
+def test_build_histogram_series_rounds_repeating_decimal_boundaries() -> None:
+    data = _analysis_data(["Quantity"])
+    snapshot = build_preview_analysis_snapshot(
+        data,
+        [("1",), ("2",), ("3",)],
+        [0],
+        {0},
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    series = build_histogram_series(snapshot, 0, bin_count=3)
+
+    assert series is not None
+    assert series.labels == ["1 - 1.67", "1.67 - 2.33", "2.33 - 3"]
+
+
+def test_build_histogram_series_auto_selects_smarter_bin_count() -> None:
+    data = _analysis_data(["Quantity"])
+    snapshot = build_preview_analysis_snapshot(
+        data,
+        [(str(value),) for value in range(1, 11)],
+        [0],
+        {0},
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    series = build_histogram_series(snapshot, 0)
+
+    assert series is not None
+    assert series.auto_bin_count is True
+    assert series.bin_count == 3
+    assert series.counts == [3, 3, 4]
+
+
+def test_build_histogram_series_marks_outlier_bins() -> None:
+    data = _analysis_data(["Quantity"])
+    snapshot = build_preview_analysis_snapshot(
+        data,
+        [(str(value),) for value in [1, 2, 3, 4, 5, 6, 7, 8, 9, 100]],
+        [0],
+        {0},
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    series = build_histogram_series(snapshot, 0, bin_count=5)
+
+    assert series is not None
+    assert series.outlier_bin_indices == frozenset({4})
 
 
 def test_format_value_counts_summary_limits_entries() -> None:

@@ -46,8 +46,10 @@ numeric change history per item.
 - The raw CSV viewer remembers the active sort per CSV path and shows the current sort in the preview summary so you can see it without reopening the popup.
 - The raw CSV viewer also shows a small header-mode label so you can see whether the file is using `Row 1` headers or generated column names.
 - The raw CSV viewer includes an `Analyze` action that opens a separate analysis window for the current preview result, using only the rows that currently match the preview filters, the active combine-sessions state, and the columns that are still visible.
-- The analysis window can show a summary table or bar and pie charts so you can inspect top visible values without exporting the CSV first; bar charts can show negative values, while pie charts only render positive values.
+- The analysis window can show a summary table, bar chart, pie chart, or histogram so you can inspect top visible values and numeric spread without exporting the CSV first; bar charts can show negative values, while pie charts only render positive values.
 - Bar charts in the analysis window can be limited to `All`, `First 5`, `First 10`, `First 20`, `Last 5`, `Last 10`, or `Last 20` items, and can be switched between vertical and horizontal layouts.
+- Histogram mode uses a numeric value column, defaults to an `Auto` bin choice based on the current data spread, still lets you choose a fixed bin count manually, and shows short helper text explaining what bins mean.
+- Histogram bins that contain outlier values are highlighted in red so unusual values stand out more clearly.
 - `Save As CSV` creates a new CSV file from the current preview state, including the current search, exact column filter, combined rows, and visible columns, without changing the original imported file, and it defaults to your shared `Favorites/csv_exports` folder.
 - The raw CSV viewer can also combine session-based rows, such as `Lunch` and `Dinner`, into one product row when the file has detectable session and quantity columns, including numeric export columns with generic names like `Textbox73`.
 - For very large CSVs, the preview window opens from an initial sample first and only renders the first slice of matching rows so the window stays responsive, with a lower live row cap for very wide files to keep navigation smoother.
@@ -186,8 +188,8 @@ python main.py cleanup
 
 - `ui/csv_preview/loader.py`: loads CSV preview data, manages restart-safe preview sidecars, and can reuse persisted preview rows or persisted full-row caches for unchanged files.
 - `ui/csv_preview/helpers.py`: holds pure preview helpers for column identity, numeric detection, row summaries, and sort/query formatting so those rules stay separate from Tk widget code.
-- `ui/csv_preview/analysis.py`: builds analysis snapshots, numeric summaries, and top-value chart series from the current filtered preview rows.
-- `ui/csv_preview/analysis_dialog.py`: owns the separate analysis dialog and its summary-table, bar-chart, pie-chart, bar-range, and bar-orientation views.
+- `ui/csv_preview/analysis.py`: builds analysis snapshots, numeric summaries, top-value chart series, histogram bin series, automatic bin sizing, and outlier-bin detection from the current filtered preview rows.
+- `ui/csv_preview/analysis_dialog.py`: owns the separate analysis dialog and its summary-table, bar-chart, pie-chart, histogram, bar-range, bar-orientation, and histogram-bin controls, including the wrapped two-row control layout for narrower windows.
 - `ui/csv_preview/analysis_launcher.py`: prepares filtered analysis snapshots in the background and opens the analysis dialog when the snapshot is ready.
 - `ui/csv_preview/dialog_support.py`: holds generic Treeview, export-path, and widget helpers used by the preview window.
 - `ui/csv_preview/pipeline.py`: owns preview search, filtering, sort, combine-session, and cache decisions that should stay independent from Tk widgets.

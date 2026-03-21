@@ -6,9 +6,12 @@ from tkinter import ttk
 
 from .analysis import (
     DEFAULT_CHART_CATEGORY_LIMIT,
+    DEFAULT_HISTOGRAM_BIN_COUNT,
     PreviewAggregatedChartSeries,
+    PreviewHistogramSeries,
     PreviewAnalysisSnapshot,
     build_aggregated_chart_series,
+    build_histogram_series,
     build_preview_analysis_snapshot,
     format_decimal_summary,
     format_value_counts_summary,
@@ -24,6 +27,7 @@ ANALYSIS_WINDOW_HEIGHT = 680
 VIEW_SUMMARY = "Summary"
 VIEW_BAR = "Bar chart"
 VIEW_PIE = "Pie chart"
+VIEW_HISTOGRAM = "Histogram"
 BAR_ORIENTATION_VERTICAL = "Vertical"
 BAR_ORIENTATION_HORIZONTAL = "Horizontal"
 BAR_ORIENTATION_OPTIONS = (
@@ -69,6 +73,10 @@ CHART_COLORS = (
     "#ff9da7",
 )
 COUNT_ROWS_LABEL = "Count rows"
+HISTOGRAM_BIN_AUTO = "Auto"
+HISTOGRAM_BIN_OPTIONS = (HISTOGRAM_BIN_AUTO, "5", "8", "10", "12", "15", "20")
+HISTOGRAM_OUTLIER_FILL = "#d1495b"
+HISTOGRAM_OUTLIER_OUTLINE = "#7f1d1d"
 
 
 def _slice_bar_chart_series(series: PreviewAggregatedChartSeries, selection: str) -> PreviewAggregatedChartSeries:
@@ -443,6 +451,105 @@ def _draw_aggregated_pie_chart(canvas: tk.Canvas, series: PreviewAggregatedChart
     )
 
 
+def _histogram_message(series: PreviewHistogramSeries) -> str:
+    return (
+        f"Distribution of {series.value_column_label} across {series.bin_count} bins "
+        f"({format_decimal_summary(series.minimum)} to {format_decimal_summary(series.maximum)})"
+    )
+
+
+def _histogram_helper_text(series: PreviewHistogramSeries) -> str:
+    parts = []
+    if series.auto_bin_count:
+        parts.append(f"Auto chose {series.bin_count} bins from the data spread.")
+    parts.append("Bins group nearby values together: fewer bins show broader groups, more bins show finer detail.")
+    parts.append("Blue bins show the main distribution.")
+    if series.outlier_bin_indices:
+        parts.append("Red bins include outlier values.")
+    return " ".join(parts)
+
+
+def _draw_histogram_chart(canvas: tk.Canvas, series: PreviewHistogramSeries) -> None:
+    _clear_chart(canvas)
+    width, height = _chart_canvas_size(canvas)
+    left = 72
+    right = 28
+    top = 36
+    bottom = 220
+    chart_bottom = height - bottom
+    chart_top = top
+    chart_height = max(chart_bottom - chart_top, 80)
+    label_padding = 10
+    max_count = max(series.counts, default=0)
+    if max_count <= 0:
+        _draw_empty_chart(canvas, "No chartable values are available for the selected columns.")
+        return
+
+    canvas.configure(scrollregion=(0, 0, width, height))
+    canvas.xview_moveto(0)
+    canvas.yview_moveto(0)
+
+    canvas.create_line(left, chart_top, left, chart_bottom, fill="#9ca3af")
+    canvas.create_line(left, chart_bottom, width - right, chart_bottom, fill="#9ca3af")
+
+    tick_count = min(4, max_count)
+    for tick in range(tick_count + 1):
+        value = int(round((max_count * tick) / max(tick_count, 1)))
+        y = chart_bottom - ((value / max_count) * chart_height)
+        canvas.create_line(left, y, width - right, y, fill="#eef2f7")
+        canvas.create_text(
+            left - 10,
+            y,
+            text=str(value),
+            anchor="e",
+            fill="#6b7280",
+            font=("Segoe UI", 9),
+        )
+
+    bucket_count = len(series.counts)
+    gap = 12
+    available_width = max(width - left - right - ((bucket_count + 1) * gap), bucket_count * 24)
+    bar_width = max(24, available_width / max(bucket_count, 1))
+    start_x = left + gap
+    label_texts = [_compact_filter_popup_label(label, max_length=14) for label in series.labels]
+
+    for index, (label, count) in enumerate(zip(label_texts, series.counts, strict=False)):
+        x0 = start_x + index * (bar_width + gap)
+        x1 = x0 + bar_width
+        y1 = chart_bottom
+        y0 = chart_bottom - ((count / max_count) * chart_height)
+        is_outlier_bin = index in series.outlier_bin_indices
+        canvas.create_rectangle(
+            x0,
+            y0,
+            x1,
+            y1,
+            fill=HISTOGRAM_OUTLIER_FILL if is_outlier_bin else CHART_COLORS[index % len(CHART_COLORS)],
+            outline=HISTOGRAM_OUTLIER_OUTLINE if is_outlier_bin else "",
+            width=1 if is_outlier_bin else 0,
+        )
+        canvas.create_text(
+            (x0 + x1) / 2,
+            y0 - 10,
+            text=str(count),
+            anchor="s",
+            fill="#374151",
+            font=("Segoe UI", 8, "bold"),
+        )
+        label_id = canvas.create_text(
+            (x0 + x1) / 2,
+            chart_bottom + 46,
+            text=label,
+            anchor="center",
+            angle=90,
+            fill="#374151",
+            font=("Segoe UI", 9),
+        )
+        label_box = canvas.bbox(label_id)
+        if label_box is not None and label_box[1] < chart_bottom + label_padding:
+            canvas.move(label_id, 0, (chart_bottom + label_padding) - label_box[1])
+
+
 def open_csv_preview_analysis_dialog(
     parent: tk.Misc,
     data: CsvPreviewData,
@@ -482,44 +589,53 @@ def open_csv_preview_analysis_dialog_from_snapshot(
 
     control_row = ttk.Frame(container)
     control_row.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+    control_row.columnconfigure(1, weight=1)
+    control_row.columnconfigure(3, weight=1)
+    control_row.columnconfigure(5, weight=1)
 
     output_var = tk.StringVar(value=VIEW_SUMMARY)
-    ttk.Label(control_row, text="View").pack(side="left")
+    ttk.Label(control_row, text="View").grid(row=0, column=0, sticky="w")
     output_box = ttk.Combobox(control_row, textvariable=output_var, state="readonly", width=16)
-    output_box["values"] = (VIEW_SUMMARY, VIEW_BAR, VIEW_PIE)
-    output_box.pack(side="left", padx=(6, 12))
+    output_box["values"] = (VIEW_SUMMARY, VIEW_BAR, VIEW_PIE, VIEW_HISTOGRAM)
+    output_box.grid(row=0, column=1, sticky="ew", padx=(6, 12))
 
     label_var = tk.StringVar()
-    ttk.Label(control_row, text="Label").pack(side="left")
+    ttk.Label(control_row, text="Label").grid(row=0, column=2, sticky="w")
     label_box = ttk.Combobox(control_row, textvariable=label_var, state="readonly", width=28)
     label_options = [column.label for column in snapshot.columns]
     label_box["values"] = label_options
     if label_options:
         preferred_label = preferred_chart_label_column(snapshot)
         label_var.set(preferred_label.label if preferred_label is not None else label_options[0])
-    label_box.pack(side="left", padx=(6, 12))
+    label_box.grid(row=0, column=3, sticky="ew", padx=(6, 12))
 
     value_var = tk.StringVar()
-    ttk.Label(control_row, text="Value").pack(side="left")
+    ttk.Label(control_row, text="Value").grid(row=0, column=4, sticky="w")
     value_box = ttk.Combobox(control_row, textvariable=value_var, state="readonly", width=22)
     numeric_value_options = [column.label for column in snapshot.columns if column.numeric]
     value_options = [COUNT_ROWS_LABEL] + numeric_value_options
     value_box["values"] = value_options
     preferred_value = preferred_chart_value_column(snapshot)
     value_var.set(preferred_value.label if preferred_value is not None else COUNT_ROWS_LABEL)
-    value_box.pack(side="left", padx=(6, 0))
+    value_box.grid(row=0, column=5, sticky="ew", padx=(6, 0))
 
     bar_range_var = tk.StringVar(value=BAR_RANGE_ALL)
-    ttk.Label(control_row, text="Bar range").pack(side="left", padx=(12, 0))
+    ttk.Label(control_row, text="Bar range").grid(row=1, column=0, sticky="w", pady=(8, 0))
     bar_range_box = ttk.Combobox(control_row, textvariable=bar_range_var, state="disabled", width=12)
     bar_range_box["values"] = BAR_RANGE_OPTIONS
-    bar_range_box.pack(side="left", padx=(6, 0))
+    bar_range_box.grid(row=1, column=1, sticky="w", padx=(6, 12), pady=(8, 0))
 
     bar_orientation_var = tk.StringVar(value=BAR_ORIENTATION_VERTICAL)
-    ttk.Label(control_row, text="Orientation").pack(side="left", padx=(12, 0))
+    ttk.Label(control_row, text="Orientation").grid(row=1, column=2, sticky="w", pady=(8, 0))
     bar_orientation_box = ttk.Combobox(control_row, textvariable=bar_orientation_var, state="disabled", width=12)
     bar_orientation_box["values"] = BAR_ORIENTATION_OPTIONS
-    bar_orientation_box.pack(side="left", padx=(6, 0))
+    bar_orientation_box.grid(row=1, column=3, sticky="w", padx=(6, 12), pady=(8, 0))
+
+    histogram_bins_var = tk.StringVar(value=HISTOGRAM_BIN_AUTO)
+    ttk.Label(control_row, text="Bins").grid(row=1, column=4, sticky="w", pady=(8, 0))
+    histogram_bins_box = ttk.Combobox(control_row, textvariable=histogram_bins_var, state="disabled", width=8)
+    histogram_bins_box["values"] = HISTOGRAM_BIN_OPTIONS
+    histogram_bins_box.grid(row=1, column=5, sticky="w", padx=(6, 0), pady=(8, 0))
 
     content_frame = ttk.Frame(container)
     content_frame.grid(row=2, column=0, sticky="nsew")
@@ -569,7 +685,13 @@ def open_csv_preview_analysis_dialog_from_snapshot(
     chart_frame.columnconfigure(0, weight=1)
     chart_frame.rowconfigure(1, weight=1)
     chart_message_var = tk.StringVar(value="")
-    ttk.Label(chart_frame, textvariable=chart_message_var, anchor="w", justify="left").grid(
+    ttk.Label(
+        chart_frame,
+        textvariable=chart_message_var,
+        anchor="w",
+        justify="left",
+        wraplength=ANALYSIS_WINDOW_WIDTH - 120,
+    ).grid(
         row=0, column=0, sticky="ew", pady=(0, 8)
     )
     chart_x_scroll = ttk.Scrollbar(chart_frame, orient="horizontal")
@@ -592,6 +714,14 @@ def open_csv_preview_analysis_dialog_from_snapshot(
         if not selected_label or selected_label == COUNT_ROWS_LABEL:
             return None
         return column_label_to_index.get(selected_label)
+
+    def _selected_histogram_bin_count() -> int | None:
+        if histogram_bins_var.get() == HISTOGRAM_BIN_AUTO:
+            return None
+        try:
+            return max(1, int(histogram_bins_var.get()))
+        except (TypeError, ValueError):
+            return None
 
     def _set_chart_x_scrollbar(enabled: bool) -> None:
         if enabled:
@@ -618,6 +748,32 @@ def open_csv_preview_analysis_dialog_from_snapshot(
 
         selected_view = output_var.get()
         value_column_index = _selected_value_column_index()
+        if selected_view == VIEW_HISTOGRAM:
+            if value_column_index is None:
+                _set_chart_x_scrollbar(False)
+                _set_chart_y_scrollbar(False)
+                chart_message_var.set("Choose a numeric value column to render a histogram.")
+                _draw_empty_chart(chart_canvas, "Choose a numeric value column to render a histogram.")
+                return
+
+            histogram_series = build_histogram_series(
+                snapshot,
+                value_column_index,
+                bin_count=_selected_histogram_bin_count(),
+            )
+            if histogram_series is None:
+                _set_chart_x_scrollbar(False)
+                _set_chart_y_scrollbar(False)
+                chart_message_var.set("No chartable numeric values are available for the selected column.")
+                _draw_empty_chart(chart_canvas, "No chartable numeric values are available for the selected column.")
+                return
+
+            _set_chart_x_scrollbar(False)
+            _set_chart_y_scrollbar(False)
+            chart_message_var.set(f"{_histogram_message(histogram_series)}\n{_histogram_helper_text(histogram_series)}")
+            _draw_histogram_chart(chart_canvas, histogram_series)
+            return
+
         series = build_aggregated_chart_series(
             snapshot,
             label_column_index,
@@ -660,18 +816,29 @@ def open_csv_preview_analysis_dialog_from_snapshot(
             value_box.configure(state="disabled")
             bar_range_box.configure(state="disabled")
             bar_orientation_box.configure(state="disabled")
+            histogram_bins_box.configure(state="disabled")
             chart_frame.grid_forget()
             summary_frame.grid(row=0, column=0, sticky="nsew")
             return
 
-        label_box.configure(state="readonly")
         value_box.configure(state="readonly")
         if selected_output == VIEW_BAR:
+            label_box.configure(state="readonly")
             bar_range_box.configure(state="readonly")
             bar_orientation_box.configure(state="readonly")
-        else:
+            histogram_bins_box.configure(state="disabled")
+        elif selected_output == VIEW_HISTOGRAM:
+            label_box.configure(state="disabled")
             bar_range_box.configure(state="disabled")
             bar_orientation_box.configure(state="disabled")
+            histogram_bins_box.configure(state="readonly")
+            if value_var.get() == COUNT_ROWS_LABEL and numeric_value_options:
+                value_var.set(numeric_value_options[0])
+        else:
+            label_box.configure(state="readonly")
+            bar_range_box.configure(state="disabled")
+            bar_orientation_box.configure(state="disabled")
+            histogram_bins_box.configure(state="disabled")
         summary_frame.grid_forget()
         chart_frame.grid(row=0, column=0, sticky="nsew")
         _render_chart()
@@ -685,6 +852,7 @@ def open_csv_preview_analysis_dialog_from_snapshot(
     value_box.bind("<<ComboboxSelected>>", _update_view, add="+")
     bar_range_box.bind("<<ComboboxSelected>>", _update_view, add="+")
     bar_orientation_box.bind("<<ComboboxSelected>>", _update_view, add="+")
+    histogram_bins_box.bind("<<ComboboxSelected>>", _update_view, add="+")
     chart_canvas.bind("<Configure>", _on_chart_resize, add="+")
     _update_view()
 

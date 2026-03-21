@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
+from math import ceil
 from typing import Sequence
 
 from .helpers import _filter_label, _format_decimal, _is_identifier_column, _normalized_header, _parse_decimal
@@ -11,6 +12,7 @@ from .loader import CsvPreviewData
 
 DEFAULT_CHART_CATEGORY_LIMIT = 8
 DEFAULT_SUMMARY_TOP_VALUE_LIMIT = 3
+DEFAULT_HISTOGRAM_BIN_COUNT = 8
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,19 @@ class PreviewAggregatedChartSeries:
 
 
 @dataclass(frozen=True)
+class PreviewHistogramSeries:
+    value_column_index: int
+    value_column_label: str
+    labels: list[str]
+    counts: list[int]
+    minimum: Decimal
+    maximum: Decimal
+    bin_count: int
+    auto_bin_count: bool
+    outlier_bin_indices: frozenset[int]
+
+
+@dataclass(frozen=True)
 class PreviewAnalysisSnapshot:
     source_name: str
     row_count: int
@@ -84,6 +99,65 @@ class PreviewAnalysisSnapshot:
             if column.index == column_index:
                 return column
         return None
+
+
+def _format_histogram_boundary(value: Decimal) -> str:
+    rounded = value.quantize(Decimal("0.01"))
+    return _format_decimal(rounded)
+
+
+def _interpolated_quantile(sorted_values: Sequence[Decimal], numerator: int, denominator: int) -> Decimal:
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    position = (Decimal(len(sorted_values) - 1) * Decimal(numerator)) / Decimal(denominator)
+    lower_index = int(position.to_integral_value(rounding=ROUND_FLOOR))
+    upper_index = int(position.to_integral_value(rounding=ROUND_CEILING))
+    if lower_index == upper_index:
+        return sorted_values[lower_index]
+    fraction = position - Decimal(lower_index)
+    lower_value = sorted_values[lower_index]
+    upper_value = sorted_values[upper_index]
+    return lower_value + ((upper_value - lower_value) * fraction)
+
+
+def _auto_histogram_bin_count(numeric_values: Sequence[Decimal]) -> int:
+    value_count = len(numeric_values)
+    if value_count <= 1:
+        return value_count
+
+    minimum = min(numeric_values)
+    maximum = max(numeric_values)
+    if minimum == maximum:
+        return 1
+
+    sorted_values = sorted(numeric_values)
+    q1 = _interpolated_quantile(sorted_values, 1, 4)
+    q3 = _interpolated_quantile(sorted_values, 3, 4)
+    iqr = q3 - q1
+    suggested_bin_count: int | None = None
+
+    if iqr > 0:
+        bucket_width = float(Decimal("2") * iqr) / (value_count ** (1 / 3))
+        if bucket_width > 0:
+            suggested_bin_count = ceil(float(maximum - minimum) / bucket_width)
+
+    if suggested_bin_count is None or suggested_bin_count < 1:
+        suggested_bin_count = ceil(value_count ** 0.5)
+
+    return max(2, min(suggested_bin_count, min(20, value_count)))
+
+
+def _histogram_outlier_fences(numeric_values: Sequence[Decimal]) -> tuple[Decimal, Decimal] | None:
+    if len(numeric_values) < 4:
+        return None
+    sorted_values = sorted(numeric_values)
+    q1 = _interpolated_quantile(sorted_values, 1, 4)
+    q3 = _interpolated_quantile(sorted_values, 3, 4)
+    iqr = q3 - q1
+    if iqr <= 0:
+        return None
+    margin = Decimal("1.5") * iqr
+    return q1 - margin, q3 + margin
 
 
 def _sorted_value_counts(counter: Counter[str]) -> list[PreviewAnalysisValueCount]:
@@ -282,6 +356,85 @@ def build_aggregated_chart_series(
         value_column_label=value_column_label,
         labels=[label for label, _ in sorted_items],
         values=[value for _, value in sorted_items],
+    )
+
+
+def build_histogram_series(
+    snapshot: PreviewAnalysisSnapshot,
+    value_column_index: int,
+    *,
+    bin_count: int | None = None,
+) -> PreviewHistogramSeries | None:
+    value_column = snapshot.column(value_column_index)
+    if value_column is None or not value_column.numeric:
+        return None
+
+    numeric_values: list[Decimal] = []
+    for row in snapshot.rows:
+        if value_column.index >= len(row):
+            continue
+        numeric_value = _parse_decimal(row[value_column.index])
+        if numeric_value is None:
+            continue
+        numeric_values.append(numeric_value)
+
+    if not numeric_values:
+        return None
+
+    minimum = min(numeric_values)
+    maximum = max(numeric_values)
+    auto_bin_count = bin_count is None
+    requested_bin_count = _auto_histogram_bin_count(numeric_values) if auto_bin_count else max(1, min(bin_count, len(numeric_values)))
+    safe_bin_count = requested_bin_count
+
+    if minimum == maximum:
+        return PreviewHistogramSeries(
+            value_column_index=value_column.index,
+            value_column_label=value_column.label,
+            labels=[_format_decimal(minimum)],
+            counts=[len(numeric_values)],
+            minimum=minimum,
+            maximum=maximum,
+            bin_count=1,
+            auto_bin_count=auto_bin_count,
+            outlier_bin_indices=frozenset(),
+        )
+
+    bucket_width = (maximum - minimum) / Decimal(safe_bin_count)
+    counts = [0] * safe_bin_count
+    outlier_bin_indices: set[int] = set()
+    outlier_fences = _histogram_outlier_fences(numeric_values)
+    for numeric_value in numeric_values:
+        if numeric_value == maximum:
+            bucket_index = safe_bin_count - 1
+        else:
+            bucket_index = int((numeric_value - minimum) / bucket_width)
+        safe_bucket_index = max(0, min(bucket_index, safe_bin_count - 1))
+        counts[safe_bucket_index] += 1
+        if outlier_fences is not None:
+            lower_fence, upper_fence = outlier_fences
+            if numeric_value < lower_fence or numeric_value > upper_fence:
+                outlier_bin_indices.add(safe_bucket_index)
+
+    labels: list[str] = []
+    for bucket_index in range(safe_bin_count):
+        start_value = minimum + (bucket_width * Decimal(bucket_index))
+        if bucket_index == safe_bin_count - 1:
+            end_value = maximum
+        else:
+            end_value = minimum + (bucket_width * Decimal(bucket_index + 1))
+        labels.append(f"{_format_histogram_boundary(start_value)} - {_format_histogram_boundary(end_value)}")
+
+    return PreviewHistogramSeries(
+        value_column_index=value_column.index,
+        value_column_label=value_column.label,
+        labels=labels,
+        counts=counts,
+        minimum=minimum,
+        maximum=maximum,
+        bin_count=safe_bin_count,
+        auto_bin_count=auto_bin_count,
+        outlier_bin_indices=frozenset(outlier_bin_indices),
     )
 
 
