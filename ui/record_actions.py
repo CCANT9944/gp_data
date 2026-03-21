@@ -5,7 +5,7 @@ from typing import Callable
 from pydantic import ValidationError
 
 from ..data_manager import DataManager
-from ..models import Record
+from ..models import Record, calculate_field6
 
 
 class RecordActions:
@@ -104,6 +104,36 @@ class RecordActions:
             return None
         self._apply_saved_record(saved, refresh_form_mode=refresh_form_mode)
         return saved
+
+    def save_inline_edit(self, record_id: str, column: str, new_value: str) -> Record | None:
+        try:
+            record = self.record_by_id(record_id)
+            if record is None:
+                self._show_missing_record_error()
+                return None
+
+            data = record.to_dict()
+            data[column] = new_value
+
+            if column in ("field3", "field5"):
+                data["field6"] = calculate_field6(data.get("field3"), data.get("field5"))
+
+            updated = self.build_record_or_show_error(data)
+            if updated is None:
+                return None
+
+            return self.save_existing_record(
+                record,
+                updated,
+                duplicate_action_text="save this edit",
+                backup_action="saving this inline edit",
+                error_title="Edit failed",
+                error_action="save the inline edit",
+                refresh_form_mode=False,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._show_storage_error("Edit failed", "save the inline edit", exc)
+            return None
 
     def delete_record(
         self,

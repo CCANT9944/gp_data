@@ -36,7 +36,6 @@ from .helpers import (
     _loading_summary_text,
     _parse_decimal,
     _row_search_text,
-    _sorted_distinct_column_values,
     _sorted_distinct_values,
     _sort_rows,
     _summary_text,
@@ -45,13 +44,13 @@ from .loader import CsvPreviewData, iter_csv_preview_rows, load_csv_preview, res
 from .pipeline import (
     MAX_INDEXED_SOURCE_MEMORY_BYTES as _PIPELINE_MAX_INDEXED_SOURCE_MEMORY_BYTES,
     _FilteredCountUpdate,
-    _FilteredErrorUpdate,
     _FilteredPreviewUpdate,
     _PreviewFilterState,
 )
 from .preview_pipeline import _PreviewDataPipeline
+from .runtime_hooks import configure_preview_runtime
 from .preview_settings import build_preview_dialog_settings_bindings
-from .preview_state import _PreviewSummaryState, _PreviewViewState
+from .preview_state import _PreviewViewState
 from .refresh_controller import (
     CSV_PREVIEW_LOADING_ROW_TEXT,
     _MetadataErrorUpdate,
@@ -194,63 +193,54 @@ def _iter_rows_before_header_filter(
     )
 
 
-_PreviewSummaryState.loading_summary_text_impl = staticmethod(
-    lambda data, *, filtered, sort_description=None: _loading_summary_text(
+configure_preview_runtime(
+    max_indexed_source_memory_bytes=lambda: MAX_INDEXED_SOURCE_MEMORY_BYTES,
+    log_preview_performance=lambda operation, started_at, **fields: _log_preview_performance(
+        operation,
+        started_at,
+        **fields,
+    ),
+    row_search_text=lambda row: _row_search_text(row),
+    iter_csv_preview_rows=lambda data: iter_csv_preview_rows(data),
+    iter_rows_before_header_filter=lambda data, query, combine_sessions, combined_rows=None: _iter_rows_before_header_filter(
+        data,
+        query,
+        combine_sessions,
+        combined_rows=combined_rows,
+    ),
+    sort_rows=lambda rows, column_index, *, descending, numeric: _sort_rows(
+        rows,
+        column_index,
+        descending=descending,
+        numeric=numeric,
+    ),
+    sorted_distinct_values=lambda rows, column_index: _sorted_distinct_values(rows, column_index),
+    header_suggests_numeric=lambda header: _header_suggests_numeric(header),
+    is_identifier_column=lambda header: _is_identifier_column(header),
+    parse_decimal=lambda value: _parse_decimal(value),
+    resolve_metadata=lambda data: resolve_csv_preview_metadata(data),
+    metadata_resolved_update_factory=lambda resolved_data: _MetadataResolvedUpdate(resolved_data=resolved_data),
+    metadata_error_update_factory=lambda error: _MetadataErrorUpdate(error=error),
+    iter_combined_rows=lambda data, enabled: _iter_combined_rows(data, enabled),
+    perf_counter_impl=lambda: perf_counter(),
+    loading_summary_text=lambda data, *, filtered, sort_description=None: _loading_summary_text(
         data,
         filtered=filtered,
         sort_description=sort_description,
-    )
-)
-_PreviewSummaryState.summary_text_impl = staticmethod(
-    lambda data, *, visible_rows, displayed_rows, loaded_rows, filtered=False, sort_description=None: _summary_text(
+    ),
+    summary_text=lambda data, *, visible_rows, displayed_rows, loaded_rows, filtered=False, sort_description=None: _summary_text(
         data,
         visible_rows=visible_rows,
         displayed_rows=displayed_rows,
         loaded_rows=loaded_rows,
         filtered=filtered,
         sort_description=sort_description,
-    )
+    ),
+    normalize_visible_column_indices=lambda column_count, visible_indices: _normalized_visible_column_indices(
+        column_count,
+        visible_indices,
+    ),
 )
-_PreviewViewState.normalize_visible_column_indices_impl = staticmethod(
-    lambda column_count, visible_indices: _normalized_visible_column_indices(column_count, visible_indices)
-)
-_PreviewDataPipeline.max_indexed_source_memory_bytes_impl = staticmethod(lambda: MAX_INDEXED_SOURCE_MEMORY_BYTES)
-_PreviewDataPipeline.log_performance_impl = staticmethod(
-    lambda operation, started_at, **fields: _log_preview_performance(operation, started_at, **fields)
-)
-_PreviewDataPipeline.row_search_text_impl = staticmethod(lambda row: _row_search_text(row))
-_PreviewDataPipeline.iter_csv_preview_rows_impl = staticmethod(lambda data: iter_csv_preview_rows(data))
-_PreviewDataPipeline.iter_rows_before_header_filter_impl = staticmethod(
-    lambda data, query, combine_sessions, combined_rows=None: _iter_rows_before_header_filter(
-        data,
-        query,
-        combine_sessions,
-        combined_rows=combined_rows,
-    )
-)
-_PreviewDataPipeline.sort_rows_impl = staticmethod(
-    lambda rows, column_index, *, descending, numeric: _sort_rows(
-        rows,
-        column_index,
-        descending=descending,
-        numeric=numeric,
-    )
-)
-_PreviewDataPipeline.sorted_distinct_values_impl = staticmethod(
-    lambda rows, column_index: _sorted_distinct_values(rows, column_index)
-)
-_PreviewDataPipeline.header_suggests_numeric_impl = staticmethod(lambda header: _header_suggests_numeric(header))
-_PreviewDataPipeline.is_identifier_column_impl = staticmethod(lambda header: _is_identifier_column(header))
-_PreviewDataPipeline.parse_decimal_impl = staticmethod(lambda value: _parse_decimal(value))
-_PreviewDataPipeline.resolve_metadata_impl = staticmethod(lambda data: resolve_csv_preview_metadata(data))
-_PreviewDataPipeline.metadata_resolved_update_factory = staticmethod(
-    lambda resolved_data: _MetadataResolvedUpdate(resolved_data=resolved_data)
-)
-_PreviewDataPipeline.metadata_error_update_factory = staticmethod(
-    lambda error: _MetadataErrorUpdate(error=error)
-)
-_PreviewDataPipeline.iter_combined_rows_impl = staticmethod(lambda data, enabled: _iter_combined_rows(data, enabled))
-_PreviewDataPipeline.perf_counter_impl = staticmethod(lambda: perf_counter())
 
 
 def _build_preview_dialog_widgets(

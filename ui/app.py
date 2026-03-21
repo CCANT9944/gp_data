@@ -3,12 +3,13 @@ from __future__ import annotations
 import logging
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import filedialog, messagebox, simpledialog
 from typing import Sequence
 
 from ..data_manager import DataManager
-from ..models import Record, calculate_field6
+from ..models import Record
 from ..settings import SettingsStore
+from .app_layout import build_app_layout
 from .app_csv_preview_controller import _CsvPreviewLaunchController
 from .app_form_mode_controller import _FormModeController
 from .app_record_controllers import _RecordFormActionsController, _RecordListController
@@ -16,11 +17,9 @@ from .app_storage_controller import _AppStorageActionsController
 from .app_table_display_controller import _TableDisplayController
 from .backup_dialog import open_manage_backups_dialog
 from .csv_preview import CsvPreviewError, open_csv_preview_dialog
-from .form import InputForm
 from .record_actions import RecordActions
 from .storage_feedback import describe_backup_failure, describe_startup_storage_issue, describe_storage_error
-from .table import RecordTable
-from .view_helpers import ProcessingDialogHandle, focus_record_in_table
+from .view_helpers import focus_record_in_table
 
 
 NEW_MODE_BANNER_BG = "#e7f1ff"
@@ -63,71 +62,58 @@ class GPDataApp(tk.Tk):
         column_widths = app_settings.column_widths
         visible_columns = app_settings.visible_columns
         gp_highlight_threshold = app_settings.gp_highlight_threshold
-
-        container = ttk.Frame(self)
-        container.pack(fill="both", expand=True, padx=8, pady=8)
-
-        left = ttk.Frame(container)
-        left.pack(side="left", fill="y", padx=(0, 8))
-        self.form = InputForm(
-            left,
-            labels=labels,
-            on_rename=self.on_labels_changed,
-            on_submit=self.on_form_submit,
-            save_labels_callback=self._settings.save_labels,
-            on_dirty_change=lambda is_dirty: None,
-        )
-        self.form.pack(fill="y", expand=False)
-        self._form_mode_var = tk.StringVar(value="NEW ITEM MODE")
-        self._form_mode_label = tk.Label(
-            left,
-            textvariable=self._form_mode_var,
-            anchor="w",
-            padx=8,
-            pady=6,
-            relief="solid",
-            borderwidth=1,
-            font=("TkDefaultFont", 9, "bold"),
-        )
-        self._form_mode_label.pack(fill="x", pady=(6, 0))
-
-        right = ttk.Frame(container)
-        right.pack(side="left", fill="both", expand=True)
-        self.table = RecordTable(right, columns=column_order, labels=labels, on_commit=self._on_table_commit, on_column_order_changed=self.on_column_order_changed, column_widths=column_widths, on_column_widths_changed=self.on_column_widths_changed, visible_columns=visible_columns, on_visible_columns_changed=self.on_visible_columns_changed, on_heading_click=self._on_table_heading_click)
-        self.table.pack(fill="both", expand=True)
-
-        controls = ttk.Frame(self)
-        controls.pack(fill="x", padx=8, pady=6)
-        ttk.Button(controls, text="New item", command=self.on_new_item).pack(side="left", padx=4)
-        self._save_changes_button = ttk.Button(controls, text="Save changes", command=self.on_save_changes)
-        self._save_changes_button.pack(side="left", padx=4)
-        self._delete_selected_button = ttk.Button(controls, text="Delete selected", command=self.on_delete)
-        self._delete_selected_button.pack(side="left", padx=4)
-        ttk.Button(controls, text="Columns", command=self.on_manage_columns).pack(side="left", padx=4)
-        ttk.Button(controls, text="Rename fields", command=self.form.rename_fields).pack(side="left", padx=4)
-        ttk.Button(controls, text="Open CSV", command=self.on_open_csv_preview).pack(side="left", padx=4)
-        self._open_last_csv_button = ttk.Button(controls, text="Last CSV", command=self.on_open_last_csv_preview)
-        self._open_last_csv_button.pack(side="left", padx=4)
-        self._recent_csv_menu = tk.Menu(self, tearoff=0)
-        self._open_recent_csv_button = ttk.Menubutton(controls, text="Recent CSVs", direction="below")
-        self._open_recent_csv_button.configure(menu=self._recent_csv_menu)
-        self._open_recent_csv_button.pack(side="left", padx=4)
-
-        ttk.Button(controls, text="Manage backups", command=self.on_manage_backups).pack(side="right", padx=4)
-        ttk.Button(controls, text="Export CSV", command=self.on_export).pack(side="right", padx=4)
-
-        self._search_entry = ttk.Entry(controls, width=20)
-        self._search_entry.bind("<KeyRelease>", lambda e: self.on_search())
-        ttk.Button(controls, text="Clear", command=self.on_clear_search).pack(side="right", padx=4)
-        self._search_entry.pack(side="right", padx=4)
-        ttk.Label(controls, text="Search").pack(side="right", padx=(4, 0))
-
-        self._csv_preview_status = ProcessingDialogHandle(
+        layout = build_app_layout(
             self,
-            title="Processing CSV",
-            eyebrow_text="CSV PREVIEW",
-            detail_text="Loading the preview, checking metadata, and preparing visible rows.",
+            labels=labels,
+            column_order=column_order,
+            column_widths=column_widths,
+            visible_columns=visible_columns,
+            gp_highlight_presets=GP_HIGHLIGHT_PRESETS,
+            save_labels_callback=self._settings.save_labels,
+            on_labels_changed=self.on_labels_changed,
+            on_form_submit=self.on_form_submit,
+            on_table_commit=self._on_table_commit,
+            on_column_order_changed=self.on_column_order_changed,
+            on_column_widths_changed=self.on_column_widths_changed,
+            on_visible_columns_changed=self.on_visible_columns_changed,
+            on_heading_click=self._on_table_heading_click,
+            on_new_item=self.on_new_item,
+            on_save_changes=self.on_save_changes,
+            on_delete=self.on_delete,
+            on_manage_columns=self.on_manage_columns,
+            on_open_csv_preview=self.on_open_csv_preview,
+            on_open_last_csv_preview=self.on_open_last_csv_preview,
+            on_manage_backups=self.on_manage_backups,
+            on_export=self.on_export,
+            on_clear_search=self.on_clear_search,
+            on_search=self.on_search,
+            on_edit=self.on_edit,
+            on_copy_selected_id_to_clipboard=self._copy_selected_id_to_clipboard,
+            on_set_gp_highlight_threshold=self._set_gp_highlight_threshold,
+            on_prompt_custom_gp_highlight_threshold=self._prompt_custom_gp_highlight_threshold,
         )
+        self._apply_layout(layout)
+        self._build_runtime_controllers()
+        self._bind_runtime_events()
+        self._run_startup_sequence(gp_highlight_threshold)
+
+    def _apply_layout(self, layout) -> None:
+        self.form = layout.form
+        self.table = layout.table
+        self._form_mode_var = layout.form_mode_var
+        self._form_mode_label = layout.form_mode_label
+        self._save_changes_button = layout.save_changes_button
+        self._delete_selected_button = layout.delete_selected_button
+        self._open_last_csv_button = layout.open_last_csv_button
+        self._open_recent_csv_button = layout.open_recent_csv_button
+        self._recent_csv_menu = layout.recent_csv_menu
+        self._search_entry = layout.search_entry
+        self._csv_preview_status = layout.csv_preview_status
+        self.row_menu = layout.row_menu
+        self._gp_highlight_menu = layout.gp_highlight_menu
+        self._type_filter_menu = layout.type_filter_menu
+
+    def _build_runtime_controllers(self) -> None:
         self._csv_preview_launch = _CsvPreviewLaunchController(
             self,
             self._settings,
@@ -179,20 +165,6 @@ class GPDataApp(tk.Tk):
             DIRTY_MODE_BANNER_FG,
         )
         self.form.on_dirty_change = self._on_form_dirty_change
-
-        self.row_menu = tk.Menu(self, tearoff=0)
-        self.row_menu.add_command(label="Load into form", command=self.on_edit)
-        self.row_menu.add_command(label="Delete", command=self.on_delete)
-        self.row_menu.add_separator()
-        self.row_menu.add_command(label="Copy ID", command=self._copy_selected_id_to_clipboard)
-        self._gp_highlight_menu = tk.Menu(self, tearoff=0)
-        for threshold in GP_HIGHLIGHT_PRESETS:
-            label = f"Highlight below {threshold:g}%"
-            self._gp_highlight_menu.add_command(label=label, command=lambda value=threshold: self._set_gp_highlight_threshold(value))
-        self._gp_highlight_menu.add_separator()
-        self._gp_highlight_menu.add_command(label="Custom...", command=self._prompt_custom_gp_highlight_threshold)
-        self._gp_highlight_menu.add_command(label="Clear GP highlight", command=lambda: self._set_gp_highlight_threshold(None))
-        self._type_filter_menu = tk.Menu(self, tearoff=0)
         self._table_display = _TableDisplayController(
             self,
             self._settings,
@@ -231,9 +203,13 @@ class GPDataApp(tk.Tk):
             self._update_form_mode_ui,
             lambda title, message: messagebox.askyesno(title, message),
         )
+
+    def _bind_runtime_events(self) -> None:
         self.table.bind("<<TreeviewSelect>>", self._on_table_select)
         self.table.bind("<Button-3>", self._on_row_right_click)
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def _run_startup_sequence(self, gp_highlight_threshold: float | None) -> None:
         self._update_open_last_csv_button_state()
         self.table.set_gp_highlight_threshold(gp_highlight_threshold)
         self._apply_initial_window_geometry()
@@ -483,32 +459,7 @@ class GPDataApp(tk.Tk):
         self._table_display.on_manage_columns()
 
     def _on_table_commit(self, record_id: str, col: str, new_value: str) -> None:
-        try:
-            record = self._record_actions.record_by_id(record_id)
-            if record is None:
-                messagebox.showerror("Error", "Record not found")
-                return
-
-            data = record.to_dict()
-            data[col] = new_value
-
-            if col in ("field3", "field5"):
-                data["field6"] = calculate_field6(data.get("field3"), data.get("field5"))
-
-            updated = self._record_actions.build_record_or_show_error(data)
-            if updated is None:
-                return
-            self._record_actions.save_existing_record(
-                record,
-                updated,
-                duplicate_action_text="save this edit",
-                backup_action="saving this inline edit",
-                error_title="Edit failed",
-                error_action="save the inline edit",
-                refresh_form_mode=False,
-            )
-        except (OSError, RuntimeError, ValueError) as exc:
-            self._show_storage_error("Edit failed", "save the inline edit", self.data_manager.path, exc)
+        self._record_actions.save_inline_edit(record_id, col, new_value)
 
     def _on_row_right_click(self, event) -> None:
         try:

@@ -99,6 +99,7 @@ This is useful for quick changes.
 Important notes about editing:
 
 - Edited rows now stay in the same position in the table instead of jumping to the bottom.
+- If you inline-edit Field 3 or Field 5, Field 6 is recalculated automatically before the save is applied.
 - If an edit would make the item match another existing Type + Name, the program warns you first.
 - If you cancel that warning, the edit is not saved.
 - If the app cannot create a safety backup before an edit or delete, it asks before continuing.
@@ -225,6 +226,7 @@ What it does:
 - opens the CSV in a separate window
 - shows a clear centered processing message while the CSV is opening, while sessions are being combined, and while analysis is being prepared
 - uses the same processing-message style across those long CSV actions, and the message closes automatically when that step finishes
+- keeps the window responsive during longer searches, session combining, and analysis preparation by doing that work in the background and showing a loading state while results are on the way
 - shows all columns from the file
 - shows the first preview rows immediately for large files so the window opens faster
 - can generate Column 1, Column 2, Column 3, and so on when the file does not have real headers

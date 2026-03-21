@@ -28,6 +28,7 @@ numeric change history per item.
 - Add and edit flows warn when the same `Type + Name` already exists.
 - The table shows the newest saved items first.
 - Inline edits and form edits keep the edited row in place instead of moving it.
+- Inline edits to `field3` or `field5` also recalculate `field6` before saving, the same way the main form does.
 - Live search filters rows as you type.
 - Search prefers exact whole-word matches when possible, so `gin` can match gin items without pulling in `ginger beer`.
 - Click the `Type` column header to open a small filter menu listing the saved types, then use `Remove type filter` at the bottom to clear it.
@@ -158,14 +159,15 @@ python main.py cleanup
 
 - `main.py`: compatibility entrypoint
 - `cli.py`: command-line logic
-- `ui/app.py`: top-level Tkinter shell that wires the main window together
+- `ui/app.py`: top-level Tkinter shell and composition root, with phased startup and public callbacks kept stable for tests and callers
+- `ui/app_layout.py`: main-window widget, menu, and processing-status construction extracted from `ui/app.py`
 - `ui/app_csv_preview_controller.py`: remembered CSV path, header-mode, and preview-launch actions
 - `ui/app_storage_controller.py`: export and manage-backups actions
 - `ui/app_form_mode_controller.py`: form-mode banner and edit/new-item button-state logic
 - `ui/app_table_display_controller.py`: type filter, GP highlight, column labels, and column-visibility controls
 - `ui/app_record_controllers.py`: record list refresh/selection flow plus add/edit/save/delete form actions
+- `ui/record_actions.py`: record lookup and add/save/delete flows, plus inline table-edit save logic
 - `ui/csv_preview/`: raw CSV preview package split into loader, dialog, controller, helper, state, and analysis modules
-- `ui/record_actions.py`: record lookup and add/save/delete action flows
 - `ui/view_helpers.py`: shared UI focus, recalc, table-selection, and processing-dialog helpers
 - `ui/`: the rest of the Tkinter application code
 - `data_manager/`: CSV and SQLite persistence layer
@@ -190,6 +192,7 @@ python main.py cleanup
 - `ui/csv_preview/dialog_support.py`: holds generic Treeview, export-path, and widget helpers used by the preview window.
 - `ui/csv_preview/pipeline.py`: owns preview search, filtering, sort, combine-session, and cache decisions that should stay independent from Tk widgets.
 - `ui/csv_preview/preview_pipeline.py`: provides the dialog-facing preview pipeline class while still routing runtime hooks through the dialog module for test and compatibility stability.
+- `ui/csv_preview/runtime_hooks.py`: centralizes the preview runtime hook assignment for the dialog-facing pipeline and view state while letting `dialog.py` keep late-bound compatibility wrappers.
 - `ui/csv_preview/preview_settings.py`: restores remembered preview columns and sort per CSV path and builds the save callbacks used by the preview window.
 - `ui/csv_preview/preview_state.py`: holds the preview summary and view-state dataclasses used by the table controller.
 - `ui/csv_preview/popup_controller.py`: owns header popup and preview export behavior, including async distinct-value loading and exact-value filter application.
@@ -197,12 +200,14 @@ python main.py cleanup
 - `ui/csv_preview/row_combiner.py`: owns combined-session row iteration and pre-header-filter row generation for the preview pipeline.
 - `ui/csv_preview/table_controller.py`: owns the preview table controller and popup-export adapter used by the dialog.
 - `ui/csv_preview/table_helpers.py`: owns the column chooser dialog, visible-column manager, and chunked Treeview row renderer.
-- `ui/csv_preview/dialog.py`: remains the public preview entrypoint and compatibility surface, while delegating most preview behavior to the narrower modules above.
+- `ui/csv_preview/dialog.py`: remains the public preview entrypoint and compatibility surface, while delegating most preview behavior to the narrower modules above and preserving dialog-level monkeypatch points used by tests.
 
 ## Main App Architecture
 
-- `ui/app.py` is now mainly a wiring layer for the root window, widget creation, and public callbacks.
+- `ui/app.py` is now mainly a wiring layer for the root window, phased startup, and public callbacks.
+- `ui/app_layout.py` owns the main-window widget, menu, and processing-status assembly so `GPDataApp` can stay focused on runtime wiring.
 - Main-window behaviors are split into small focused controllers so backup/export, CSV preview launch, table display state, form-mode state, and record list/form actions are easier to reason about independently.
+- `RecordActions.save_inline_edit(...)` now owns inline table-edit save behavior so form saves and inline saves share the same record-action layer.
 - The compatibility re-export shims in `ui/app_controllers.py` and `ui/app_display_controllers.py` exist to keep imports stable while the concrete code lives in narrower modules.
 
 ## Settings Architecture
@@ -223,6 +228,7 @@ python -m pytest
 ```
 
 GUI-related tests skip automatically if Tk is not available in the current environment.
+The UI packages also lazy-load GUI entry points so non-GUI imports and CLI tests can still collect in environments where `tkinter` is missing.
 
 ## Notes
 
