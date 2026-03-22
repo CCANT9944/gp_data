@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from tkinter import ttk
 import pytest
 
+import gp_data.ui.app as app_module
 from gp_data import settings as settings_module
 from gp_data.ui import RecordTable, GPDataApp
 from gp_data.ui.app import DIRTY_MODE_BANNER_BG, EDIT_MODE_BANNER_BG, NEW_MODE_BANNER_BG
@@ -997,6 +998,7 @@ def test_app_type_heading_click_opens_type_filter_menu(tmp_path):
     assert app._type_filter_menu.index("end") is not None
     assert app._type_filter_menu.entrycget(0, "label") == "Beer"
     assert app._type_filter_menu.entrycget(1, "label") == "Wine"
+    assert _menu_index_by_label(app._type_filter_menu, "Edit type...") >= 0
     assert app._type_filter_menu.entrycget(app._type_filter_menu.index("end"), "label") == "Remove type filter"
 
     app.destroy()
@@ -1029,6 +1031,113 @@ def test_app_type_filter_menu_can_apply_and_clear(tmp_path):
     app._type_filter_menu.invoke(clear_index)
 
     assert app.table.get_children() == (gin.id, vodka.id, wine.id)
+
+    app.destroy()
+
+
+def test_app_type_filter_menu_can_bulk_rename_type_across_matching_records(tmp_path, monkeypatch):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    beer_one = Record(field1="beer", field2="lager")
+    beer_two = Record(field1="beer", field2="craft")
+    wine = Record(field1="wine", field2="glass")
+    for record in (beer_one, beer_two, wine):
+        app.data_manager.save(record)
+
+    monkeypatch.setattr(app._table_display, "_prompt_type_selection", lambda **kwargs: "Beer")
+    infos: list[tuple[str, str]] = []
+    monkeypatch.setattr(app_module.simpledialog, "askstring", lambda *args, **kwargs: "Cocktail")
+    monkeypatch.setattr(app_module.messagebox, "showinfo", lambda title, message: infos.append((title, message)))
+    app._type_filter_menu.tk_popup = lambda x, y: None  # type: ignore[method-assign]
+
+    app._on_table_heading_click("field1")
+    edit_index = _menu_index_by_label(app._type_filter_menu, "Edit type...")
+    app._type_filter_menu.invoke(edit_index)
+
+    saved_records = app.data_manager.load_all()
+    assert [record.field1 for record in saved_records].count("Cocktail") == 2
+    assert [record.field1 for record in saved_records].count("Wine") == 1
+    assert all(record.field1 != "Beer" for record in saved_records)
+    assert infos == [("Type updated", "Updated 2 records from Beer to Cocktail.")]
+
+    app.destroy()
+
+
+def test_app_type_filter_menu_bulk_rename_preserves_active_filter(tmp_path, monkeypatch):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    gin_one = Record(field1="gin", field2="house", created_at=datetime(2026, 3, 15, 12, 2, tzinfo=timezone.utc))
+    gin_two = Record(field1="gin", field2="premium", created_at=datetime(2026, 3, 15, 12, 1, tzinfo=timezone.utc))
+    wine = Record(field1="wine", field2="glass", created_at=datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc))
+    for record in (gin_one, gin_two, wine):
+        app.data_manager.save(record)
+
+    app.load_records()
+    app._on_table_heading_click("field1")
+    gin_index = _menu_index_by_label(app._type_filter_menu, "Gin")
+    app._type_filter_menu.invoke(gin_index)
+    assert app.table.get_children() == (gin_one.id, gin_two.id)
+
+    monkeypatch.setattr(app._table_display, "_prompt_type_selection", lambda **kwargs: "Gin")
+    monkeypatch.setattr(app_module.simpledialog, "askstring", lambda *args, **kwargs: "Spirit")
+    monkeypatch.setattr(app_module.messagebox, "showinfo", lambda *args, **kwargs: None)
+    app._type_filter_menu.tk_popup = lambda x, y: None  # type: ignore[method-assign]
+
+    app._on_table_heading_click("field1")
+    edit_index = _menu_index_by_label(app._type_filter_menu, "Edit type...")
+    app._type_filter_menu.invoke(edit_index)
+
+    assert app._type_filter_menu_value.get() == "spirit"
+    assert app.table.get_children() == (gin_one.id, gin_two.id)
+    saved_records = app.data_manager.load_all()
+    assert [record.field1 for record in saved_records].count("Spirit") == 2
+
+    app.destroy()
+
+
+def test_app_type_filter_menu_bulk_rename_prompts_before_merge(tmp_path, monkeypatch):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+
+    for record in (
+        Record(field1="beer", field2="lager"),
+        Record(field1="beer", field2="craft"),
+        Record(field1="wine", field2="glass"),
+    ):
+        app.data_manager.save(record)
+
+    ask_calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(app._table_display, "_prompt_type_selection", lambda **kwargs: "Beer")
+    monkeypatch.setattr(app_module.simpledialog, "askstring", lambda *args, **kwargs: "Wine")
+    monkeypatch.setattr(
+        app_module.messagebox,
+        "askyesno",
+        lambda title, message: ask_calls.append((title, message)) or False,
+    )
+    app._type_filter_menu.tk_popup = lambda x, y: None  # type: ignore[method-assign]
+
+    app._on_table_heading_click("field1")
+    edit_index = _menu_index_by_label(app._type_filter_menu, "Edit type...")
+    app._type_filter_menu.invoke(edit_index)
+
+    saved_records = app.data_manager.load_all()
+    assert [record.field1 for record in saved_records].count("Beer") == 2
+    assert [record.field1 for record in saved_records].count("Wine") == 1
+    assert ask_calls == [(
+        "Merge types",
+        "Wine already exists.\n\nMerge 2 'Beer' record(s) into 'Wine'?",
+    )]
 
     app.destroy()
 

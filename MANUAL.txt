@@ -119,6 +119,9 @@ Use the search box near the top.
 - Example: searching for gin shows gin items first and avoids matching ginger beer when exact gin matches exist.
 - Click the Type column header if you want a small menu showing the saved types.
 - Click one type in that menu to show only that type.
+- Use Edit type... in that same menu if you want to rename one saved type across all records that currently use it.
+- Edit type... first lets you pick the existing source type from a list, then asks what the replacement type should be.
+- If the replacement type already exists, the app asks before merging those records into the existing type.
 - Use Remove type filter at the bottom of that menu to clear the type filter again.
 - Click the GP column header if you want a small menu with preset highlight levels.
 - You can also pick Custom from that menu and type your own GP threshold.

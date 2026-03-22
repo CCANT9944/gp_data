@@ -135,6 +135,61 @@ class RecordActions:
             self._show_storage_error("Edit failed", "save the inline edit", exc)
             return None
 
+    def bulk_rename_type(
+        self,
+        source_type: str,
+        target_type: str,
+        *,
+        backup_action: str,
+        error_title: str,
+        error_action: str,
+    ) -> tuple[int, str] | None:
+        source_normalized = (source_type or "").strip().lower()
+        if not source_normalized:
+            self._show_selection_error("Choose a type to edit.")
+            return None
+
+        records = self._data_manager.load_all()
+        matching_records = [
+            record
+            for record in records
+            if (record.field1 or "").strip().lower() == source_normalized
+        ]
+        if not matching_records:
+            self._show_selection_error("The selected type no longer exists.")
+            return None
+
+        updated_records: list[Record] = []
+        resolved_target_label: str | None = None
+        for record in records:
+            if (record.field1 or "").strip().lower() != source_normalized:
+                updated_records.append(record)
+                continue
+
+            updated = self.build_record_or_show_error(
+                {
+                    **record.to_dict(),
+                    "field1": target_type,
+                }
+            )
+            if updated is None:
+                return None
+            resolved_target_label = updated.field1
+            updated_records.append(updated)
+
+        if not self._create_safety_backup_or_confirm(backup_action):
+            return None
+
+        try:
+            self._data_manager.replace_all(updated_records)
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._show_storage_error(error_title, error_action, exc)
+            return None
+
+        self._load_records()
+        self._reset_to_new_item()
+        return len(matching_records), resolved_target_label or target_type.strip()
+
     def delete_record(
         self,
         record_id: str,

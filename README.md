@@ -31,7 +31,8 @@ numeric change history per item.
 - Inline edits to `field3` or `field5` also recalculate `field6` before saving, the same way the main form does.
 - Live search filters rows as you type.
 - Search prefers exact whole-word matches when possible, so `gin` can match gin items without pulling in `ginger beer`.
-- Click the `Type` column header to open a small filter menu listing the saved types, then use `Remove type filter` at the bottom to clear it.
+- Click the `Type` column header to open a small filter menu listing the saved types, click one to filter the table, use `Edit type...` to choose an existing source type from a list and rename it across all matching saved records, and use `Remove type filter` at the bottom to clear the filter again.
+- If `Edit type...` renames a type to one that already exists, the app asks before merging those matching records into the existing target type.
 - Click the `GP` column header to open a small menu with highlight presets, a custom threshold option, and a clear option.
 - The GP highlight threshold is saved in your local `settings.json` and comes back after restart.
 - `Open CSV` opens a separate read-only raw CSV viewer for the selected file.
@@ -168,7 +169,7 @@ python main.py cleanup
 - `ui/app_csv_preview_controller.py`: remembered CSV path, header-mode, and preview-launch actions
 - `ui/app_storage_controller.py`: export and manage-backups actions
 - `ui/app_form_mode_controller.py`: form-mode banner and edit/new-item button-state logic
-- `ui/app_table_display_controller.py`: type filter, GP highlight, column labels, and column-visibility controls
+- `ui/app_table_display_controller.py`: type filter, bulk type rename, GP highlight, column labels, and column-visibility controls
 - `ui/app_record_controllers.py`: record list refresh/selection flow plus add/edit/save/delete form actions
 - `ui/record_actions.py`: record lookup and add/save/delete flows, plus inline table-edit save logic
 - `ui/csv_preview/`: raw CSV preview package split into loader, dialog, controller, helper, state, and analysis modules

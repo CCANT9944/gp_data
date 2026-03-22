@@ -178,8 +178,10 @@ class GPDataApp(tk.Tk):
             self.load_records,
             self._current_search_query,
             lambda *args, **kwargs: simpledialog.askstring(*args, **kwargs),
+            lambda title, message: messagebox.askyesno(title, message),
             lambda title, message: messagebox.showerror(title, message),
             lambda title, message: messagebox.showinfo(title, message),
+            self._record_actions.bulk_rename_type,
         )
         self._record_list = _RecordListController(
             self.data_manager,

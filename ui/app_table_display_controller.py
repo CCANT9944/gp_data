@@ -31,8 +31,10 @@ class _TableDisplayController:
         load_records,
         current_search_query,
         ask_string,
+        ask_yes_no,
         show_error,
         show_info,
+        bulk_rename_type,
     ) -> None:
         self._owner = owner
         self._settings = settings
@@ -46,8 +48,10 @@ class _TableDisplayController:
         self._load_records = load_records
         self._current_search_query = current_search_query
         self._ask_string = ask_string
+        self._ask_yes_no = ask_yes_no
         self._show_error = show_error
         self._show_info = show_info
+        self._bulk_rename_type = bulk_rename_type
         self._type_filter_value: str | None = None
 
     def normalized_type_value(self, value: str | None) -> str:
@@ -87,6 +91,167 @@ class _TableDisplayController:
         self._type_filter_menu_value.set(value or "")
         self._load_records()
 
+    def _type_option_for_value(self, value: str | None, type_options: Sequence[str]) -> str | None:
+        normalized_value = self.normalized_type_value(value)
+        if not normalized_value:
+            return None
+        return next(
+            (type_name for type_name in type_options if self.normalized_type_value(type_name) == normalized_value),
+            None,
+        )
+
+    def _prompt_type_selection(
+        self,
+        *,
+        title: str,
+        prompt: str,
+        type_options: Sequence[str],
+        initial_value: str | None = None,
+    ) -> str | None:
+        dialog = tk.Toplevel(self._owner)
+        dialog.title(title)
+        dialog.geometry("320x320")
+        dialog.resizable(False, False)
+
+        body = ttk.Frame(dialog)
+        body.pack(fill="both", expand=True, padx=10, pady=10)
+
+        ttk.Label(body, text=prompt, justify="left", wraplength=280).pack(fill="x")
+
+        list_frame = ttk.Frame(body)
+        list_frame.pack(fill="both", expand=True, pady=(8, 0))
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
+
+        listbox = tk.Listbox(list_frame, exportselection=False, height=min(max(len(type_options), 6), 12))
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=listbox.yview)
+        listbox.configure(yscrollcommand=scrollbar.set)
+        listbox.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+
+        for type_name in type_options:
+            listbox.insert("end", type_name)
+
+        result: str | None = None
+
+        def _selected_type() -> str | None:
+            selection = listbox.curselection()
+            if not selection:
+                return None
+            return str(listbox.get(selection[0]))
+
+        def _close() -> None:
+            dialog.destroy()
+
+        def _choose(_event=None) -> str:
+            nonlocal result
+            selected_type = _selected_type()
+            if selected_type is None:
+                return "break"
+            result = selected_type
+            _close()
+            return "break"
+
+        button_row = ttk.Frame(dialog)
+        button_row.pack(fill="x", padx=10, pady=(0, 10))
+        choose_button = ttk.Button(button_row, text="Select", command=_choose, state="disabled")
+        choose_button.pack(side="right", padx=(4, 0))
+        ttk.Button(button_row, text="Cancel", command=_close).pack(side="right")
+
+        def _sync_selection(_event=None) -> None:
+            choose_button.configure(state="normal" if _selected_type() is not None else "disabled")
+
+        initial_index = next(
+            (
+                index
+                for index, type_name in enumerate(type_options)
+                if self.normalized_type_value(type_name) == self.normalized_type_value(initial_value)
+            ),
+            None,
+        )
+        if initial_index is not None:
+            listbox.selection_set(initial_index)
+            listbox.see(initial_index)
+
+        listbox.bind("<<ListboxSelect>>", _sync_selection, add="+")
+        listbox.bind("<Double-Button-1>", _choose, add="+")
+        listbox.bind("<Return>", _choose, add="+")
+        dialog.bind("<Escape>", lambda _event: _close(), add="+")
+        dialog.protocol("WM_DELETE_WINDOW", _close)
+        _sync_selection()
+
+        try:
+            dialog.transient(self._owner.winfo_toplevel())
+            dialog.grab_set()
+        except tk.TclError:
+            LOGGER.debug("Unable to make type picker dialog modal", exc_info=True)
+
+        listbox.focus_set()
+        self._owner.wait_window(dialog)
+        return result
+
+    def _prompt_bulk_rename_type(self, type_options: list[str], records: list[Record]) -> None:
+        if not type_options:
+            self._show_error("No types available", "There are no saved types to edit.")
+            return
+
+        current_type = self._type_option_for_value(self._type_filter_value, type_options)
+        source_type = self._prompt_type_selection(
+            title="Edit type",
+            prompt="Choose the type you want to rename.",
+            type_options=type_options,
+            initial_value=current_type,
+        )
+        if source_type is None:
+            return
+
+        target_type = self._ask_string(
+            "Edit type",
+            f"Rename '{source_type}' to what?",
+            parent=self._owner,
+            initialvalue=source_type,
+        )
+        if target_type is None:
+            return
+        if not target_type.strip():
+            self._show_error("Invalid type", "Type cannot be empty.")
+            return
+
+        source_normalized = self.normalized_type_value(source_type)
+        target_existing_type = self._type_option_for_value(target_type, type_options)
+        if target_existing_type is not None and self.normalized_type_value(target_existing_type) != source_normalized:
+            matching_count = sum(
+                1
+                for record in records
+                if self.normalized_type_value(record.field1) == source_normalized
+            )
+            should_merge = self._ask_yes_no(
+                "Merge types",
+                f"{target_existing_type} already exists.\n\nMerge {matching_count} '{source_type}' record(s) into '{target_existing_type}'?",
+            )
+            if not should_merge:
+                return
+
+        result = self._bulk_rename_type(
+            source_type,
+            target_type,
+            backup_action=f"renaming the type '{source_type}'",
+            error_title="Type update failed",
+            error_action="update the selected type",
+        )
+        if result is None:
+            return
+
+        changed_count, resolved_target_type = result
+        if self._type_filter_value == source_normalized:
+            self.set_type_filter(self.normalized_type_value(resolved_target_type))
+
+        record_label = "record" if changed_count == 1 else "records"
+        self._show_info(
+            "Type updated",
+            f"Updated {changed_count} {record_label} from {source_type} to {resolved_target_type}.",
+        )
+
     def show_type_filter_menu(self) -> None:
         records = self._data_manager.load_all()
         type_options = self.record_type_options(records)
@@ -105,6 +270,11 @@ class _TableDisplayController:
             self._type_filter_menu.add_command(label="No types available", state="disabled")
 
         self._type_filter_menu.add_separator()
+        self._type_filter_menu.add_command(
+            label="Edit type...",
+            command=lambda: self._prompt_bulk_rename_type(type_options, records),
+            state="normal" if type_options else "disabled",
+        )
         self._type_filter_menu.add_command(label="Remove type filter", command=lambda: self.set_type_filter(None))
 
         try:
