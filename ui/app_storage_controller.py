@@ -22,11 +22,8 @@ class _AppStorageActionsController:
         if not path:
             return
         try:
-            if displayed_records:
-                tmp = CSVDataManager(Path(path))
-                tmp._write_all(displayed_records)
-            else:
-                self._data_manager.export_csv(Path(path))
+            tmp = CSVDataManager(Path(path))
+            tmp._write_all(displayed_records)
             self._show_info("Export", f"Exported to {path}")
         except (OSError, RuntimeError, ValueError) as exc:
             self._show_storage_error("Export failed", "export records", Path(path), exc)

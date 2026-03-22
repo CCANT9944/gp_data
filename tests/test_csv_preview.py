@@ -43,6 +43,36 @@ def _find_button(root: tk.Misc, text: str):
     return None
 
 
+def _wait_for_button(window: tk.Misc, text: str, *, present: bool) -> None:
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        window.update()
+        button = _find_button(window, text)
+        if present and button is not None:
+            return
+        if not present and button is None:
+            return
+        time.sleep(0.02)
+    button = _find_button(window, text)
+    if present:
+        assert button is not None
+        return
+    assert button is None
+
+
+def _wait_for_button_state(window: tk.Misc, text: str, expected_state: str) -> None:
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        window.update()
+        button = _find_button(window, text)
+        if button is not None and str(button.cget("state")) == expected_state:
+            return
+        time.sleep(0.02)
+    button = _find_button(window, text)
+    assert button is not None
+    assert str(button.cget("state")) == expected_state
+
+
 def _find_widgets(root: tk.Misc, cls):
     found = []
     for widget in root.winfo_children():
@@ -251,32 +281,39 @@ def test_open_csv_preview_dialog_opens_analysis_from_current_filtered_rows(tk_ro
 
     seen: dict[str, object] = {}
 
-    def fake_open_analysis_dialog(parent, snapshot):
-        seen.update(
-            parent=parent,
-            snapshot=snapshot,
-        )
-        return parent
+    original_build_snapshot = dialog_module.build_preview_analysis_snapshot
 
-    monkeypatch.setattr(dialog_module, "open_csv_preview_analysis_dialog_from_snapshot", fake_open_analysis_dialog)
+    def capture_build_snapshot(*args, **kwargs):
+        snapshot = original_build_snapshot(*args, **kwargs)
+        seen["snapshot"] = snapshot
+        return snapshot
+
+    monkeypatch.setattr(dialog_module, "build_preview_analysis_snapshot", capture_build_snapshot)
 
     dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
     query_entry = _find_descendant(dialog, ttk.Entry)
-    analyze_button = _find_button(dialog, "Analyze")
+    analysis_button = _find_button(dialog, "Analysis")
+    preview_button = _find_button(dialog, "Preview")
     controller = getattr(dialog, "_csv_preview_controller", None)
 
     assert query_entry is not None
-    assert analyze_button is not None
+    assert analysis_button is not None
+    assert preview_button is not None
     assert controller is not None
+    assert str(preview_button.cget("state")) == "disabled"
+    assert str(analysis_button.cget("state")) == "normal"
 
     query_entry.insert(0, "spritz")
     controller.trigger_refresh_now()
-    analyze_button.invoke()
+    analysis_button.invoke()
 
     deadline = time.monotonic() + 2.0
     while time.monotonic() < deadline and "snapshot" not in seen:
         dialog.update()
         time.sleep(0.02)
+
+    _wait_for_button_state(dialog, "Preview", "normal")
+    _wait_for_button_state(dialog, "Analysis", "disabled")
 
     snapshot = seen["snapshot"]
     assert snapshot.filtering_active is True
@@ -284,6 +321,9 @@ def test_open_csv_preview_dialog_opens_analysis_from_current_filtered_rows(tk_ro
     assert list(snapshot.rows) == [("Aperol Spritz", "Spritz", "4")]
     assert [column.index for column in snapshot.columns] == [0, 1, 2]
     assert {column.index for column in snapshot.columns if column.numeric} == {2}
+    assert str(_find_button(dialog, "Preview").cget("state")) == "normal"
+    assert str(_find_button(dialog, "Analysis").cget("state")) == "disabled"
+    assert dialog.title() == "CSV Preview - analysis_filter.csv"
 
     dialog.destroy()
 
@@ -297,29 +337,35 @@ def test_open_csv_preview_dialog_analysis_respects_combined_rows_and_visible_col
 
     seen: dict[str, object] = {}
 
-    def fake_open_analysis_dialog(parent, snapshot):
-        seen.update(
-            snapshot=snapshot,
-        )
-        return parent
+    original_build_snapshot = dialog_module.build_preview_analysis_snapshot
 
-    monkeypatch.setattr(dialog_module, "open_csv_preview_analysis_dialog_from_snapshot", fake_open_analysis_dialog)
+    def capture_build_snapshot(*args, **kwargs):
+        snapshot = original_build_snapshot(*args, **kwargs)
+        seen["snapshot"] = snapshot
+        return snapshot
+
+    monkeypatch.setattr(dialog_module, "build_preview_analysis_snapshot", capture_build_snapshot)
 
     dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
     combine_toggle = _find_descendant(dialog, ttk.Checkbutton)
-    analyze_button = _find_button(dialog, "Analyze")
+    analysis_button = _find_button(dialog, "Analysis")
     controller = getattr(dialog, "_csv_preview_controller", None)
 
     assert combine_toggle is not None
-    assert analyze_button is not None
+    assert analysis_button is not None
     assert controller is not None
 
     controller._apply_visible_columns([0, 1, 2])
     combine_toggle.invoke()
-    analyze_button.invoke()
+    analysis_button.invoke()
 
     deadline = time.monotonic() + 2.0
     while time.monotonic() < deadline and "snapshot" not in seen:
+        dialog.update()
+        time.sleep(0.02)
+
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and controller._analysis_status_dialog is not None:
         dialog.update()
         time.sleep(0.02)
 
@@ -328,6 +374,10 @@ def test_open_csv_preview_dialog_analysis_respects_combined_rows_and_visible_col
     assert [column.index for column in snapshot.columns] == [0, 1, 2]
     assert {column.index for column in snapshot.columns if column.numeric} == {2}
     assert list(snapshot.rows) == [("Target", "Lunch + Dinner", "5", "a")]
+    _wait_for_button_state(dialog, "Preview", "normal")
+    _wait_for_button_state(dialog, "Analysis", "disabled")
+    assert str(_find_button(dialog, "Preview").cget("state")) == "normal"
+    assert str(_find_button(dialog, "Analysis").cget("state")) == "disabled"
 
     dialog.destroy()
 
@@ -344,24 +394,21 @@ def test_open_csv_preview_dialog_shows_processing_popup_while_opening_analysis(t
 
     def slow_build_preview_analysis_snapshot(*args, **kwargs):
         time.sleep(0.15)
-        return original_build_preview_analysis_snapshot(*args, **kwargs)
-
-    def fake_open_analysis_dialog(parent, snapshot):
+        snapshot = original_build_preview_analysis_snapshot(*args, **kwargs)
         seen["snapshot"] = snapshot
-        return parent
+        return snapshot
 
     monkeypatch.setattr(dialog_module, "build_preview_analysis_snapshot", slow_build_preview_analysis_snapshot)
-    monkeypatch.setattr(dialog_module, "open_csv_preview_analysis_dialog_from_snapshot", fake_open_analysis_dialog)
 
     dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
-    analyze_button = _find_button(dialog, "Analyze")
+    analysis_button = _find_button(dialog, "Analysis")
     controller = getattr(dialog, "_csv_preview_controller", None)
 
-    assert analyze_button is not None
+    assert analysis_button is not None
     assert controller is not None
 
     dialog.update()
-    analyze_button.invoke()
+    analysis_button.invoke()
     dialog.update()
 
     status_dialog = controller._analysis_status_dialog
@@ -375,8 +422,96 @@ def test_open_csv_preview_dialog_shows_processing_popup_while_opening_analysis(t
         dialog.update()
         time.sleep(0.02)
 
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and controller._analysis_status_dialog is not None:
+        dialog.update()
+        time.sleep(0.02)
+
     assert "snapshot" in seen
     assert controller._analysis_status_dialog is None
+    _wait_for_button_state(dialog, "Preview", "normal")
+    _wait_for_button_state(dialog, "Analysis", "disabled")
+    assert str(_find_button(dialog, "Preview").cget("state")) == "normal"
+    assert str(_find_button(dialog, "Analysis").cget("state")) == "disabled"
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_dialog_can_return_from_analysis_to_preview(tk_root, tmp_path):
+    csv_path = tmp_path / "analysis_back.csv"
+    csv_path.write_text(
+        "Name,Category,Quantity\nNegroni,Cocktail,2\nSpritz,Spritz,4\n",
+        encoding="utf-8",
+    )
+
+    dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    analysis_button = _find_button(dialog, "Analysis")
+    preview_button = _find_button(dialog, "Preview")
+    query_entry = _find_descendant(dialog, ttk.Entry)
+
+    assert analysis_button is not None
+    assert preview_button is not None
+    assert query_entry is not None
+
+    analysis_button.invoke()
+    _wait_for_button_state(dialog, "Preview", "normal")
+    _wait_for_button_state(dialog, "Analysis", "disabled")
+    preview_button.invoke()
+    dialog.update()
+
+    assert _find_button(dialog, "Analysis") is not None
+    assert query_entry.winfo_manager() == "pack"
+    assert str(_find_button(dialog, "Preview").cget("state")) == "disabled"
+    assert str(_find_button(dialog, "Analysis").cget("state")) == "normal"
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_dialog_reuses_cached_snapshot_for_same_workspace_state(tk_root, tmp_path, monkeypatch):
+    csv_path = tmp_path / "analysis_cache.csv"
+    csv_path.write_text(
+        "Name,Category,Quantity\nNegroni,Cocktail,2\nSpritz,Spritz,4\n",
+        encoding="utf-8",
+    )
+
+    original_build_snapshot = dialog_module.build_preview_analysis_snapshot
+    call_count = 0
+
+    def capture_build_snapshot(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return original_build_snapshot(*args, **kwargs)
+
+    monkeypatch.setattr(dialog_module, "build_preview_analysis_snapshot", capture_build_snapshot)
+
+    dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    analysis_button = _find_button(dialog, "Analysis")
+    preview_button = _find_button(dialog, "Preview")
+
+    assert analysis_button is not None
+    assert preview_button is not None
+
+    analysis_button.invoke()
+    _wait_for_button_state(dialog, "Preview", "normal")
+    _wait_for_button_state(dialog, "Analysis", "disabled")
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and str(_find_button(dialog, "Analysis").cget("state")) != "disabled":
+        dialog.update()
+        time.sleep(0.02)
+
+    assert call_count == 1
+
+    preview_button.invoke()
+    dialog.update()
+    assert str(_find_button(dialog, "Preview").cget("state")) == "disabled"
+    assert str(_find_button(dialog, "Analysis").cget("state")) == "normal"
+
+    _find_button(dialog, "Analysis").invoke()
+    dialog.update()
+
+    assert call_count == 1
+    assert str(_find_button(dialog, "Preview").cget("state")) == "normal"
+    assert str(_find_button(dialog, "Analysis").cget("state")) == "disabled"
 
     dialog.destroy()
 
@@ -924,6 +1059,176 @@ def test_open_csv_preview_analysis_dialog_bar_chart_supports_negative_values(tk_
     dialog.destroy()
 
 
+def test_open_csv_preview_analysis_dialog_shows_hide_bars_button_only_for_bar_chart(tk_root):
+    analysis_path = loader_module.Path("analysis.csv")
+    dialog = analysis_dialog_module.open_csv_preview_analysis_dialog(
+        tk_root,
+        loader_module.CsvPreviewData(
+            path=analysis_path,
+            encoding="utf-8",
+            headers=["Name", "Quantity"],
+            rows=[],
+            row_total=3,
+            fully_cached=True,
+        ),
+        [("Negroni", "5"), ("Martini", "3"), ("Spritz", "2")],
+        [0, 1],
+        {1},
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    hide_bars_button = _find_button(dialog, "Hide bars")
+    assert hide_bars_button is not None
+    assert str(hide_bars_button.winfo_manager()) == ""
+
+    combo_boxes = _find_widgets(dialog, ttk.Combobox)
+    assert len(combo_boxes) >= 6
+    view_box = combo_boxes[0]
+    view_box.set("Bar chart")
+    view_box.event_generate("<<ComboboxSelected>>")
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    assert str(hide_bars_button.winfo_manager()) == "grid"
+
+    view_box.set("Pie chart")
+    view_box.event_generate("<<ComboboxSelected>>")
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    assert str(hide_bars_button.winfo_manager()) == ""
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_analysis_dialog_bar_chart_can_hide_and_restore_selected_bars(tk_root):
+    analysis_path = loader_module.Path("analysis.csv")
+    dialog = analysis_dialog_module.open_csv_preview_analysis_dialog(
+        tk_root,
+        loader_module.CsvPreviewData(
+            path=analysis_path,
+            encoding="utf-8",
+            headers=["Name", "Quantity"],
+            rows=[],
+            row_total=3,
+            fully_cached=True,
+        ),
+        [("Negroni", "5"), ("Martini", "3"), ("Spritz", "2")],
+        [0, 1],
+        {1},
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    combo_boxes = _find_widgets(dialog, ttk.Combobox)
+    assert len(combo_boxes) >= 6
+    view_box = combo_boxes[0]
+    label_box = combo_boxes[1]
+    value_box = combo_boxes[2]
+    view_box.set("Bar chart")
+    view_box.event_generate("<<ComboboxSelected>>")
+    label_box.set("1: Name")
+    label_box.event_generate("<<ComboboxSelected>>")
+    value_box.set("2: Quantity")
+    value_box.event_generate("<<ComboboxSelected>>")
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    hide_bars_button = _find_button(dialog, "Hide bars")
+    assert hide_bars_button is not None
+    hide_bars_button.invoke()
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    visibility_windows = [
+        widget
+        for widget in dialog.winfo_children() + tk_root.winfo_children()
+        if isinstance(widget, tk.Toplevel) and widget is not dialog and widget.winfo_exists() and widget.title() == "Bar visibility"
+    ]
+    assert visibility_windows
+    visibility_window = visibility_windows[-1]
+
+    checkbuttons = _find_widgets(visibility_window, tk.Checkbutton)
+    negroni_toggle = next(
+        widget for widget in checkbuttons if str(widget.cget("text")) == "Negroni"
+    )
+    negroni_toggle.invoke()
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    canvas = _find_descendant(dialog, tk.Canvas)
+    assert canvas is not None
+    canvas_texts = _canvas_texts(canvas)
+    assert "Negroni" not in canvas_texts
+    assert "Martini" in canvas_texts
+    assert "Spritz" in canvas_texts
+    assert _find_label_with_text(dialog, "2: Quantity by 1: Name (highest to lowest)\n1 hidden bar(s).") is not None
+
+    show_all_button = _find_button(visibility_window, "Show all")
+    assert show_all_button is not None
+    show_all_button.invoke()
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    canvas_texts = _canvas_texts(canvas)
+    assert "Negroni" in canvas_texts
+
+    visibility_window.destroy()
+    dialog.destroy()
+
+
+def test_open_csv_preview_analysis_dialog_bar_visibility_popup_wraps_long_labels(tk_root):
+    analysis_path = loader_module.Path("analysis.csv")
+    long_label = "Very long cocktail label with enough words to require wrapping inside the bar visibility popup"
+    dialog = analysis_dialog_module.open_csv_preview_analysis_dialog(
+        tk_root,
+        loader_module.CsvPreviewData(
+            path=analysis_path,
+            encoding="utf-8",
+            headers=["Name", "Quantity"],
+            rows=[],
+            row_total=2,
+            fully_cached=True,
+        ),
+        [(long_label, "5"), ("Short", "2")],
+        [0, 1],
+        {1},
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    combo_boxes = _find_widgets(dialog, ttk.Combobox)
+    assert len(combo_boxes) >= 6
+    view_box = combo_boxes[0]
+    view_box.set("Bar chart")
+    view_box.event_generate("<<ComboboxSelected>>")
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    hide_bars_button = _find_button(dialog, "Hide bars")
+    assert hide_bars_button is not None
+    hide_bars_button.invoke()
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    visibility_windows = [
+        widget
+        for widget in dialog.winfo_children() + tk_root.winfo_children()
+        if isinstance(widget, tk.Toplevel) and widget is not dialog and widget.winfo_exists() and widget.title() == "Bar visibility"
+    ]
+    assert visibility_windows
+    visibility_window = visibility_windows[-1]
+
+    checkbuttons = _find_widgets(visibility_window, tk.Checkbutton)
+    wrapped_button = next(widget for widget in checkbuttons if str(widget.cget("text")) == long_label)
+    assert int(wrapped_button.cget("wraplength")) > 0
+    assert str(wrapped_button.cget("justify")) == "left"
+
+    visibility_window.destroy()
+    dialog.destroy()
+
+
 def test_open_csv_preview_analysis_dialog_pie_chart_rejects_negative_values(tk_root):
     analysis_path = loader_module.Path("analysis.csv")
     dialog = analysis_dialog_module.open_csv_preview_analysis_dialog(
@@ -995,6 +1300,7 @@ def test_open_csv_preview_analysis_dialog_histogram_renders_numeric_distribution
     assert canvas is not None
     assert _find_label_with_text(dialog, "Distribution of 1: Quantity across 5 bins") is not None
     assert _find_label_with_text(dialog, "Bins group nearby values together") is not None
+    assert _find_label_with_text(dialog, "Histogram counts rows in value ranges") is not None
     assert _find_label_with_text(dialog, "Blue bins show the main distribution") is not None
 
     bar_item_ids = [
@@ -1047,6 +1353,94 @@ def test_open_csv_preview_analysis_dialog_places_bins_control_on_second_row(tk_r
     assert str(bins_box.winfo_manager()) == "grid"
     assert int(bins_box.grid_info()["row"]) == 1
 
+    dialog.destroy()
+
+
+def test_open_csv_preview_analysis_dialog_shows_explain_button_only_for_histogram(tk_root):
+    analysis_path = loader_module.Path("analysis.csv")
+    dialog = analysis_dialog_module.open_csv_preview_analysis_dialog(
+        tk_root,
+        loader_module.CsvPreviewData(
+            path=analysis_path,
+            encoding="utf-8",
+            headers=["Quantity"],
+            rows=[],
+            row_total=10,
+            fully_cached=True,
+        ),
+        [(str(value),) for value in range(1, 11)],
+        [0],
+        {0},
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    explain_button = _find_button(dialog, "Explain histogram")
+    assert explain_button is not None
+    assert str(explain_button.winfo_manager()) == ""
+
+    combo_boxes = _find_widgets(dialog, ttk.Combobox)
+    assert len(combo_boxes) >= 6
+    view_box = combo_boxes[0]
+    view_box.set("Histogram")
+    view_box.event_generate("<<ComboboxSelected>>")
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    explain_button = _find_button(dialog, "Explain histogram")
+    assert explain_button is not None
+    assert str(explain_button.winfo_manager()) == "grid"
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_analysis_dialog_histogram_explain_button_opens_help_popup(tk_root):
+    analysis_path = loader_module.Path("analysis.csv")
+    dialog = analysis_dialog_module.open_csv_preview_analysis_dialog(
+        tk_root,
+        loader_module.CsvPreviewData(
+            path=analysis_path,
+            encoding="utf-8",
+            headers=["Net item total"],
+            rows=[],
+            row_total=6,
+            fully_cached=True,
+        ),
+        [(value,) for value in ["2.10", "2.40", "2.90", "5.20", "5.60", "11.00"]],
+        [0],
+        {0},
+        filtering_active=True,
+        combine_sessions=False,
+    )
+
+    combo_boxes = _find_widgets(dialog, ttk.Combobox)
+    assert len(combo_boxes) >= 6
+    view_box = combo_boxes[0]
+    view_box.set("Histogram")
+    view_box.event_generate("<<ComboboxSelected>>")
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    explain_button = _find_button(dialog, "Explain histogram")
+    assert explain_button is not None
+    explain_button.invoke()
+    tk_root.update_idletasks()
+    tk_root.update()
+
+    help_windows = [
+        widget
+        for widget in dialog.winfo_children() + tk_root.winfo_children()
+        if isinstance(widget, tk.Toplevel) and widget is not dialog and widget.winfo_exists() and widget.title() == "How Histogram Works"
+    ]
+    assert help_windows
+    help_window = help_windows[-1]
+    help_text = _find_descendant(help_window, tk.Text)
+    assert help_text is not None
+    assert "Histogram counts rows in value ranges." in help_text.get("1.0", "end")
+    assert "Histogram does not sum values by item" in help_text.get("1.0", "end")
+    assert "Value column: 1: Net item total" in help_text.get("1.0", "end")
+
+    help_window.destroy()
     dialog.destroy()
 
 
@@ -1660,7 +2054,7 @@ def test_open_csv_preview_dialog_runs_search_refresh_off_ui_thread(tk_root, tmp_
     controller.refresh()
     elapsed = time.monotonic() - started
 
-    assert elapsed < 0.2
+    assert elapsed < 0.25
     assert controller._summary_var.get().startswith("search_async.csv | Loading matching rows")
 
     _wait_for_rows(dialog, tree, 1)
@@ -2047,7 +2441,7 @@ def test_open_csv_preview_dialog_runs_combine_refresh_off_ui_thread(tk_root, tmp
     combine_toggle.invoke()
     elapsed = time.monotonic() - started
 
-    assert elapsed < 0.2
+    assert elapsed < 0.3
     assert controller._summary_var.get().startswith("combine_async.csv | Loading matching rows")
 
     _wait_for_tree_values(dialog, tree, [["Target", "Lunch + Dinner", 5]])

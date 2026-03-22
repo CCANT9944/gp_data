@@ -111,6 +111,8 @@ def test_sqlite_data_manager_rejects_corrupted_database_file(tmp_path: Path):
     assert dm.load_all() == []
     with pytest.raises(RuntimeError, match="database unavailable"):
         dm.save(Record(field1="one"))
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        dm.delete("missing")
 
 
 def test_sqlite_round_trips_all_persisted_fields(tmp_path: Path):

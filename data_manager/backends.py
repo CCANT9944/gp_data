@@ -357,6 +357,9 @@ class SQLiteDataManager:
         return self.save(record)
 
     def delete(self, id: str) -> None:
+        self._ensure_conn()
+        if self._conn is None:
+            raise RuntimeError("database unavailable")
         cur = self._conn.cursor()
         cur.execute("DELETE FROM records WHERE id = ?", (id,))
         self._conn.commit()

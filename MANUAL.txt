@@ -235,8 +235,9 @@ What it does:
 - shows a small label in the preview telling you whether it is using Headers: Row 1 or Headers: Generated
 - lets you click a column header and open a compact popup with a search box and scrollable value list so you can pick one exact value to view, such as one ClassName
 - lets you sort text columns A-to-Z or Z-to-A and sort numeric columns low-to-high or high-to-low from that same popup using the real values for that column type
-- lets you click Analyze to open a separate analysis window for the current preview result
-- lets that analysis window show a summary table, bar chart, pie chart, or histogram for the columns that are still visible in the preview
+- shows Preview and Analysis buttons at the top of the CSV viewer so you can switch between the raw preview and the analysis workspace in the same window
+- lets you click Analysis to switch the current CSV window into an analysis workspace for the current preview result
+- lets that analysis workspace show a summary table, bar chart, pie chart, or histogram for the columns that are still visible in the preview
 - lets you save the current preview as a new CSV file based on the current filters, combined rows, and visible columns without changing the original imported file
 - can combine session rows like Lunch and Dinner into one row and total their quantity, even when some numeric export columns have names like Textbox73
 - keeps the viewer read-only
@@ -261,8 +262,11 @@ Important notes:
 - after the app has fully scanned a large unchanged CSV once, reopening it later is also faster because the viewer can reuse a small metadata sidecar for row counts, encoding, and late columns
 - Clear filters resets the preview back to all rows and removes the active search, combine, column filters, and sort, but it does not change which columns you chose to keep visible
 - Columns opens a small chooser so you can hide columns you do not want to look at
-- Analyze uses only the rows that currently match the preview, so if you search, exact-filter a column, or combine sessions first, the analysis window reflects that current result instead of the original full CSV
+- Analyze uses only the rows that currently match the preview, so if you search, exact-filter a column, or combine sessions first, the analysis workspace reflects that current result instead of the original full CSV
 - Analyze only includes columns that are currently visible in the preview window
+- switching back to Preview keeps the same CSV window open, and going back to Analysis reuses the last analysis result when the preview filters and visible columns are still the same
+- that reused result is the underlying analysis data only, so Analysis still reopens with its default controls instead of remembering the exact chart you were last looking at
+- for example, if you changed Analysis to a bar chart, picked a different label or value column, changed bar range or orientation, or hid some bars, those control choices reset the next time you switch back into Analysis
 - bar charts in Analyze can show negative values, but pie charts only work with positive values
 - bar charts can show all grouped items or just the first or last 5, 10, or 20 items for the chosen visible label and value columns in highest-to-lowest order
 - bar charts can be switched between vertical and horizontal layouts
@@ -271,7 +275,8 @@ Important notes:
 - histogram view needs a numeric value column and starts with Auto bins, which picks a reasonable bin count from the current data spread
 - if you want more or fewer groups, you can still change the histogram bin count manually from the Bins control
 - histogram view shows a short helper line explaining what bins mean, and blue bins mark the main distribution while red bins mark bins that contain outlier values
-- the analysis controls now use two rows, so the Bins control stays visible even when the analysis window is narrower
+- histogram view also includes an Explain histogram button that opens a fuller in-app guide if you want a step-by-step explanation of what the bars mean and how histogram differs from bar chart
+- the analysis controls now use two rows, so the Bins control stays visible even when the analysis workspace is narrower
 - pie charts keep the most important slices visible and group the smaller remainder into Other so the chart stays readable
 - Save As CSV creates a new CSV file from what the preview currently shows logically, and the original imported file stays unchanged
 - Save As CSV opens in your shared `Favorites\csv_exports` folder by default, and the folder is created automatically if needed

@@ -19,6 +19,7 @@ from .analysis import (
     preferred_chart_value_column,
 )
 from .helpers import _compact_filter_popup_label
+from .histogram_help import open_histogram_help_dialog
 from .loader import CsvPreviewData
 
 
@@ -77,6 +78,9 @@ HISTOGRAM_BIN_AUTO = "Auto"
 HISTOGRAM_BIN_OPTIONS = (HISTOGRAM_BIN_AUTO, "5", "8", "10", "12", "15", "20")
 HISTOGRAM_OUTLIER_FILL = "#d1495b"
 HISTOGRAM_OUTLIER_OUTLINE = "#7f1d1d"
+BAR_VISIBILITY_POPUP_WIDTH = 360
+BAR_VISIBILITY_POPUP_HEIGHT = 420
+BAR_VISIBILITY_POPUP_LIST_HEIGHT = 260
 
 
 def _slice_bar_chart_series(series: PreviewAggregatedChartSeries, selection: str) -> PreviewAggregatedChartSeries:
@@ -138,6 +142,31 @@ def _bar_chart_message(series: PreviewAggregatedChartSeries, selection: str) -> 
     if selection == BAR_RANGE_ALL:
         return f"{series.value_column_label} by {series.label_column_label} (highest to lowest)"
     return f"{series.value_column_label} by {series.label_column_label} ({_bar_chart_range_description(selection)}, highest to lowest)"
+
+
+def _filter_bar_chart_series(
+    series: PreviewAggregatedChartSeries,
+    hidden_labels: set[str],
+) -> PreviewAggregatedChartSeries:
+    if not hidden_labels:
+        return series
+
+    labels: list[str] = []
+    values: list[Decimal] = []
+    for label, value in zip(series.labels, series.values, strict=False):
+        if label in hidden_labels:
+            continue
+        labels.append(label)
+        values.append(value)
+
+    return PreviewAggregatedChartSeries(
+        label_column_index=series.label_column_index,
+        label_column_label=series.label_column_label,
+        value_column_index=series.value_column_index,
+        value_column_label=series.value_column_label,
+        labels=labels,
+        values=values,
+    )
 
 
 def _analysis_subtitle(snapshot: PreviewAnalysisSnapshot) -> str:
@@ -463,6 +492,7 @@ def _histogram_helper_text(series: PreviewHistogramSeries) -> str:
     if series.auto_bin_count:
         parts.append(f"Auto chose {series.bin_count} bins from the data spread.")
     parts.append("Bins group nearby values together: fewer bins show broader groups, more bins show finer detail.")
+    parts.append("Histogram counts rows in value ranges; it does not sum values by item.")
     parts.append("Blue bins show the main distribution.")
     if series.outlier_bin_indices:
         parts.append("Red bins include outlier values.")
@@ -571,16 +601,17 @@ def open_csv_preview_analysis_dialog(
     return open_csv_preview_analysis_dialog_from_snapshot(parent, snapshot)
 
 
-def open_csv_preview_analysis_dialog_from_snapshot(
+def build_csv_preview_analysis_view(
     parent: tk.Misc,
     snapshot: PreviewAnalysisSnapshot,
-) -> tk.Toplevel:
-    win = tk.Toplevel(parent)
-    win.title(f"CSV Analysis - {snapshot.source_name}")
-    win.geometry(f"{ANALYSIS_WINDOW_WIDTH}x{ANALYSIS_WINDOW_HEIGHT}")
-
-    container = ttk.Frame(win, padding=8)
-    container.pack(fill="both", expand=True)
+    *,
+    close_command=None,
+    close_button_text: str = "Close",
+    popup_parent: tk.Misc | None = None,
+    chart_message_wraplength: int = ANALYSIS_WINDOW_WIDTH - 120,
+) -> ttk.Frame:
+    popup_owner = (popup_parent if popup_parent is not None else parent.winfo_toplevel())
+    container = ttk.Frame(parent, padding=8)
     container.columnconfigure(0, weight=1)
     container.rowconfigure(2, weight=1)
 
@@ -637,6 +668,14 @@ def open_csv_preview_analysis_dialog_from_snapshot(
     histogram_bins_box["values"] = HISTOGRAM_BIN_OPTIONS
     histogram_bins_box.grid(row=1, column=5, sticky="w", padx=(6, 0), pady=(8, 0))
 
+    bar_visibility_button = ttk.Button(control_row, text="Hide bars")
+    bar_visibility_button.grid(row=1, column=6, sticky="w", padx=(12, 0), pady=(8, 0))
+    bar_visibility_button.grid_remove()
+
+    histogram_help_button = ttk.Button(control_row, text="Explain histogram")
+    histogram_help_button.grid(row=1, column=7, sticky="w", padx=(12, 0), pady=(8, 0))
+    histogram_help_button.grid_remove()
+
     content_frame = ttk.Frame(container)
     content_frame.grid(row=2, column=0, sticky="nsew")
     content_frame.columnconfigure(0, weight=1)
@@ -690,7 +729,7 @@ def open_csv_preview_analysis_dialog_from_snapshot(
         textvariable=chart_message_var,
         anchor="w",
         justify="left",
-        wraplength=ANALYSIS_WINDOW_WIDTH - 120,
+        wraplength=chart_message_wraplength,
     ).grid(
         row=0, column=0, sticky="ew", pady=(0, 8)
     )
@@ -705,6 +744,9 @@ def open_csv_preview_analysis_dialog_from_snapshot(
     chart_x_scroll.grid(row=2, column=0, sticky="ew")
 
     column_label_to_index = {column.label: column.index for column in snapshot.columns}
+    bar_hidden_labels: set[str] = set()
+    bar_hidden_context: tuple[int | None, int | None] | None = None
+    bar_visibility_popup: tk.Toplevel | None = None
 
     def _selected_label_column_index() -> int | None:
         return column_label_to_index.get(label_var.get())
@@ -723,6 +765,160 @@ def open_csv_preview_analysis_dialog_from_snapshot(
         except (TypeError, ValueError):
             return None
 
+    def _selected_histogram_bin_label() -> str:
+        selected_label = histogram_bins_var.get().strip()
+        return selected_label or HISTOGRAM_BIN_AUTO
+
+    def _destroy_bar_visibility_popup() -> None:
+        nonlocal bar_visibility_popup
+        popup = bar_visibility_popup
+        bar_visibility_popup = None
+        if popup is not None and popup.winfo_exists():
+            popup.destroy()
+
+    def _current_bar_chart_series() -> PreviewAggregatedChartSeries | None:
+        label_column_index = _selected_label_column_index()
+        if label_column_index is None:
+            return None
+        value_column_index = _selected_value_column_index()
+        series = build_aggregated_chart_series(
+            snapshot,
+            label_column_index,
+            value_column_index=value_column_index,
+            limit=None,
+        )
+        if series is None:
+            return None
+        return _slice_bar_chart_series(series, bar_range_var.get())
+
+    def _open_bar_visibility_popup() -> None:
+        nonlocal bar_visibility_popup
+        _destroy_bar_visibility_popup()
+
+        popup = tk.Toplevel(popup_owner)
+        popup.title("Bar visibility")
+        popup.geometry(f"{BAR_VISIBILITY_POPUP_WIDTH}x{BAR_VISIBILITY_POPUP_HEIGHT}")
+        popup.transient(popup_owner)
+        popup.minsize(320, 260)
+        popup.resizable(True, True)
+        bar_visibility_popup = popup
+
+        def _clear_popup_reference(_event=None) -> None:
+            nonlocal bar_visibility_popup
+            if bar_visibility_popup is popup:
+                bar_visibility_popup = None
+
+        popup.bind("<Destroy>", _clear_popup_reference, add="+")
+        popup.protocol("WM_DELETE_WINDOW", _destroy_bar_visibility_popup)
+
+        container = ttk.Frame(popup, padding=8)
+        container.pack(fill="both", expand=True)
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(1, weight=1)
+
+        ttk.Label(
+            container,
+            text="Untick items to hide them from the current bar chart.",
+            justify="left",
+            wraplength=BAR_VISIBILITY_POPUP_WIDTH - 32,
+        ).grid(row=0, column=0, sticky="ew", pady=(0, 8))
+
+        series = _current_bar_chart_series()
+        if series is None or not series.labels:
+            ttk.Label(
+                container,
+                text="No bars are available for the current chart settings.",
+                justify="left",
+                wraplength=BAR_VISIBILITY_POPUP_WIDTH - 32,
+            ).grid(row=1, column=0, sticky="nw")
+            button_row = ttk.Frame(container)
+            button_row.grid(row=2, column=0, sticky="e", pady=(8, 0))
+            ttk.Button(button_row, text="Close", command=_destroy_bar_visibility_popup).pack(side="right")
+            return
+
+        list_frame = ttk.Frame(container)
+        list_frame.grid(row=1, column=0, sticky="nsew")
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
+
+        list_canvas = tk.Canvas(list_frame, highlightthickness=0, height=BAR_VISIBILITY_POPUP_LIST_HEIGHT)
+        list_scroll = ttk.Scrollbar(list_frame, orient="vertical", command=list_canvas.yview)
+        list_canvas.configure(yscrollcommand=list_scroll.set)
+        list_canvas.grid(row=0, column=0, sticky="nsew")
+        list_scroll.grid(row=0, column=1, sticky="ns")
+
+        checklist_frame = ttk.Frame(list_canvas)
+        checklist_window = list_canvas.create_window((0, 0), window=checklist_frame, anchor="nw")
+
+        def _sync_scroll_region(_event=None) -> None:
+            bbox = list_canvas.bbox("all")
+            if bbox is not None:
+                list_canvas.configure(scrollregion=bbox)
+
+        def _sync_checklist_width(event) -> None:
+            list_canvas.itemconfigure(checklist_window, width=event.width)
+
+        checklist_frame.bind("<Configure>", _sync_scroll_region, add="+")
+        list_canvas.bind("<Configure>", _sync_checklist_width, add="+")
+
+        visibility_vars: dict[str, tk.BooleanVar] = {}
+        visibility_buttons: list[tk.Checkbutton] = []
+
+        def _update_visibility_button_wraplength(_event=None) -> None:
+            wraplength = max(checklist_frame.winfo_width() - 36, 120)
+            for button in visibility_buttons:
+                button.configure(wraplength=wraplength)
+
+        def _set_bar_visibility(label: str) -> None:
+            if visibility_vars[label].get():
+                bar_hidden_labels.discard(label)
+            else:
+                bar_hidden_labels.add(label)
+            _render_chart()
+
+        for label in series.labels:
+            visibility_var = tk.BooleanVar(value=label not in bar_hidden_labels)
+            visibility_vars[label] = visibility_var
+            visibility_button = tk.Checkbutton(
+                checklist_frame,
+                text=label,
+                variable=visibility_var,
+                anchor="w",
+                justify="left",
+                relief="flat",
+                borderwidth=0,
+                highlightthickness=0,
+                command=lambda selected_label=label: _set_bar_visibility(selected_label),
+            )
+            visibility_button.pack(anchor="w", fill="x")
+            visibility_buttons.append(visibility_button)
+
+        checklist_frame.bind("<Configure>", _update_visibility_button_wraplength, add="+")
+        list_canvas.bind("<Configure>", _update_visibility_button_wraplength, add="+")
+
+        button_row = ttk.Frame(container)
+        button_row.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+
+        def _show_all_bars() -> None:
+            bar_hidden_labels.clear()
+            for visibility_var in visibility_vars.values():
+                visibility_var.set(True)
+            _render_chart()
+
+        ttk.Button(button_row, text="Show all", command=_show_all_bars).pack(side="left")
+        ttk.Button(button_row, text="Close", command=_destroy_bar_visibility_popup).pack(side="right")
+
+    def _open_histogram_help() -> None:
+        selected_value_label = value_var.get().strip() or COUNT_ROWS_LABEL
+        open_histogram_help_dialog(
+            popup_owner,
+            value_column_label=selected_value_label,
+            bin_label=_selected_histogram_bin_label(),
+            row_count=snapshot.row_count,
+            filtering_active=snapshot.filtering_active,
+            combine_sessions=snapshot.combine_sessions,
+        )
+
     def _set_chart_x_scrollbar(enabled: bool) -> None:
         if enabled:
             chart_x_scroll.grid()
@@ -738,6 +934,7 @@ def open_csv_preview_analysis_dialog_from_snapshot(
             chart_canvas.yview_moveto(0)
 
     def _render_chart() -> None:
+        nonlocal bar_hidden_context
         label_column_index = _selected_label_column_index()
         if label_column_index is None:
             _set_chart_x_scrollbar(False)
@@ -774,6 +971,12 @@ def open_csv_preview_analysis_dialog_from_snapshot(
             _draw_histogram_chart(chart_canvas, histogram_series)
             return
 
+        current_bar_context = (label_column_index, value_column_index)
+        if bar_hidden_context != current_bar_context:
+            bar_hidden_context = current_bar_context
+            bar_hidden_labels.clear()
+            _destroy_bar_visibility_popup()
+
         series = build_aggregated_chart_series(
             snapshot,
             label_column_index,
@@ -789,14 +992,25 @@ def open_csv_preview_analysis_dialog_from_snapshot(
 
         if selected_view == VIEW_BAR:
             series = _slice_bar_chart_series(series, bar_range_var.get())
+            hidden_bar_count = sum(1 for label in series.labels if label in bar_hidden_labels)
+            visible_series = _filter_bar_chart_series(series, bar_hidden_labels)
+            if not visible_series.labels:
+                _set_chart_x_scrollbar(False)
+                _set_chart_y_scrollbar(False)
+                chart_message_var.set("All bars are hidden. Use Hide bars and choose Show all to restore them.")
+                _draw_empty_chart(chart_canvas, "All bars are hidden. Use Hide bars and choose Show all to restore them.")
+                return
             if bar_orientation_var.get() == BAR_ORIENTATION_HORIZONTAL:
                 _set_chart_x_scrollbar(False)
                 _set_chart_y_scrollbar(True)
             else:
                 _set_chart_x_scrollbar(True)
                 _set_chart_y_scrollbar(False)
-            chart_message_var.set(_bar_chart_message(series, bar_range_var.get()))
-            _draw_bar_chart(chart_canvas, series, bar_orientation_var.get())
+            chart_message = _bar_chart_message(visible_series, bar_range_var.get())
+            if hidden_bar_count:
+                chart_message = f"{chart_message}\n{hidden_bar_count} hidden bar(s)."
+            chart_message_var.set(chart_message)
+            _draw_bar_chart(chart_canvas, visible_series, bar_orientation_var.get())
             return
 
         _set_chart_x_scrollbar(False)
@@ -808,6 +1022,7 @@ def open_csv_preview_analysis_dialog_from_snapshot(
         _draw_bar_chart(chart_canvas, series, BAR_ORIENTATION_VERTICAL)
 
     def _update_view(*_args) -> None:
+        _destroy_bar_visibility_popup()
         selected_output = output_var.get()
         if selected_output == VIEW_SUMMARY:
             _set_chart_x_scrollbar(False)
@@ -817,6 +1032,8 @@ def open_csv_preview_analysis_dialog_from_snapshot(
             bar_range_box.configure(state="disabled")
             bar_orientation_box.configure(state="disabled")
             histogram_bins_box.configure(state="disabled")
+            bar_visibility_button.grid_remove()
+            histogram_help_button.grid_remove()
             chart_frame.grid_forget()
             summary_frame.grid(row=0, column=0, sticky="nsew")
             return
@@ -827,11 +1044,15 @@ def open_csv_preview_analysis_dialog_from_snapshot(
             bar_range_box.configure(state="readonly")
             bar_orientation_box.configure(state="readonly")
             histogram_bins_box.configure(state="disabled")
+            bar_visibility_button.grid()
+            histogram_help_button.grid_remove()
         elif selected_output == VIEW_HISTOGRAM:
             label_box.configure(state="disabled")
             bar_range_box.configure(state="disabled")
             bar_orientation_box.configure(state="disabled")
             histogram_bins_box.configure(state="readonly")
+            bar_visibility_button.grid_remove()
+            histogram_help_button.grid()
             if value_var.get() == COUNT_ROWS_LABEL and numeric_value_options:
                 value_var.set(numeric_value_options[0])
         else:
@@ -839,6 +1060,8 @@ def open_csv_preview_analysis_dialog_from_snapshot(
             bar_range_box.configure(state="disabled")
             bar_orientation_box.configure(state="disabled")
             histogram_bins_box.configure(state="disabled")
+            bar_visibility_button.grid_remove()
+            histogram_help_button.grid_remove()
         summary_frame.grid_forget()
         chart_frame.grid(row=0, column=0, sticky="nsew")
         _render_chart()
@@ -853,11 +1076,35 @@ def open_csv_preview_analysis_dialog_from_snapshot(
     bar_range_box.bind("<<ComboboxSelected>>", _update_view, add="+")
     bar_orientation_box.bind("<<ComboboxSelected>>", _update_view, add="+")
     histogram_bins_box.bind("<<ComboboxSelected>>", _update_view, add="+")
+    bar_visibility_button.configure(command=_open_bar_visibility_popup)
+    histogram_help_button.configure(command=_open_histogram_help)
     chart_canvas.bind("<Configure>", _on_chart_resize, add="+")
+    container.bind("<Destroy>", lambda _event: _destroy_bar_visibility_popup(), add="+")
     _update_view()
 
-    button_row = ttk.Frame(container)
-    button_row.grid(row=3, column=0, sticky="ew", pady=(8, 0))
-    ttk.Button(button_row, text="Close", command=win.destroy).pack(side="right")
+    if close_command is not None:
+        button_row = ttk.Frame(container)
+        button_row.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        ttk.Button(button_row, text=close_button_text, command=close_command).pack(side="right")
+
+    return container
+
+
+def open_csv_preview_analysis_dialog_from_snapshot(
+    parent: tk.Misc,
+    snapshot: PreviewAnalysisSnapshot,
+) -> tk.Toplevel:
+    win = tk.Toplevel(parent)
+    win.title(f"CSV Analysis - {snapshot.source_name}")
+    win.geometry(f"{ANALYSIS_WINDOW_WIDTH}x{ANALYSIS_WINDOW_HEIGHT}")
+
+    container = build_csv_preview_analysis_view(
+        win,
+        snapshot,
+        close_command=win.destroy,
+        close_button_text="Close",
+        popup_parent=win,
+    )
+    container.pack(fill="both", expand=True)
 
     return win

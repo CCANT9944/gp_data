@@ -45,10 +45,12 @@ numeric change history per item.
 - The popup sorts text columns A-to-Z or Z-to-A and sorts numeric columns low-to-high or high-to-low using numeric order instead of text order.
 - The raw CSV viewer remembers the active sort per CSV path and shows the current sort in the preview summary so you can see it without reopening the popup.
 - The raw CSV viewer also shows a small header-mode label so you can see whether the file is using `Row 1` headers or generated column names.
-- The raw CSV viewer includes an `Analyze` action that opens a separate analysis window for the current preview result, using only the rows that currently match the preview filters, the active combine-sessions state, and the columns that are still visible.
-- The analysis window can show a summary table, bar chart, pie chart, or histogram so you can inspect top visible values and numeric spread without exporting the CSV first; bar charts can show negative values, while pie charts only render positive values.
-- Bar charts in the analysis window can be limited to `All`, `First 5`, `First 10`, `First 20`, `Last 5`, `Last 10`, or `Last 20` items, and can be switched between vertical and horizontal layouts.
-- Histogram mode uses a numeric value column, defaults to an `Auto` bin choice based on the current data spread, still lets you choose a fixed bin count manually, and shows short helper text explaining what bins mean.
+- The raw CSV viewer includes `Preview` and `Analysis` workspace buttons, and `Analysis` switches the same preview window into an analysis workspace for the current preview result, using only the rows that currently match the preview filters, the active combine-sessions state, and the columns that are still visible.
+- The analysis workspace can show a summary table, bar chart, pie chart, or histogram so you can inspect top visible values and numeric spread without exporting the CSV first; bar charts can show negative values, while pie charts only render positive values.
+- Bar charts in the analysis workspace can be limited to `All`, `First 5`, `First 10`, `First 20`, `Last 5`, `Last 10`, or `Last 20` items, and can be switched between vertical and horizontal layouts.
+- Switching back to `Preview` keeps the same CSV window open, and returning to `Analysis` reuses the last analysis snapshot when the preview filters and visible columns have not changed.
+- That reuse keeps the underlying analysis data fast to reopen, but the analysis controls themselves still reopen at their default state, so the selected chart type, chosen label/value columns, bar range, orientation, histogram bins, and hidden-bar choices are not yet remembered.
+- Histogram mode uses a numeric value column, defaults to an `Auto` bin choice based on the current data spread, still lets you choose a fixed bin count manually, shows short helper text explaining what bins mean, and includes an `Explain histogram` button that opens a detailed in-app tutorial popup.
 - Histogram bins that contain outlier values are highlighted in red so unusual values stand out more clearly.
 - `Save As CSV` creates a new CSV file from the current preview state, including the current search, exact column filter, combined rows, and visible columns, without changing the original imported file, and it defaults to your shared `Favorites/csv_exports` folder.
 - The raw CSV viewer can also combine session-based rows, such as `Lunch` and `Dinner`, into one product row when the file has detectable session and quantity columns, including numeric export columns with generic names like `Textbox73`.
@@ -189,8 +191,8 @@ python main.py cleanup
 - `ui/csv_preview/loader.py`: loads CSV preview data, manages restart-safe preview sidecars, and can reuse persisted preview rows or persisted full-row caches for unchanged files.
 - `ui/csv_preview/helpers.py`: holds pure preview helpers for column identity, numeric detection, row summaries, and sort/query formatting so those rules stay separate from Tk widget code.
 - `ui/csv_preview/analysis.py`: builds analysis snapshots, numeric summaries, top-value chart series, histogram bin series, automatic bin sizing, and outlier-bin detection from the current filtered preview rows.
-- `ui/csv_preview/analysis_dialog.py`: owns the separate analysis dialog and its summary-table, bar-chart, pie-chart, histogram, bar-range, bar-orientation, and histogram-bin controls, including the wrapped two-row control layout for narrower windows.
-- `ui/csv_preview/analysis_launcher.py`: prepares filtered analysis snapshots in the background and opens the analysis dialog when the snapshot is ready.
+- `ui/csv_preview/analysis_dialog.py`: builds the reusable CSV analysis view used both for the embedded preview analysis workspace and for the compatibility standalone analysis dialog, including the summary-table, bar-chart, pie-chart, histogram, bar-range, bar-orientation, and histogram-bin controls.
+- `ui/csv_preview/analysis_launcher.py`: prepares filtered analysis snapshots in the background and hands the snapshot back to the preview workflow when it is ready.
 - `ui/csv_preview/dialog_support.py`: holds generic Treeview, export-path, and widget helpers used by the preview window.
 - `ui/csv_preview/pipeline.py`: owns preview search, filtering, sort, combine-session, and cache decisions that should stay independent from Tk widgets.
 - `ui/csv_preview/preview_pipeline.py`: provides the dialog-facing preview pipeline class while still routing runtime hooks through the dialog module for test and compatibility stability.
@@ -202,7 +204,8 @@ python main.py cleanup
 - `ui/csv_preview/row_combiner.py`: owns combined-session row iteration and pre-header-filter row generation for the preview pipeline.
 - `ui/csv_preview/table_controller.py`: owns the preview table controller and popup-export adapter used by the dialog.
 - `ui/csv_preview/table_helpers.py`: owns the column chooser dialog, visible-column manager, and chunked Treeview row renderer.
-- `ui/csv_preview/dialog.py`: remains the public preview entrypoint and compatibility surface, while delegating most preview behavior to the narrower modules above and preserving dialog-level monkeypatch points used by tests.
+- `ui/csv_preview/dialog.py`: remains the public preview entrypoint and compatibility surface, while also owning the `Preview` / `Analysis` workspace switching and same-state analysis snapshot reuse used by the raw CSV viewer.
+- The dialog currently reuses the last analysis snapshot for the same preview state, but it rebuilds the analysis widgets when you return to `Analysis`, so chart-control selections still reset to their defaults.
 
 ## Main App Architecture
 

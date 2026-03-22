@@ -89,6 +89,43 @@ def test_export_filtered(tmp_path, monkeypatch):
     root.destroy()
 
 
+def test_export_filtered_with_no_visible_rows_writes_empty_export(tmp_path, monkeypatch):
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("Tk not available")
+    root.withdraw()
+
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not usable for GPDataApp")
+
+    for record in (
+        Record(field1="alpha", field2="x"),
+        Record(field1="beta", field2="y"),
+    ):
+        app.data_manager.save(record)
+    app.load_records()
+
+    app._search_entry.insert(0, "missing")
+    app._search_entry.event_generate('<KeyRelease>')
+    app.on_search()
+    assert len(app.table.get_children()) == 0
+
+    dest = tmp_path / "empty.csv"
+    monkeypatch.setattr("gp_data.ui.filedialog.asksaveasfilename", lambda **kw: str(dest))
+    app.on_export()
+
+    exported_text = dest.read_text(encoding="utf-8").lower()
+    assert "alpha" not in exported_text
+    assert "beta" not in exported_text
+    assert exported_text.count("\n") <= 1
+
+    app.destroy()
+    root.destroy()
+
+
 def test_search_prefers_exact_word_over_substring(tmp_path):
     try:
         root = tk.Tk()

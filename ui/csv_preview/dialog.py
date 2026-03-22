@@ -8,8 +8,8 @@ from time import perf_counter
 from tkinter import filedialog, messagebox, ttk
 
 from gp_data.settings import SettingsStore
-from .analysis import build_preview_analysis_snapshot
-from .analysis_dialog import open_csv_preview_analysis_dialog_from_snapshot
+from .analysis import PreviewAnalysisSnapshot, build_preview_analysis_snapshot
+from .analysis_dialog import build_csv_preview_analysis_view, open_csv_preview_analysis_dialog_from_snapshot
 from .analysis_launcher import _AnalysisSnapshotCoordinator, _PreviewAnalysisLauncher
 from .dialog_support import (
     _build_tree as _build_tree_impl,
@@ -105,11 +105,15 @@ def _header_mode_text(has_header_row: bool) -> str:
 @dataclass(frozen=True)
 class _PreviewDialogWidgets:
     win: tk.Toplevel
+    container: ttk.Frame
+    workspace_row: ttk.Frame
+    summary: ttk.Label
     filter_row: ttk.Frame
     summary_var: tk.StringVar
     query_var: tk.StringVar
     query_entry: ttk.Entry
     combine_sessions_var: tk.BooleanVar
+    table_frame: ttk.Frame
     tree: ttk.Treeview
     button_row: ttk.Frame
 
@@ -257,7 +261,10 @@ def _build_preview_dialog_widgets(
     container = ttk.Frame(win)
     container.pack(fill="both", expand=True, padx=8, pady=8)
     container.columnconfigure(0, weight=1)
-    container.rowconfigure(2, weight=1)
+    container.rowconfigure(3, weight=1)
+
+    workspace_row = ttk.Frame(container)
+    workspace_row.grid(row=0, column=0, sticky="ew", pady=(0, 6))
 
     initial_displayed_rows = min(data.row_count or len(data.rows), _rendered_preview_row_limit(data.column_count))
     summary_var = tk.StringVar(
@@ -269,10 +276,10 @@ def _build_preview_dialog_widgets(
         )
     )
     summary = ttk.Label(container, textvariable=summary_var, anchor="w")
-    summary.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+    summary.grid(row=1, column=0, sticky="ew", pady=(0, 6))
 
     filter_row = ttk.Frame(container)
-    filter_row.grid(row=1, column=0, sticky="ew", pady=(0, 6))
+    filter_row.grid(row=2, column=0, sticky="ew", pady=(0, 6))
     ttk.Label(filter_row, text="Search").pack(side="left")
 
     query_var = tk.StringVar()
@@ -289,7 +296,7 @@ def _build_preview_dialog_widgets(
         combine_sessions_toggle.configure(state="disabled")
 
     table_frame = ttk.Frame(container)
-    table_frame.grid(row=2, column=0, sticky="nsew")
+    table_frame.grid(row=3, column=0, sticky="nsew")
     table_frame.columnconfigure(0, weight=1)
     table_frame.rowconfigure(0, weight=1)
 
@@ -303,15 +310,19 @@ def _build_preview_dialog_widgets(
     x_scroll.grid(row=1, column=0, sticky="ew")
 
     button_row = ttk.Frame(container)
-    button_row.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+    button_row.grid(row=4, column=0, sticky="ew", pady=(8, 0))
 
     return _PreviewDialogWidgets(
         win=win,
+        container=container,
+        workspace_row=workspace_row,
+        summary=summary,
         filter_row=filter_row,
         summary_var=summary_var,
         query_var=query_var,
         query_entry=query_entry,
         combine_sessions_var=combine_sessions_var,
+        table_frame=table_frame,
         tree=tree,
         button_row=button_row,
     )
@@ -330,6 +341,54 @@ def create_csv_preview_dialog(
     on_sort_changed=None,
 ) -> tk.Toplevel:
     widgets = _build_preview_dialog_widgets(parent, data, width=width, height=height)
+    analysis_frame: ttk.Frame | None = None
+    cached_analysis_snapshot: PreviewAnalysisSnapshot | None = None
+    cached_analysis_request_state: tuple[_PreviewFilterState, tuple[int, ...], frozenset[int]] | None = None
+
+    def _current_analysis_request_state() -> tuple[_PreviewFilterState, tuple[int, ...], frozenset[int]]:
+        filter_state, visible_column_indices, numeric_column_indices = controller._analysis_request_state()
+        return filter_state, tuple(visible_column_indices), frozenset(numeric_column_indices)
+
+    def _sync_workspace_buttons() -> None:
+        preview_button.configure(state="disabled" if analysis_frame is None else "normal")
+        analysis_button.configure(state="normal" if analysis_frame is None else "disabled")
+
+    def _show_preview_workspace() -> None:
+        nonlocal analysis_frame
+        if analysis_frame is not None and analysis_frame.winfo_exists():
+            analysis_frame.destroy()
+        analysis_frame = None
+        widgets.summary.grid()
+        widgets.filter_row.grid()
+        widgets.table_frame.grid()
+        _sync_workspace_buttons()
+        widgets.query_entry.focus_set()
+
+    def _show_analysis_snapshot(snapshot) -> None:
+        nonlocal analysis_frame, cached_analysis_request_state, cached_analysis_snapshot
+        widgets.summary.grid_remove()
+        widgets.filter_row.grid_remove()
+        widgets.table_frame.grid_remove()
+        if analysis_frame is not None and analysis_frame.winfo_exists():
+            analysis_frame.destroy()
+        cached_analysis_snapshot = snapshot
+        cached_analysis_request_state = _current_analysis_request_state()
+        analysis_frame = build_csv_preview_analysis_view(
+            widgets.container,
+            snapshot,
+            close_command=_show_preview_workspace,
+            popup_parent=widgets.win,
+            chart_message_wraplength=max(widgets.win.winfo_width() - 120, 240),
+        )
+        analysis_frame.grid(row=1, column=0, rowspan=3, sticky="nsew")
+        _sync_workspace_buttons()
+
+    def _open_analysis_workspace() -> None:
+        current_request_state = _current_analysis_request_state()
+        if cached_analysis_snapshot is not None and current_request_state == cached_analysis_request_state:
+            _show_analysis_snapshot(cached_analysis_snapshot)
+            return
+        controller.open_analysis_dialog()
 
     controller = _PreviewTableController(
         widgets.win,
@@ -390,10 +449,7 @@ def create_csv_preview_dialog(
                     **launcher_kwargs,
                 ),
                 show_error=lambda title, message: messagebox.showerror(title, message),
-                open_analysis_dialog_from_snapshot=lambda parent, snapshot: open_csv_preview_analysis_dialog_from_snapshot(
-                    parent,
-                    snapshot,
-                ),
+                open_analysis_dialog_from_snapshot=lambda parent, snapshot: _show_analysis_snapshot(snapshot),
             ),
         ),
         processing_dialog_factory=lambda win: ProcessingDialogHandle(
@@ -412,9 +468,14 @@ def create_csv_preview_dialog(
         controller.clear_sort()
         controller.clear_header_filter()
 
+    preview_button = ttk.Button(widgets.workspace_row, text="Preview", command=_show_preview_workspace)
+    preview_button.pack(side="left")
+    analysis_button = ttk.Button(widgets.workspace_row, text="Analysis", command=_open_analysis_workspace)
+    analysis_button.pack(side="left", padx=(8, 0))
+    _sync_workspace_buttons()
+
     ttk.Button(widgets.filter_row, text="Columns", command=controller.open_column_dialog).pack(side="left", padx=(0, 12))
     ttk.Button(widgets.filter_row, text="Save As CSV", command=controller.export_current_view_as_csv).pack(side="left", padx=(0, 12))
-    ttk.Button(widgets.filter_row, text="Analyze", command=controller.open_analysis_dialog).pack(side="left", padx=(0, 12))
     ttk.Button(widgets.filter_row, text="Clear filters", command=_clear_filters).pack(side="left")
 
     ttk.Button(widgets.button_row, text="Close", command=widgets.win.destroy).pack(side="right")
