@@ -62,7 +62,7 @@ def _build_tree(
     column_width_for_header: Callable[[str], int],
     min_column_width: int,
 ) -> ttk.Treeview:
-    tree = ttk.Treeview(parent, columns=column_ids, show="headings")
+    tree = ttk.Treeview(parent, columns=column_ids, show="headings", selectmode="extended")
     for column_id, header in zip(column_ids, data.headers):
         tree.heading(column_id, text=header)
         tree.column(column_id, width=column_width_for_header(header), minwidth=min_column_width, stretch=False, anchor="w")

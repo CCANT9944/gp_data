@@ -141,6 +141,7 @@ class _PreviewTableController(_PreviewRefreshControllerBase):
         )
         self._processing_status = processing_dialog_factory(win)
         self._processing_status_load_token: int | None = None
+        self._displayed_rows_snapshot: list[tuple[str, ...]] = []
         self._initialize_refresh_state()
 
     @property
@@ -237,6 +238,22 @@ class _PreviewTableController(_PreviewRefreshControllerBase):
     def _analysis_request_state(self) -> tuple[_PreviewFilterState, list[int], set[int]]:
         return self._analysis_launcher.request_state()
 
+    def filtered_rows_snapshot(self) -> list[tuple[str, ...]]:
+        return list(self._pipeline.filtered_rows_snapshot(self._current_filter_state()))
+
+    def selected_displayed_rows_snapshot(self) -> list[tuple[str, ...]]:
+        selected_ids = set(self._tree.selection())
+        if not selected_ids:
+            return []
+        selected_rows: list[tuple[str, ...]] = []
+        for row_index, item_id in enumerate(self._tree.get_children()):
+            if item_id not in selected_ids:
+                continue
+            if row_index >= len(self._displayed_rows_snapshot):
+                continue
+            selected_rows.append(self._displayed_rows_snapshot[row_index])
+        return selected_rows
+
     def export_current_view_as_csv(self) -> None:
         self._popup_export_controller.export_current_view_as_csv()
 
@@ -277,6 +294,9 @@ class _PreviewTableController(_PreviewRefreshControllerBase):
 
     def _update_tree_headings(self) -> None:
         self._column_manager.update_tree_headings()
+
+    def _apply_displaycolumns(self) -> None:
+        self._column_manager.apply_displaycolumns()
 
     def _rebuild_tree_columns(self, previous_column_count: int) -> None:
         self._column_manager.rebuild_tree_columns(previous_column_count)
@@ -334,3 +354,5 @@ class _PreviewTableController(_PreviewRefreshControllerBase):
             current_render_token=self._render_token,
             schedule_next=self._populate_rows_in_chunks,
         )
+        if load_token == self._load_token and render_token == self._render_token:
+            self._displayed_rows_snapshot = list(displayed_rows)

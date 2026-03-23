@@ -41,8 +41,8 @@ The newest saved items are shown first in the table.
 The highlighted banner under the form tells you whether you are in New item mode or editing a selected record.
 If the form has unsaved edits, that banner changes to show UNSAVED CHANGES.
 
-There is also an Open CSV button for viewing a raw CSV in a separate window.
-That CSV viewer is read-only and shows all rows and all columns from the file you opened.
+There is also an Open CSV button for opening a raw CSV in a separate window.
+That CSV viewer shows all rows and all columns from the file you opened, and it can also import reviewed preview rows into the main table.
 The first time you open a CSV, the app asks whether the file already has a header row.
 If you answer No, the viewer creates Column 1, Column 2, Column 3, and so on, and keeps the first row as data.
 There is a Last CSV button beside it that reopens the most recently viewed CSV path if that file still exists.
@@ -158,7 +158,7 @@ What it shows:
 - time of change
 
 It now keeps multiple recent numeric changes for the same item.
-If there are several entries, use the scrollbar in the box.
+If there are several entries, the box shows a short recent summary.
 Click View full history if you want the whole stored numeric change history for that row.
 
 
@@ -169,12 +169,13 @@ You can customize the table.
 Reorder columns:
 
 1. Click and hold a column header.
-2. Drag it left or right.
+2. Drag the whole header left or right.
 3. Release it.
 
 Resize columns:
 
-1. Drag the edge of a column header.
+1. Move to the divider line between two column headers.
+2. Drag that divider left or right to change the column width.
 
 Hide columns:
 
@@ -222,7 +223,7 @@ If the table is filtered by search or by the Type header menu, only the currentl
 
 11. RAW CSV VIEWER
 
-Use Open CSV if you want to inspect a raw CSV file without importing it into the main app data.
+Use Open CSV if you want to inspect a raw CSV file, filter it, analyze it, export a filtered copy, or import reviewed preview rows into the main app data.
 
 What it does:
 
@@ -235,15 +236,25 @@ What it does:
 - can generate Column 1, Column 2, Column 3, and so on when the file does not have real headers
 - lets you type a text search and press Enter when you are ready to run it
 - lets you choose which columns stay visible
+- reopens remembered CSV preview columns quickly and shows those saved columns immediately when the window opens again
 - shows a small label in the preview telling you whether it is using Headers: Row 1 or Headers: Generated
 - lets you click a column header and open a compact popup with a search box and scrollable value list so you can pick one exact value to view, such as one ClassName
 - lets you sort text columns A-to-Z or Z-to-A and sort numeric columns low-to-high or high-to-low from that same popup using the real values for that column type
 - shows Preview and Analysis buttons at the top of the CSV viewer so you can switch between the raw preview and the analysis workspace in the same window
 - lets you click Analysis to switch the current CSV window into an analysis workspace for the current preview result
 - lets that analysis workspace show a summary table, bar chart, pie chart, or histogram for the columns that are still visible in the preview
+- lets you click Import Filtered Rows to import either the selected preview rows or, if nothing is selected, the full current filtered result
+- opens a mapping step first so you can choose which CSV column goes into which main form field
+- treats buying price and selling price separately during that mapping step, so a Selling Price CSV column is not auto-mapped into the buying-price field by default
+- opens a review table after mapping so you can edit values, include or exclude rows, import only the rows that are ready, and overwrite a matched saved row when you choose that on purpose
+- shows the difference between a clash with saved data and a clash with another row in the current CSV import, so import-row warnings are easier to understand
+- keeps size variants such as 125ml, 175ml, and 250ml separate from each other when checking possible duplicates inside the current import batch
+- still lets saved-data possible matches ignore size and format words when that helps find the existing row you may want to overwrite
+- shows exactly which earlier import row is causing a duplicate or possible-duplicate warning for the selected row, with a short row summary
+- lets you choose which saved row to overwrite when more than one possible saved match is found
 - lets you save the current preview as a new CSV file based on the current filters, combined rows, and visible columns without changing the original imported file
 - can combine session rows like Lunch and Dinner into one row and total their quantity, even when some numeric export columns have names like Textbox73
-- keeps the viewer read-only
+- keeps the original CSV file unchanged while you preview, analyze, export, or import from it
 - lets you scroll across wide files and down long files
 - for very large CSV files, only the first block of matching rows is drawn so the window stays usable, and very wide files use a lower live row cap so scrolling and navigation stay smoother
 
@@ -252,13 +263,18 @@ Use Recent CSVs if you want to reopen one of several recently viewed files.
 
 Important notes:
 
-- the raw CSV viewer does not import anything into the main product table yet
+- the Import Filtered Rows action imports selected preview rows first, or the whole current filtered result if no preview rows are selected
+- importing opens a mapping step and then a review table before anything is added to the main table
+- the review table can skip invalid rows and duplicate Type + Name rows, can prepare selected rows to overwrite a saved match, and the import summary tells you what was imported or skipped
+- if a row conflicts with another row from the same CSV import, the selected-row panel tells you which import row is blocking it
+- possible-duplicate checks inside the current CSV import keep different sizes separate, so 125ml, 175ml, and 250ml versions are not treated as the same import row by default
 - the raw CSV viewer search does not run while you are typing; it starts after you press Enter, and then the viewer shows Loading while the search is being applied
 - the app remembers the last CSV path and a short recent-files list locally so you do not need to browse to it every time
 - the app also remembers whether each CSV path uses a real header row or generated column names, so Last CSV and Recent CSVs reopen the same way
 - the app also remembers which preview columns you left visible for each CSV path and restores them by column header when possible if the same file is reordered later
 - the app remembers the active preview sort for each CSV path and shows that active sort in the preview summary line
 - reopening a CSV through Last CSV or Recent CSVs restores that saved preview state together, so the same header mode, visible columns, and sort come back for that file
+- when that saved preview state is available, the viewer applies the remembered visible columns immediately and finishes the heavier row refresh right after the window opens
 - reopening the same unchanged CSV is faster while the app is still open
 - reopening the same unchanged CSV after restarting the app is also faster because the viewer can reuse stored preview rows, and some moderate-sized files can also reuse a stored full-row cache for later searches
 - repeated searches on larger CSVs can also speed up after the viewer builds a temporary in-memory search index when the file size is still reasonable for your machine
@@ -330,7 +346,7 @@ If the table or form looks odd:
 - close the program and open it again
 - if the app warns that storage could not be opened fully, close other programs using the file and then reopen it
 - check that the item is selected before reading the Change history box
-- check the scrollbar in the Change history box if only one entry is visible
+- open View full history if the Change history summary does not show the older entry you need
 
 If data looks wrong after an edit:
 

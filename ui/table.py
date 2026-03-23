@@ -33,12 +33,7 @@ def _is_separator_column(name: str) -> bool:
 
 
 def _build_display_columns(columns: Sequence[str]) -> list[str]:
-    display_columns: list[str] = []
-    for index, column in enumerate(columns):
-        display_columns.append(column)
-        if index < len(columns) - 1:
-            display_columns.append(f"{SEPARATOR_PREFIX}{index}")
-    return display_columns
+    return list(columns)
 
 
 def _configure_table_style(widget: ttk.Treeview) -> None:
@@ -286,11 +281,6 @@ class RecordTable(ttk.Treeview):
         visible_display_cols = self._visible_display_columns()
         self.configure(columns=self._display_cols, displaycolumns=visible_display_cols)
         for col in self._display_cols:
-            if _is_separator_column(col):
-                self.heading(col, text=SEPARATOR_GLYPH, anchor="center")
-                self.column(col, width=18, minwidth=18, stretch=False, anchor="center")
-                continue
-
             heading_text = self._heading_text_for(col)
             col_width, col_anchor = self._column_presentation(col)
             self.heading(col, text=heading_text, anchor=col_anchor)
@@ -305,7 +295,7 @@ class RecordTable(ttk.Treeview):
             self.load(records)
 
     def _visible_display_columns(self) -> list[str]:
-        return _build_display_columns(self.get_visible_columns())
+        return self.get_visible_columns()
 
     def _column_name_from_event(self, event) -> str | None:
         if self.identify_region(event.x, event.y) != "heading":
@@ -511,12 +501,7 @@ class RecordTable(ttk.Treeview):
         return str(val)
 
     def _values_for_record(self, record: Record) -> list[str]:
-        values: list[str] = []
-        for index, col in enumerate(self._cols):
-            values.append(self._format_display_value(col, getattr(record, col)))
-            if index < len(self._cols) - 1:
-                values.append(SEPARATOR_GLYPH)
-        return values
+        return [self._format_display_value(col, getattr(record, col)) for col in self._cols]
 
     def insert_record(self, record: Record):
         values = self._values_for_record(record)

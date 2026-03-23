@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import tkinter as tk
+from time import perf_counter
 from tkinter import ttk
 
 from ..data_manager import DataManager
@@ -13,6 +14,17 @@ from .view_helpers import clear_table_selection, focus_widget, recalc_form_field
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _log_record_list_performance(operation: str, started_at: float, **fields: object) -> None:
+    if not LOGGER.isEnabledFor(logging.DEBUG):
+        return
+    duration_ms = (perf_counter() - started_at) * 1000.0
+    details = ", ".join(f"{key}={value}" for key, value in fields.items())
+    if details:
+        LOGGER.debug("Record list %s took %.1fms (%s)", operation, duration_ms, details)
+        return
+    LOGGER.debug("Record list %s took %.1fms", operation, duration_ms)
 
 
 class _RecordListController:
@@ -41,6 +53,7 @@ class _RecordListController:
         self._sort_records_for_display = sort_records_for_display
         self._filtered_records = filtered_records
         self._record_matches_current_filter = record_matches_current_filter
+        self._loaded_records: list[Record] = []
         self._displayed_records: list[Record] = []
         self._suspend_table_select = False
 
@@ -48,33 +61,39 @@ class _RecordListController:
     def displayed_records(self) -> list[Record]:
         return self._displayed_records
 
+    @property
+    def loaded_records(self) -> list[Record]:
+        return self._loaded_records
+
+    def refresh_displayed_records(self, *, operation: str = "refresh displayed records") -> None:
+        started_at = perf_counter()
+        displayed = self._sort_records_for_display(self._filtered_records(self._loaded_records))
+        self._displayed_records = displayed
+        self._table.load(displayed)
+        self._update_form_mode_ui()
+        _log_record_list_performance(
+            operation,
+            started_at,
+            loaded_records=len(self._loaded_records),
+            displayed_records=len(displayed),
+        )
+
     def refresh_saved_record(self, record: Record) -> None:
-        still_visible = self._record_matches_current_filter(record)
-        previous_index = next((index for index, existing in enumerate(self._displayed_records) if existing.id == record.id), None)
-        self._displayed_records = [existing for existing in self._displayed_records if existing.id != record.id]
+        existing_index = next((index for index, existing in enumerate(self._loaded_records) if existing.id == record.id), None)
+        if existing_index is None:
+            self._loaded_records.append(record)
+        else:
+            self._loaded_records[existing_index] = record
 
-        if still_visible:
-            if self._table.exists(record.id):
-                if previous_index is not None and previous_index <= len(self._displayed_records):
-                    self._displayed_records.insert(previous_index, record)
-                else:
-                    self._displayed_records.append(record)
-                self._table.update_record(record)
-            else:
-                self.load_records()
-                return
-            try:
-                self._table.selection_set(record.id)
-            except tk.TclError:
-                LOGGER.debug("Unable to restore table selection for %s", record.id, exc_info=True)
+        self.refresh_displayed_records(operation="refresh saved record")
+        if not self._record_matches_current_filter(record, self._loaded_records):
             return
-
-        if self._table.exists(record.id):
-            try:
-                self._table.delete(record.id)
-            except tk.TclError:
-                LOGGER.debug("Unable to remove hidden record %s from the table; reloading rows", record.id, exc_info=True)
-                self.load_records()
+        if not self._table.exists(record.id):
+            return
+        try:
+            self._table.selection_set(record.id)
+        except tk.TclError:
+            LOGGER.debug("Unable to restore table selection for %s", record.id, exc_info=True)
 
     def on_table_select(self, event=None) -> None:
         if self._suspend_table_select:
@@ -98,26 +117,27 @@ class _RecordListController:
         self._update_form_mode_ui(record)
 
     def load_records(self) -> None:
+        started_at = perf_counter()
         try:
             records = self._data_manager.load_all()
         except (OSError, RuntimeError, ValueError) as exc:
             LOGGER.warning("Unable to load records", exc_info=True)
+            self._loaded_records = []
             self._displayed_records = []
             self._table.load([])
             self._update_form_mode_ui()
             self._show_storage_error("Storage unavailable", "load records", self._data_manager.path, exc)
             return
-        displayed = self._sort_records_for_display(self._filtered_records(records))
-        self._displayed_records = displayed
-        self._table.load(displayed)
-        self._update_form_mode_ui()
+        self._loaded_records = list(records)
+        self.refresh_displayed_records(operation="load records")
+        _log_record_list_performance("load records from storage", started_at, loaded_records=len(self._loaded_records))
 
     def on_search(self) -> None:
-        self.load_records()
+        self.refresh_displayed_records(operation="search refresh")
 
     def on_clear_search(self) -> None:
         self._search_entry.delete(0, "end")
-        self.load_records()
+        self.refresh_displayed_records(operation="clear search")
 
 
 class _RecordFormActionsController:

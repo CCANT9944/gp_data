@@ -29,11 +29,12 @@ def build_preview_dialog_settings_bindings(
     show_error,
 ) -> _PreviewDialogSettingsBindings:
     normalized_path = str(data.path)
-    saved_state = settings_store.load_csv_preview_state(normalized_path)
+    current_settings = settings_store.load()
+    saved_state = current_settings.csv_preview_state_by_path.get(normalized_path)
     saved_visible_column_keys = (
-        saved_state.visible_column_keys
+        list(saved_state.visible_column_keys)
         if saved_state is not None
-        else settings_store.load_csv_preview_visible_column_keys(normalized_path)
+        else list(current_settings.csv_preview_visible_column_keys_by_path.get(normalized_path, [])) or None
     )
     initial_visible_column_indices = _visible_column_indices_from_keys(
         data.headers,
@@ -41,15 +42,15 @@ def build_preview_dialog_settings_bindings(
     )
     if initial_visible_column_indices is None:
         initial_visible_column_indices = (
-            saved_state.visible_columns
+            list(saved_state.visible_columns)
             if saved_state is not None and saved_state.visible_columns
-            else settings_store.load_csv_preview_visible_columns(normalized_path)
+            else list(current_settings.csv_preview_visible_columns_by_path.get(normalized_path, [])) or None
         )
 
     saved_sort = (
         {"column_key": saved_state.sort_column_key, "descending": saved_state.sort_descending}
         if saved_state is not None and saved_state.sort_column_key
-        else settings_store.load_csv_preview_sort(normalized_path)
+        else dict(current_settings.csv_preview_sort_by_path.get(normalized_path, {})) or None
     )
     initial_sort_column_index = None
     initial_sort_descending = False

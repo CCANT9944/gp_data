@@ -158,3 +158,63 @@ def test_search_prefers_exact_word_over_substring(tmp_path):
 
     app.destroy()
     root.destroy()
+
+
+def test_search_and_type_filter_reuse_loaded_records_snapshot(tmp_path):
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("Tk not available")
+    root.withdraw()
+
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not usable for GPDataApp")
+
+    for record in (
+        Record(field1="gin", field2="house"),
+        Record(field1="vodka", field2="rail"),
+        Record(field1="wine", field2="glass"),
+    ):
+        app.data_manager.save(record)
+    app.load_records()
+
+    original_load_all = app.data_manager.load_all
+    load_calls = {"count": 0}
+
+    def counted_load_all():
+        load_calls["count"] += 1
+        return original_load_all()
+
+    app._type_filter_menu.tk_popup = lambda x, y: None  # type: ignore[method-assign]
+    app.data_manager.load_all = counted_load_all  # type: ignore[method-assign]
+    try:
+        app._search_entry.insert(0, "gin")
+        app.on_search()
+
+        app._on_table_heading_click("field1")
+        gin_index = next(
+            index
+            for index in range(app._type_filter_menu.index("end") + 1)
+            if app._type_filter_menu.type(index) == "radiobutton"
+            and app._type_filter_menu.entrycget(index, "label") == "Gin"
+        )
+        app._type_filter_menu.invoke(gin_index)
+
+        app._on_table_heading_click("field1")
+        clear_index = next(
+            index
+            for index in range(app._type_filter_menu.index("end") + 1)
+            if app._type_filter_menu.type(index) == "command"
+            and app._type_filter_menu.entrycget(index, "label") == "Remove type filter"
+        )
+        app._type_filter_menu.invoke(clear_index)
+
+        app.on_clear_search()
+
+        assert load_calls["count"] == 0
+    finally:
+        app.data_manager.load_all = original_load_all  # type: ignore[method-assign]
+        app.destroy()
+        root.destroy()

@@ -66,6 +66,20 @@ class _PreviewColumnManager:
         self._min_column_width = min_column_width
         self._normalize_visible_column_indices = normalize_visible_column_indices
         self._filter_label = filter_label
+        initial_data = self._get_data()
+        self._displaycolumns_cache = list(self._all_column_ids)
+        self._heading_text_cache = {
+            column_id: initial_data.headers[index]
+            for index, column_id in enumerate(self._all_column_ids)
+            if index < len(initial_data.headers)
+        }
+
+    def apply_displaycolumns(self) -> None:
+        desired_displaycolumns = list(self._view_state.visible_column_ids(self._all_column_ids))
+        if desired_displaycolumns == self._displaycolumns_cache:
+            return
+        self._tree.configure(displaycolumns=desired_displaycolumns)
+        self._displaycolumns_cache = desired_displaycolumns
 
     def notify_sort_changed(self) -> None:
         if not callable(self._on_sort_changed):
@@ -81,13 +95,19 @@ class _PreviewColumnManager:
                 indicator = " ▼" if self._view_state.sort_descending else " ▲"
             else:
                 indicator = ""
-            self._tree.heading(column_id, text=f"{header}{indicator}")
+            heading_text = f"{header}{indicator}"
+            if self._heading_text_cache.get(column_id) == heading_text:
+                continue
+            self._tree.heading(column_id, text=heading_text)
+            self._heading_text_cache[column_id] = heading_text
 
     def rebuild_tree_columns(self, previous_column_count: int) -> None:
         data = self._get_data()
         previous_all_visible = self._view_state.visible_column_indices == list(range(previous_column_count))
         self._all_column_ids[:] = self._column_ids_for_data(data)
         self._tree.configure(columns=self._all_column_ids)
+        self._displaycolumns_cache = None
+        self._heading_text_cache = {}
         for column_id, header in zip(self._all_column_ids, data.headers):
             self._tree.heading(column_id, text=header)
             self._tree.column(
@@ -97,6 +117,7 @@ class _PreviewColumnManager:
                 stretch=False,
                 anchor="w",
             )
+            self._heading_text_cache[column_id] = header
 
         if previous_all_visible:
             self._view_state.visible_column_indices = list(range(data.column_count))

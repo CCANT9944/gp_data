@@ -4,6 +4,7 @@ import logging
 import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
+from typing import Sequence
 
 from ..settings import SettingsStore
 
@@ -46,14 +47,20 @@ class _CsvPreviewLaunchController:
         self._csv_preview_error_type = csv_preview_error_type
         self._on_open_recent_csv_preview = on_open_recent_csv_preview
 
-    def update_open_last_csv_button_state(self) -> None:
-        recent_paths = self._settings.load_csv_preview_recent_paths()
+    def update_open_last_csv_button_state(
+        self,
+        *,
+        recent_paths: Sequence[str] | None = None,
+        last_path: str | None = None,
+    ) -> None:
+        recent_paths = list(recent_paths) if recent_paths is not None else self._settings.load_csv_preview_recent_paths()
+        loaded_last_path = last_path if last_path is not None else self._settings.load_csv_preview_last_path()
         existing_paths = [path for path in recent_paths if Path(path).exists()]
-        last_path = existing_paths[0] if existing_paths else None
+        normalized_last_path = existing_paths[0] if existing_paths else None
 
-        if existing_paths != recent_paths or self._settings.load_csv_preview_last_path() != last_path:
+        if existing_paths != recent_paths or loaded_last_path != normalized_last_path:
             try:
-                self._settings.update(csv_preview_last_path=last_path, csv_preview_recent_paths=existing_paths)
+                self._settings.update(csv_preview_last_path=normalized_last_path, csv_preview_recent_paths=existing_paths)
             except (OSError, TypeError, ValueError) as exc:
                 LOGGER.warning("Unable to normalize remembered CSV preview paths", exc_info=True)
                 self._warn_settings_save_failure("the recent CSV preview list", exc)

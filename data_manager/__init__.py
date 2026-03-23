@@ -6,7 +6,7 @@ import warnings
 from pathlib import Path
 from typing import Optional, Protocol
 
-from .backends import CSVDataManager, SQLiteDataManager
+from .backends import CSVDataManager, SQLiteDataManager, export_records_to_csv
 from .constants import FIELDNAMES
 from .duplicates import DuplicateDetector
 
@@ -119,8 +119,14 @@ class DataManager:
     def duplicate_identity(self, record):
         return self._duplicate_detector.duplicate_identity(record)
 
+    def possible_duplicate_identity(self, record):
+        return self._duplicate_detector.possible_duplicate_identity(record)
+
     def find_duplicate_record(self, record, exclude_id: str | None = None):
         return self._duplicate_detector.find_duplicate_record(record, exclude_id=exclude_id)
+
+    def find_possible_duplicate_record(self, record, exclude_id: str | None = None):
+        return self._duplicate_detector.find_possible_duplicate_record(record, exclude_id=exclude_id)
 
     @staticmethod
     def migrate_from_csv(src: Path, dest: Path) -> None:
@@ -137,6 +143,7 @@ __all__ = [
     "SQLiteDataManager",
     "DataManager",
     "DuplicateDetector",
+    "export_records_to_csv",
     "FIELDNAMES",
     "DEFAULT_CSV",
     "DEFAULT_DB",

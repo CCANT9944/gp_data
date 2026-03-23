@@ -76,6 +76,33 @@ def test_data_manager_find_duplicate_record(tmp_path: Path):
     assert dm.duplicate_identity(Record(field1="  Soft Drink ", field2=" Tonic ")) == ("soft drink", "tonic")
 
 
+def test_data_manager_can_detect_possible_duplicate_record(tmp_path: Path):
+    dm = DataManager(tmp_path / "data.db")
+
+    first = Record(field1="beer", field2="peroni")
+    dm.save(first)
+
+    possible = dm.find_possible_duplicate_record(Record(field1="Beer", field2="BTL Peroni"))
+
+    assert possible is not None
+    assert possible.id == first.id
+    assert dm.possible_duplicate_identity(Record(field1="Beer", field2="BTL Peroni 330ml")) == ("beer", "peroni")
+    assert dm.possible_duplicate_identity(Record(field1="Vermouth", field2="50ML Martini Rosso")) == ("vermouth", "martini rosso")
+    assert dm.possible_duplicate_identity(Record(field1="Vermouth", field2="50 ML Martini Rosso")) == ("vermouth", "martini rosso")
+
+
+def test_data_manager_can_detect_possible_duplicate_with_leading_measure(tmp_path: Path):
+    dm = DataManager(tmp_path / "data.db")
+
+    first = Record(field1="vermouth", field2="martini rosso")
+    dm.save(first)
+
+    possible = dm.find_possible_duplicate_record(Record(field1="Vermouth", field2="50ML Martini Rosso"))
+
+    assert possible is not None
+    assert possible.id == first.id
+
+
 def test_data_manager_exposes_explicit_public_api(tmp_path: Path):
     dm = DataManager(tmp_path / "data.db")
 

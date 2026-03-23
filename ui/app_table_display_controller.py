@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import tkinter as tk
+from time import perf_counter
 from tkinter import ttk
 from typing import Sequence
 
@@ -16,6 +17,17 @@ from .table import METRIC_LABELS, RecordTable
 LOGGER = logging.getLogger(__name__)
 
 
+def _log_table_display_performance(operation: str, started_at: float, **fields: object) -> None:
+    if not LOGGER.isEnabledFor(logging.DEBUG):
+        return
+    duration_ms = (perf_counter() - started_at) * 1000.0
+    details = ", ".join(f"{key}={value}" for key, value in fields.items())
+    if details:
+        LOGGER.debug("Table display %s took %.1fms (%s)", operation, duration_ms, details)
+        return
+    LOGGER.debug("Table display %s took %.1fms", operation, duration_ms)
+
+
 class _TableDisplayController:
     def __init__(
         self,
@@ -28,8 +40,9 @@ class _TableDisplayController:
         type_filter_menu: tk.Menu,
         type_filter_menu_value: tk.StringVar,
         warn_settings_save_failure,
-        load_records,
+        refresh_records_view,
         current_search_query,
+        current_records,
         ask_string,
         ask_yes_no,
         show_error,
@@ -45,14 +58,47 @@ class _TableDisplayController:
         self._type_filter_menu = type_filter_menu
         self._type_filter_menu_value = type_filter_menu_value
         self._warn_settings_save_failure = warn_settings_save_failure
-        self._load_records = load_records
+        self._refresh_records_view = refresh_records_view
         self._current_search_query = current_search_query
+        self._current_records = current_records
         self._ask_string = ask_string
         self._ask_yes_no = ask_yes_no
         self._show_error = show_error
         self._show_info = show_info
         self._bulk_rename_type = bulk_rename_type
         self._type_filter_value: str | None = None
+        self._type_menu_cache_signature: tuple[int, int] | None = None
+        self._type_menu_cached_records: list[Record] = []
+        self._type_menu_cached_options: list[str] = []
+
+    def _type_menu_storage_signature(self) -> tuple[int, int] | None:
+        try:
+            stat = self._data_manager.path.stat()
+        except OSError:
+            return None
+        return stat.st_mtime_ns, stat.st_size
+
+    def _type_menu_records_and_options(self) -> tuple[list[Record], list[str], str]:
+        current_records = list(self._current_records())
+        signature = self._type_menu_storage_signature()
+
+        if current_records and not self._type_menu_cached_options:
+            records = current_records
+            type_options = self.record_type_options(records)
+            self._type_menu_cache_signature = signature
+            self._type_menu_cached_records = list(records)
+            self._type_menu_cached_options = list(type_options)
+            return records, type_options, "current-records"
+
+        if self._type_menu_cached_options and signature == self._type_menu_cache_signature:
+            return list(self._type_menu_cached_records), list(self._type_menu_cached_options), "cache"
+
+        records = self._data_manager.load_all()
+        type_options = self.record_type_options(records)
+        self._type_menu_cache_signature = signature
+        self._type_menu_cached_records = list(records)
+        self._type_menu_cached_options = list(type_options)
+        return records, type_options, "storage"
 
     def normalized_type_value(self, value: str | None) -> str:
         return (value or "").strip().lower()
@@ -79,17 +125,17 @@ class _TableDisplayController:
     def filtered_records(self, records: list[Record]) -> list[Record]:
         return filtered_records(self.apply_type_filter(records), self._current_search_query())
 
-    def record_matches_current_filter(self, record: Record) -> bool:
+    def record_matches_current_filter(self, record: Record, records: Sequence[Record] | None = None) -> bool:
         query = self._current_search_query()
-        filtered_records_for_query = self.apply_type_filter(self._data_manager.load_all())
         if self._type_filter_value and self.normalized_type_value(record.field1) != self._type_filter_value:
             return False
+        filtered_records_for_query = self.apply_type_filter(list(records) if records is not None else list(self._current_records()))
         return record_matches_query(record, query, filtered_records_for_query)
 
     def set_type_filter(self, value: str | None) -> None:
         self._type_filter_value = value
         self._type_filter_menu_value.set(value or "")
-        self._load_records()
+        self._refresh_records_view()
 
     def _type_option_for_value(self, value: str | None, type_options: Sequence[str]) -> str | None:
         normalized_value = self.normalized_type_value(value)
@@ -253,8 +299,8 @@ class _TableDisplayController:
         )
 
     def show_type_filter_menu(self) -> None:
-        records = self._data_manager.load_all()
-        type_options = self.record_type_options(records)
+        started_at = perf_counter()
+        records, type_options, source = self._type_menu_records_and_options()
 
         self._type_filter_menu.delete(0, "end")
         if type_options:
@@ -286,6 +332,13 @@ class _TableDisplayController:
                 self._type_filter_menu.grab_release()
             except tk.TclError:
                 LOGGER.debug("Unable to release type filter menu grab", exc_info=True)
+        _log_table_display_performance(
+            "show type filter menu",
+            started_at,
+            records=len(records),
+            type_options=len(type_options),
+            source=source,
+        )
 
     def set_gp_highlight_threshold(self, threshold: float | None) -> None:
         self._table.set_gp_highlight_threshold(threshold)

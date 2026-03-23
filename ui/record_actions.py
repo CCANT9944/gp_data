@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Callable
 
 from pydantic import ValidationError
@@ -22,6 +23,7 @@ class RecordActions:
         apply_saved_record: Callable[..., None],
         load_records: Callable[[], None],
         reset_to_new_item: Callable[[], None],
+        current_records: Callable[[], list[Record]] | None = None,
     ):
         self._data_manager = data_manager
         self._show_validation_error = show_validation_error
@@ -33,9 +35,10 @@ class RecordActions:
         self._apply_saved_record = apply_saved_record
         self._load_records = load_records
         self._reset_to_new_item = reset_to_new_item
+        self._current_records = current_records
 
     def record_by_id(self, record_id: str) -> Record | None:
-        records = self._data_manager.load_all()
+        records = list(self._current_records()) if self._current_records is not None else self._data_manager.load_all()
         return next((record for record in records if record.id == record_id), None)
 
     def record_id_or_show_selection_error(self, record_id: str | None, message: str) -> str | None:
@@ -81,6 +84,95 @@ class RecordActions:
         self._load_records()
         self._reset_to_new_item()
         return True
+
+    def import_records(
+        self,
+        rows: Iterable[dict],
+        *,
+        backup_action: str,
+        error_title: str,
+        error_action: str,
+    ) -> tuple[int, int, int, int] | None:
+        working_records = list(self._data_manager.load_all())
+        record_index_by_id = {record.id: index for index, record in enumerate(working_records)}
+        identity_to_record_id = {
+            identity: record.id
+            for record in working_records
+            if (identity := self._data_manager.duplicate_identity(record)) is not None
+        }
+
+        imported_count = 0
+        overwritten_count = 0
+        skipped_duplicates = 0
+        invalid_rows = 0
+
+        for row in rows:
+            overwrite_record_id = str(row.get("__overwrite_record_id") or "").strip() or None
+            payload = {key: value for key, value in dict(row).items() if key != "__overwrite_record_id"}
+            try:
+                if overwrite_record_id is None:
+                    record = Record(**payload)
+                else:
+                    existing_index = record_index_by_id.get(overwrite_record_id)
+                    if existing_index is None:
+                        skipped_duplicates += 1
+                        continue
+                    original_record = working_records[existing_index]
+                    record = Record(
+                        **payload,
+                        id=original_record.id,
+                        created_at=original_record.created_at,
+                    )
+            except (ValidationError, ValueError, TypeError):
+                invalid_rows += 1
+                continue
+
+            identity = self._data_manager.duplicate_identity(record)
+            if overwrite_record_id is None:
+                if identity is not None and identity in identity_to_record_id:
+                    skipped_duplicates += 1
+                    continue
+                if identity is not None:
+                    identity_to_record_id[identity] = record.id
+                working_records.append(record)
+                record_index_by_id[record.id] = len(working_records) - 1
+                imported_count += 1
+                continue
+
+            existing_index = record_index_by_id.get(overwrite_record_id)
+            if existing_index is None:
+                skipped_duplicates += 1
+                continue
+
+            original_record = working_records[existing_index]
+            original_identity = self._data_manager.duplicate_identity(original_record)
+            conflicting_record_id = identity_to_record_id.get(identity) if identity is not None else None
+            if conflicting_record_id is not None and conflicting_record_id != overwrite_record_id:
+                skipped_duplicates += 1
+                continue
+
+            working_records[existing_index] = record
+            if original_identity is not None and original_identity != identity and identity_to_record_id.get(original_identity) == overwrite_record_id:
+                del identity_to_record_id[original_identity]
+            if identity is not None:
+                identity_to_record_id[identity] = overwrite_record_id
+            overwritten_count += 1
+
+        if not imported_count and not overwritten_count:
+            return 0, 0, skipped_duplicates, invalid_rows
+
+        if not self._create_safety_backup_or_confirm(backup_action):
+            return None
+
+        try:
+            self._data_manager.replace_all(working_records)
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._show_storage_error(error_title, error_action, exc)
+            return None
+
+        self._load_records()
+        self._reset_to_new_item()
+        return imported_count, overwritten_count, skipped_duplicates, invalid_rows
 
     def save_existing_record(
         self,

@@ -71,23 +71,16 @@ class InputForm(ttk.Frame):
         self.changes_box = ttk.LabelFrame(self, text="Change history")
         self.changes_box.grid(row=info_row, column=0, columnspan=2, sticky="ew", padx=3, pady=(6, 2))
         self.changes_box.columnconfigure(0, weight=1)
-        self.changes_box.rowconfigure(0, weight=1)
-        self.changes_text = tk.Text(
+        self.changes_summary_label = ttk.Label(
             self.changes_box,
-            height=10,
-            width=34,
-            wrap="word",
-            relief="flat",
-            borderwidth=0,
-            highlightthickness=0,
+            textvariable=self.last_numeric_change_var,
+            justify="left",
+            anchor="w",
+            wraplength=260,
         )
-        self.changes_scrollbar = ttk.Scrollbar(self.changes_box, orient="vertical", command=self.changes_text.yview)
-        self.changes_text.configure(yscrollcommand=self.changes_scrollbar.set)
-        self.changes_text.grid(row=0, column=0, sticky="nsew", padx=(6, 0), pady=4)
-        self.changes_scrollbar.grid(row=0, column=1, sticky="ns", padx=(4, 6), pady=4)
+        self.changes_summary_label.grid(row=0, column=0, sticky="ew", padx=6, pady=4)
         self.history_button = ttk.Button(self.changes_box, text="View full history", command=self.open_change_history)
-        self.history_button.grid(row=1, column=0, columnspan=2, sticky="e", padx=6, pady=(0, 6))
-        self._set_changes_text(self.last_numeric_change_var.get())
+        self.history_button.grid(row=1, column=0, sticky="e", padx=6, pady=(0, 6))
 
         if "field3" in self.entries and "field5" in self.entries:
             self.entries["field3"].bind("<KeyRelease>", lambda e: (self.recalc_field6(), self.recalc_metrics()))
@@ -130,10 +123,6 @@ class InputForm(ttk.Frame):
 
     def _set_changes_text(self, text: str) -> None:
         self.last_numeric_change_var.set(text)
-        self.changes_text.config(state="normal")
-        self.changes_text.delete("1.0", tk.END)
-        self.changes_text.insert("1.0", text)
-        self.changes_text.config(state="disabled")
 
     def _history_entries(self, data: dict) -> list[dict]:
         history = data.get("numeric_change_history")

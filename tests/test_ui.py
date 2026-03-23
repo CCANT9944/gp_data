@@ -7,7 +7,8 @@ import gp_data.ui.app as app_module
 from gp_data import settings as settings_module
 from gp_data.ui import RecordTable, GPDataApp
 from gp_data.ui.app import DIRTY_MODE_BANNER_BG, EDIT_MODE_BANNER_BG, NEW_MODE_BANNER_BG
-from gp_data.ui.table import ROW_TAG_EVEN, ROW_TAG_GP_LOW_EVEN, ROW_TAG_GP_LOW_ODD, ROW_TAG_ODD, SEPARATOR_GLYPH, SEPARATOR_PREFIX, TABLE_HEADING_STYLE, TABLE_STYLE
+from gp_data.ui.csv_preview import CsvPreviewData
+from gp_data.ui.table import ROW_TAG_EVEN, ROW_TAG_GP_LOW_EVEN, ROW_TAG_GP_LOW_ODD, ROW_TAG_ODD, TABLE_HEADING_STYLE, TABLE_STYLE
 from gp_data.models import NumericChange, Record
 
 
@@ -16,7 +17,7 @@ def test_record_table_hides_id_and_uses_iid(tk_root):
 
     # `id` should not be a visible column
     assert "id" not in table["columns"]
-    assert any(str(col).startswith(SEPARATOR_PREFIX) for col in table["columns"])
+    assert list(table["columns"]) == table.get_column_order()
 
     # insert a record and ensure iid is the record.id
     r = Record(field1="alpha")
@@ -52,9 +53,6 @@ def test_record_table_hides_id_and_uses_iid(tk_root):
     assert int(style.configure(TABLE_STYLE)["rowheight"]) == 30
     assert int(style.configure(TABLE_STYLE)["borderwidth"]) == 2
     assert int(style.configure(TABLE_HEADING_STYLE)["borderwidth"]) == 2
-    separator_cols = [col for col in table["columns"] if str(col).startswith(SEPARATOR_PREFIX)]
-    assert separator_cols
-    assert table.heading(separator_cols[0])["text"] == SEPARATOR_GLYPH
 
 
 
@@ -68,7 +66,7 @@ def test_record_table_applies_alternating_row_tags(tk_root):
 
     assert ROW_TAG_ODD in table.item(first_id)["tags"]
     assert ROW_TAG_EVEN in table.item(second_id)["tags"]
-    assert SEPARATOR_GLYPH in table.item(first_id)["values"]
+    assert len(table.item(first_id)["values"]) == len(table.get_column_order())
 
 
 
@@ -134,7 +132,7 @@ def test_record_table_hides_columns_and_keeps_visible_order(tk_root):
     table.set_visible_columns(["field1", "field3", "gp"])
 
     assert table.get_visible_columns() == ["field1", "field3", "gp"]
-    assert list(table.cget("displaycolumns")) == ["field1", f"{SEPARATOR_PREFIX}0", "field3", f"{SEPARATOR_PREFIX}1", "gp"]
+    assert list(table.cget("displaycolumns")) == ["field1", "field3", "gp"]
     assert seen[-1] == ["field1", "field3", "gp"]
 
 
@@ -169,7 +167,7 @@ def test_double_click_uses_visible_column_mapping_when_columns_are_hidden(tk_roo
 
     table.start_cell_edit = fake_start_cell_edit  # type: ignore[method-assign]
     table.identify_row = lambda y: record.id  # type: ignore[method-assign]
-    table.identify_column = lambda x: "#9"  # type: ignore[method-assign]
+    table.identify_column = lambda x: "#5"  # type: ignore[method-assign]
 
     event = type("Event", (), {"x": 0, "y": 0})()
     table._on_double_click(event)
@@ -293,7 +291,7 @@ def test_app_loads_saved_visible_columns(tmp_path, monkeypatch):
     app.withdraw()
 
     assert app.table.get_visible_columns() == ["field1", "field3", "field7"]
-    assert list(app.table.cget("displaycolumns")) == ["field1", f"{SEPARATOR_PREFIX}0", "field3", f"{SEPARATOR_PREFIX}1", "field7"]
+    assert list(app.table.cget("displaycolumns")) == ["field1", "field3", "field7"]
 
     app.destroy()
 
@@ -347,12 +345,18 @@ def test_open_csv_preview_launches_dialog(app_factory, tmp_path, monkeypatch):
     monkeypatch.setattr("gp_data.ui.app.filedialog.askopenfilename", lambda **kwargs: str(csv_path))
     monkeypatch.setattr("gp_data.ui.app.messagebox.askyesnocancel", lambda *args, **kwargs: True)
 
-    def fake_open(parent, csv_path, *, width, height, has_header_row):
+    def fake_open(parent, csv_path, *, width, height, has_header_row, import_field_labels=None, on_import_filtered_rows=None, existing_import_identities=None, existing_import_possible_identities=None, existing_import_exact_match_records=None, existing_import_possible_match_records=None):
         seen["parent"] = parent
         seen["path"] = csv_path
         seen["width"] = width
         seen["height"] = height
         seen["has_header_row"] = has_header_row
+        seen["import_field_labels"] = import_field_labels
+        seen["on_import_filtered_rows"] = on_import_filtered_rows
+        seen["existing_import_identities"] = existing_import_identities
+        seen["existing_import_possible_identities"] = existing_import_possible_identities
+        seen["existing_import_exact_match_records"] = existing_import_exact_match_records
+        seen["existing_import_possible_match_records"] = existing_import_possible_match_records
         return None
 
     monkeypatch.setattr("gp_data.ui.app.open_csv_preview_dialog", fake_open)
@@ -362,6 +366,12 @@ def test_open_csv_preview_launches_dialog(app_factory, tmp_path, monkeypatch):
     assert seen["parent"] is app
     assert seen["path"] == csv_path
     assert seen["has_header_row"] is True
+    assert seen["import_field_labels"] == list(app.form.labels)
+    assert callable(seen["on_import_filtered_rows"])
+    assert seen["existing_import_identities"] == set()
+    assert seen["existing_import_possible_identities"] == set()
+    assert seen["existing_import_exact_match_records"] == {}
+    assert seen["existing_import_possible_match_records"] == {}
     assert int(seen["width"]) >= app.table.winfo_width()
     assert int(seen["height"]) >= app.table.winfo_height()
     assert app._settings.load_csv_preview_last_path() == str(csv_path)
@@ -394,7 +404,7 @@ def test_open_csv_preview_can_generate_default_headers_for_headerless_files(app_
     monkeypatch.setattr("gp_data.ui.app.filedialog.askopenfilename", lambda **kwargs: str(csv_path))
     monkeypatch.setattr("gp_data.ui.app.messagebox.askyesnocancel", lambda *args, **kwargs: False)
 
-    def fake_open(parent, csv_path, *, width, height, has_header_row):
+    def fake_open(parent, csv_path, *, width, height, has_header_row, import_field_labels=None, on_import_filtered_rows=None, existing_import_identities=None, existing_import_possible_identities=None, existing_import_exact_match_records=None, existing_import_possible_match_records=None):
         seen["path"] = csv_path
         seen["has_header_row"] = has_header_row
         return None
@@ -452,7 +462,7 @@ def test_open_last_csv_preview_launches_saved_path(app_factory, tmp_path, monkey
 
     seen: dict[str, object] = {}
 
-    def fake_open(parent, csv_path, *, width, height, has_header_row):
+    def fake_open(parent, csv_path, *, width, height, has_header_row, import_field_labels=None, on_import_filtered_rows=None, existing_import_identities=None, existing_import_possible_identities=None, existing_import_exact_match_records=None, existing_import_possible_match_records=None):
         seen["parent"] = parent
         seen["path"] = csv_path
         seen["has_header_row"] = has_header_row
@@ -480,7 +490,7 @@ def test_open_last_csv_preview_reuses_saved_header_mode(app_factory, tmp_path, m
 
     seen: dict[str, object] = {}
 
-    def fake_open(parent, csv_path, *, width, height, has_header_row):
+    def fake_open(parent, csv_path, *, width, height, has_header_row, import_field_labels=None, on_import_filtered_rows=None, existing_import_identities=None, existing_import_possible_identities=None, existing_import_exact_match_records=None, existing_import_possible_match_records=None):
         seen["path"] = csv_path
         seen["has_header_row"] = has_header_row
         return None
@@ -508,7 +518,7 @@ def test_open_last_csv_preview_shows_processing_message_while_loading(app_factor
 
     seen: dict[str, object] = {}
 
-    def fake_open(parent, csv_path, *, width, height, has_header_row):
+    def fake_open(parent, csv_path, *, width, height, has_header_row, import_field_labels=None, on_import_filtered_rows=None, existing_import_identities=None, existing_import_possible_identities=None, existing_import_exact_match_records=None, existing_import_possible_match_records=None):
         dialog = parent._csv_preview_status_dialog
         seen["dialog_exists"] = bool(dialog is not None and dialog.winfo_exists())
         seen["dialog_title"] = dialog.title() if dialog is not None else ""
@@ -568,7 +578,7 @@ def test_open_recent_csv_preview_launches_selected_saved_path(app_factory, tmp_p
 
     seen: dict[str, object] = {}
 
-    def fake_open(parent, csv_path, *, width, height, has_header_row):
+    def fake_open(parent, csv_path, *, width, height, has_header_row, import_field_labels=None, on_import_filtered_rows=None, existing_import_identities=None, existing_import_possible_identities=None, existing_import_exact_match_records=None, existing_import_possible_match_records=None):
         seen["parent"] = parent
         seen["path"] = csv_path
         seen["has_header_row"] = has_header_row
@@ -582,6 +592,107 @@ def test_open_recent_csv_preview_launches_selected_saved_path(app_factory, tmp_p
     assert seen["path"] == second_csv
     assert seen["has_header_row"] is True
     assert app._settings.load_csv_preview_recent_paths()[0] == str(second_csv)
+
+
+def test_app_can_import_filtered_csv_rows_and_skip_duplicates(app_factory, tmp_path, monkeypatch):
+    app = app_factory()
+    data = CsvPreviewData(
+        path=tmp_path / "preview.csv",
+        encoding="utf-8",
+        headers=["Classname", "ItemDescription", "Selling Price"],
+        rows=[],
+        row_total=3,
+        fully_cached=True,
+    )
+    imported_rows = [
+        {
+            "field1": "Cocktails",
+            "field2": "Mojito",
+            "field3": None,
+            "field4": None,
+            "field5": None,
+            "field6": None,
+            "field7": "8.50",
+        },
+        {
+            "field1": "Cocktails",
+            "field2": "Mojito",
+            "field3": None,
+            "field4": None,
+            "field5": None,
+            "field6": None,
+            "field7": "8.50",
+        },
+        {
+            "field1": "Cocktails",
+            "field2": "Martini",
+            "field3": None,
+            "field4": None,
+            "field5": None,
+            "field6": None,
+            "field7": "9.50",
+        },
+    ]
+    seen_info: dict[str, str] = {}
+
+    monkeypatch.setattr(app._record_actions, "_create_safety_backup_or_confirm", lambda action: True)
+    monkeypatch.setattr("gp_data.ui.app.messagebox.showinfo", lambda title, message: seen_info.update(title=title, message=message))
+
+    app._import_filtered_csv_rows(
+        data,
+        imported_rows,
+    )
+
+    records = app.data_manager.load_all()
+
+    assert [(record.field1, record.field2, record.field7) for record in records] == [
+        ("Cocktails", "Mojito", 8.5),
+        ("Cocktails", "Martini", 9.5),
+    ]
+    assert seen_info["title"] == "Import filtered rows"
+    assert "Imported 2 row(s) from preview.csv." in seen_info["message"]
+    assert "Skipped 1 duplicate row(s)" in seen_info["message"]
+
+
+def test_app_can_import_filtered_csv_rows_and_overwrite_existing_match(app_factory, tmp_path, monkeypatch):
+    app = app_factory()
+    existing = Record(field1="Vermouth", field2="Martini Rosso", field3=7.99, field5="15", field6=0.53, field7=4.00)
+    app.data_manager.save(existing)
+    data = CsvPreviewData(
+        path=tmp_path / "preview.csv",
+        encoding="utf-8",
+        headers=["Classname", "ItemDescription", "Selling Price"],
+        rows=[],
+        row_total=1,
+        fully_cached=True,
+    )
+    imported_rows = [
+        {
+            "field1": "Vermouth",
+            "field2": "50ML Martini Rosso",
+            "field3": None,
+            "field4": None,
+            "field5": None,
+            "field6": None,
+            "field7": "4.75",
+            "__overwrite_record_id": existing.id,
+        }
+    ]
+    seen_info: dict[str, str] = {}
+
+    monkeypatch.setattr(app._record_actions, "_create_safety_backup_or_confirm", lambda action: True)
+    monkeypatch.setattr("gp_data.ui.app.messagebox.showinfo", lambda title, message: seen_info.update(title=title, message=message))
+
+    app._import_filtered_csv_rows(data, imported_rows)
+
+    records = app.data_manager.load_all()
+
+    assert [(record.field1, record.field2, record.field7) for record in records] == [
+        ("Vermouth", "50Ml Martini Rosso", 4.75),
+    ]
+    assert seen_info["title"] == "Import filtered rows"
+    assert "Imported 0 row(s) from preview.csv." in seen_info["message"]
+    assert "Overwrote 1 existing row(s)." in seen_info["message"]
 
 
 def _menu_index_by_label(menu: tk.Menu, expected: str) -> int:

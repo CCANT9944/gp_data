@@ -146,6 +146,19 @@ def _record_to_storage_row(record: Record, field_names: list[str] | None = None)
     return {name: ("" if data.get(name) is None else data.get(name)) for name in field_names}
 
 
+def export_records_to_csv(dest: Path, records: List[Record]) -> None:
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(".tmp")
+    with tmp.open("w", newline="", encoding="utf-8") as handle:
+        header_writer = csv.writer(handle)
+        header_writer.writerow(_csv_header_labels(load_labels()))
+        writer = csv.DictWriter(handle, fieldnames=FIELDNAMES)
+        for record in records:
+            writer.writerow(_record_to_storage_row(record))
+    shutil.move(str(tmp), str(dest))
+
+
 class CSVDataManager:
     """CSV-backed simple persistence layer for Record objects."""
 
@@ -366,7 +379,5 @@ class SQLiteDataManager:
 
     def export_csv(self, dest: Path) -> None:
         dest = Path(dest)
-        dest.parent.mkdir(parents=True, exist_ok=True)
         rows = self.load_all()
-        tmp_dm = CSVDataManager(dest)
-        tmp_dm._write_all(rows)
+        export_records_to_csv(dest, rows)

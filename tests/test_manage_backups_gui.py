@@ -1,10 +1,11 @@
 from datetime import datetime
+from pathlib import Path
 import tkinter as tk
 import tkinter.messagebox as mb
 import pytest
 
 from gp_data.ui import GPDataApp
-from gp_data.ui.backup_dialog import _build_backup_preview
+from gp_data.ui.backup_dialog import _build_backup_preview, open_manage_backups_dialog
 from gp_data.data_manager import DataManager
 from gp_data.models import Record
 
@@ -88,7 +89,9 @@ def test_manage_backups_dialog_lists_and_allows_delete_and_restore(tmp_path):
 
     # patch confirmation dialogs
     orig = mb.askyesno
+    orig_showinfo = mb.showinfo
     mb.askyesno = lambda *a, **k: True
+    mb.showinfo = lambda *a, **k: None
     try:
         delete_btn = button_map['Delete']
         restore_btn = button_map['Restore']
@@ -113,6 +116,7 @@ def test_manage_backups_dialog_lists_and_allows_delete_and_restore(tmp_path):
         assert any(r.field1.lower() == 'changed' for r in rows)
     finally:
         mb.askyesno = orig
+        mb.showinfo = orig_showinfo
 
     dlg.destroy()
     app.destroy()
@@ -142,3 +146,50 @@ def test_build_backup_preview_for_sqlite_backup_with_uri_special_characters_in_n
     assert "Type: SQLite backup" in preview
     assert "Records: 1" in preview
     assert "one" in preview.lower()
+
+
+def test_manage_backups_dialog_reuses_cached_preview(tmp_path):
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    root.withdraw()
+
+    p = tmp_path / "data.db"
+    dm = DataManager(p)
+    dm.save(Record(field1='one', field2='first'))
+    backup = dm.create_timestamped_backup()
+    seen_paths: list[Path] = []
+
+    def fake_build_preview(path):
+        seen_paths.append(path)
+        return f"Preview for {path.name}"
+
+    dlg = open_manage_backups_dialog(root, dm, build_preview=fake_build_preview)
+    dlg.update_idletasks()
+
+    def _find(root_widget, cls):
+        for widget in root_widget.winfo_children():
+            if isinstance(widget, cls):
+                return widget
+            found = _find(widget, cls)
+            if found is not None:
+                return found
+        return None
+
+    lb = _find(dlg, tk.Listbox)
+    assert lb is not None
+
+    labels = lb.get(0, 'end')
+    idx = _find_backup_index(labels, _backup_label(backup))
+    assert idx is not None
+
+    lb.selection_clear(0, 'end')
+    lb.selection_set(idx)
+    lb.event_generate('<<ListboxSelect>>')
+    lb.event_generate('<<ListboxSelect>>')
+
+    assert seen_paths == [backup]
+
+    dlg.destroy()
+    root.destroy()

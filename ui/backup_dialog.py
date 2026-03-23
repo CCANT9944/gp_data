@@ -5,6 +5,7 @@ import sqlite3
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
+from time import perf_counter
 from tkinter import messagebox, ttk
 from typing import Callable
 
@@ -12,6 +13,17 @@ from .storage_feedback import describe_storage_error
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _log_backup_dialog_performance(operation: str, started_at: float, **fields: object) -> None:
+    if not LOGGER.isEnabledFor(logging.DEBUG):
+        return
+    duration_ms = (perf_counter() - started_at) * 1000.0
+    details = ", ".join(f"{key}={value}" for key, value in fields.items())
+    if details:
+        LOGGER.debug("Backup dialog %s took %.1fms (%s)", operation, duration_ms, details)
+        return
+    LOGGER.debug("Backup dialog %s took %.1fms", operation, duration_ms)
 
 
 def _format_backup_label(path: Path) -> str:
@@ -80,15 +92,20 @@ def _build_sqlite_backup_preview(path: Path) -> str:
 
 
 def _build_backup_preview(path: Path) -> str:
+    started_at = perf_counter()
     if _is_sqlite_backup(path):
         try:
-            return _build_sqlite_backup_preview(path)
+            preview_text = _build_sqlite_backup_preview(path)
+            _log_backup_dialog_performance("build backup preview", started_at, path=path.name, kind="sqlite")
+            return preview_text
         except (sqlite3.DatabaseError, OSError, ValueError) as exc:
             lines = _preview_metadata(path)
             lines.append("Type: SQLite backup")
             lines.append("")
             lines.append(f"Unable to inspect database contents: {exc}")
-            return "\n".join(lines)
+            preview_text = "\n".join(lines)
+            _log_backup_dialog_performance("build backup preview", started_at, path=path.name, kind="sqlite-error")
+            return preview_text
 
     lines = _preview_metadata(path)
     lines.append("Type: Text backup")
@@ -98,10 +115,17 @@ def _build_backup_preview(path: Path) -> str:
         lines.append(text[:2000])
     except (OSError, UnicodeDecodeError) as exc:
         lines.append(f"Unable to preview text contents: {exc}")
-    return "\n".join(lines)
+    preview_text = "\n".join(lines)
+    _log_backup_dialog_performance("build backup preview", started_at, path=path.name, kind="text")
+    return preview_text
 
 
-def open_manage_backups_dialog(parent: tk.Misc, data_manager, on_restored: Callable[[], None] | None = None) -> tk.Toplevel:
+def open_manage_backups_dialog(
+    parent: tk.Misc,
+    data_manager,
+    on_restored: Callable[[], None] | None = None,
+    build_preview: Callable[[Path], str] = _build_backup_preview,
+) -> tk.Toplevel:
     win = tk.Toplevel(parent)
     win.title("Manage Backups")
     win.geometry("720x360")
@@ -132,6 +156,7 @@ def open_manage_backups_dialog(parent: tk.Misc, data_manager, on_restored: Calla
     preview.pack(fill="both", expand=True)
 
     backup_paths: list[Path] = []
+    preview_cache: dict[Path, str] = {}
 
     def _selected_backup_path() -> Path | None:
         selection = lb.curselection()
@@ -144,13 +169,19 @@ def open_manage_backups_dialog(parent: tk.Misc, data_manager, on_restored: Calla
 
     def _refresh_list() -> None:
         nonlocal backup_paths
+        started_at = perf_counter()
         backup_paths = list(data_manager.list_backups())
+        preview_cache_keys = set(backup_paths)
+        for cached_path in list(preview_cache):
+            if cached_path not in preview_cache_keys:
+                del preview_cache[cached_path]
         lb.delete(0, "end")
         for path in backup_paths:
             lb.insert("end", _format_backup_label(path))
         preview.delete("1.0", "end")
         btn_restore.config(state="disabled")
         btn_delete.config(state="disabled")
+        _log_backup_dialog_performance("refresh backups list", started_at, backups=len(backup_paths))
 
     _refresh_list()
 
@@ -161,10 +192,17 @@ def open_manage_backups_dialog(parent: tk.Misc, data_manager, on_restored: Calla
             btn_restore.config(state="disabled")
             btn_delete.config(state="disabled")
             return
+        started_at = perf_counter()
         preview.delete("1.0", "end")
-        preview.insert("1.0", _build_backup_preview(path))
+        cached = path in preview_cache
+        preview_text = preview_cache.get(path)
+        if preview_text is None:
+            preview_text = build_preview(path)
+            preview_cache[path] = preview_text
+        preview.insert("1.0", preview_text)
         btn_restore.config(state="normal")
         btn_delete.config(state="normal")
+        _log_backup_dialog_performance("select backup", started_at, path=path.name, cached=cached)
 
     def _do_restore() -> None:
         path = _selected_backup_path()

@@ -60,6 +60,9 @@ class _PreviewRefreshControllerBase:
     def _update_tree_headings(self) -> None:
         raise NotImplementedError
 
+    def _apply_displaycolumns(self) -> None:
+        raise NotImplementedError
+
     def _update_summary_label(self) -> None:
         raise NotImplementedError
 
@@ -110,7 +113,7 @@ class _PreviewRefreshControllerBase:
     def _show_loading_placeholder(self) -> None:
         if not self._tree.winfo_exists():
             return
-        self._tree.configure(displaycolumns=self._view_state.visible_column_ids(self._all_column_ids))
+        self._apply_displaycolumns()
         self._update_tree_headings()
         children = self._tree.get_children()
         placeholder_row = self._loading_placeholder_row()
@@ -127,7 +130,7 @@ class _PreviewRefreshControllerBase:
         self._render_token += 1
         load_token = self._load_token
         rendered_row_limit = self._rendered_row_limit()
-        self._tree.configure(displaycolumns=self._view_state.visible_column_ids(self._all_column_ids))
+        self._apply_displaycolumns()
         self._update_tree_headings()
 
         filter_state = self._current_filter_state()

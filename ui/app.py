@@ -16,7 +16,7 @@ from .app_record_controllers import _RecordFormActionsController, _RecordListCon
 from .app_storage_controller import _AppStorageActionsController
 from .app_table_display_controller import _TableDisplayController
 from .backup_dialog import open_manage_backups_dialog
-from .csv_preview import CsvPreviewError, open_csv_preview_dialog
+from .csv_preview import CsvPreviewData, CsvPreviewError, open_csv_preview_dialog
 from .record_actions import RecordActions
 from .storage_feedback import describe_backup_failure, describe_startup_storage_issue, describe_storage_error
 from .view_helpers import focus_record_in_table
@@ -39,6 +39,7 @@ class GPDataApp(tk.Tk):
     def __init__(self, storage_path: Path | None = None):
         super().__init__()
         self.title("GP Data Manager")
+        self._initial_geometry_pending = False
 
         self.data_manager = DataManager(storage_path)
         self._settings = SettingsStore()
@@ -55,6 +56,7 @@ class GPDataApp(tk.Tk):
             apply_saved_record=self._apply_saved_record,
             load_records=self.load_records,
             reset_to_new_item=self._reset_to_new_item,
+            current_records=self._current_loaded_records,
         )
         app_settings = self._settings.load()
         labels = app_settings.labels
@@ -95,7 +97,7 @@ class GPDataApp(tk.Tk):
         self._apply_layout(layout)
         self._build_runtime_controllers()
         self._bind_runtime_events()
-        self._run_startup_sequence(gp_highlight_threshold)
+        self._run_startup_sequence(app_settings)
 
     def _apply_layout(self, layout) -> None:
         self.form = layout.form
@@ -130,8 +132,7 @@ class GPDataApp(tk.Tk):
             ),
             lambda title, message: messagebox.askyesnocancel(title, message),
             lambda title, message: messagebox.showerror(title, message),
-            lambda csv_path, width, height, has_header_row: open_csv_preview_dialog(
-                self,
+            lambda csv_path, width, height, has_header_row: self._open_csv_preview_dialog(
                 csv_path,
                 width=width,
                 height=height,
@@ -175,8 +176,9 @@ class GPDataApp(tk.Tk):
             self._type_filter_menu,
             self._type_filter_menu_value,
             self._warn_settings_save_failure,
-            self.load_records,
+            self._refresh_record_view,
             self._current_search_query,
+            self._current_loaded_records,
             lambda *args, **kwargs: simpledialog.askstring(*args, **kwargs),
             lambda title, message: messagebox.askyesno(title, message),
             lambda title, message: messagebox.showerror(title, message),
@@ -211,26 +213,47 @@ class GPDataApp(tk.Tk):
         self.table.bind("<Button-3>", self._on_row_right_click)
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
-    def _run_startup_sequence(self, gp_highlight_threshold: float | None) -> None:
-        self._update_open_last_csv_button_state()
-        self.table.set_gp_highlight_threshold(gp_highlight_threshold)
+    def _run_startup_sequence(self, app_settings) -> None:
+        self._update_open_last_csv_button_state(
+            recent_paths=app_settings.csv_preview_recent_paths,
+            last_path=app_settings.csv_preview_last_path,
+        )
+        self.table.set_gp_highlight_threshold(app_settings.gp_highlight_threshold)
         self._apply_initial_window_geometry()
         self._update_form_mode_ui()
         self.load_records()
         self._warn_if_storage_issue()
 
     def _apply_initial_window_geometry(self) -> None:
-        self.update_idletasks()
-        width = max(DEFAULT_WINDOW_WIDTH, self.winfo_reqwidth())
-        height = max(DEFAULT_WINDOW_HEIGHT, self.winfo_reqheight())
-
         screen_width = max(DEFAULT_WINDOW_WIDTH, self.winfo_screenwidth() - WINDOW_SCREEN_MARGIN)
         screen_height = max(DEFAULT_WINDOW_HEIGHT, self.winfo_screenheight() - WINDOW_SCREEN_MARGIN)
-        width = min(width, screen_width)
-        height = min(height, screen_height)
+        width = min(DEFAULT_WINDOW_WIDTH, screen_width)
+        height = min(DEFAULT_WINDOW_HEIGHT, screen_height)
 
         self.geometry(f"{width}x{height}")
         self.minsize(width, height)
+        if not self._initial_geometry_pending:
+            self._initial_geometry_pending = True
+            self.after_idle(self._finalize_initial_window_geometry)
+
+    def _finalize_initial_window_geometry(self) -> None:
+        self._initial_geometry_pending = False
+        try:
+            if not self.winfo_exists():
+                return
+            self.update_idletasks()
+            width = max(DEFAULT_WINDOW_WIDTH, self.winfo_reqwidth())
+            height = max(DEFAULT_WINDOW_HEIGHT, self.winfo_reqheight())
+
+            screen_width = max(DEFAULT_WINDOW_WIDTH, self.winfo_screenwidth() - WINDOW_SCREEN_MARGIN)
+            screen_height = max(DEFAULT_WINDOW_HEIGHT, self.winfo_screenheight() - WINDOW_SCREEN_MARGIN)
+            width = min(width, screen_width)
+            height = min(height, screen_height)
+
+            self.geometry(f"{width}x{height}")
+            self.minsize(width, height)
+        except tk.TclError:
+            LOGGER.debug("Unable to finalize initial window geometry", exc_info=True)
 
     def _warn_if_storage_issue(self) -> None:
         issue = self.data_manager.storage_issue()
@@ -331,8 +354,16 @@ class GPDataApp(tk.Tk):
     def _filtered_records(self, records: list[Record]) -> list[Record]:
         return self._table_display.filtered_records(records)
 
-    def _record_matches_current_filter(self, record: Record) -> bool:
-        return self._table_display.record_matches_current_filter(record)
+    def _record_matches_current_filter(self, record: Record, records: Sequence[Record] | None = None) -> bool:
+        return self._table_display.record_matches_current_filter(record, records)
+
+    def _current_loaded_records(self) -> list[Record]:
+        if hasattr(self, "_record_list"):
+            return self._record_list.loaded_records
+        return self.data_manager.load_all()
+
+    def _refresh_record_view(self) -> None:
+        self._record_list.refresh_displayed_records(operation="refresh record view")
 
     def _set_gp_highlight_threshold(self, threshold: float | None) -> None:
         self._table_display.set_gp_highlight_threshold(threshold)
@@ -392,8 +423,41 @@ class GPDataApp(tk.Tk):
         self.update_idletasks()
         return max(self.table.winfo_width(), 900), max(self.table.winfo_height(), 500)
 
-    def _update_open_last_csv_button_state(self) -> None:
-        self._csv_preview_launch.update_open_last_csv_button_state()
+    def _open_csv_preview_dialog(
+        self,
+        csv_path: Path,
+        *,
+        width: int,
+        height: int,
+        has_header_row: bool,
+    ) -> tk.Toplevel:
+        (
+            existing_import_identities,
+            existing_import_possible_identities,
+            existing_import_exact_match_records,
+            existing_import_possible_match_records,
+        ) = self._current_import_review_context()
+        return open_csv_preview_dialog(
+            self,
+            csv_path,
+            width=width,
+            height=height,
+            has_header_row=has_header_row,
+            import_field_labels=list(self.form.labels),
+            on_import_filtered_rows=self._import_filtered_csv_rows,
+            existing_import_identities=existing_import_identities,
+            existing_import_possible_identities=existing_import_possible_identities,
+            existing_import_exact_match_records=existing_import_exact_match_records,
+            existing_import_possible_match_records=existing_import_possible_match_records,
+        )
+
+    def _update_open_last_csv_button_state(
+        self,
+        *,
+        recent_paths: Sequence[str] | None = None,
+        last_path: str | None = None,
+    ) -> None:
+        self._csv_preview_launch.update_open_last_csv_button_state(recent_paths=recent_paths, last_path=last_path)
 
     @property
     def _csv_preview_status_var(self) -> tk.StringVar:
@@ -416,6 +480,93 @@ class GPDataApp(tk.Tk):
             remember=remember,
             has_header_row=has_header_row,
             status_message=status_message,
+        )
+
+    def _import_filtered_csv_rows(
+        self,
+        data: CsvPreviewData,
+        imported_rows: list[dict[str, object]],
+    ) -> None:
+        result = self._record_actions.import_records(
+            imported_rows,
+            backup_action="importing filtered CSV rows",
+            error_title="Import failed",
+            error_action="import the filtered CSV rows",
+        )
+        if result is None:
+            return
+
+        imported_count, overwritten_count, skipped_duplicates, invalid_rows = result
+        message_lines = [f"Imported {imported_count} row(s) from {data.path.name}."]
+        if overwritten_count:
+            message_lines.append(f"Overwrote {overwritten_count} existing row(s).")
+        if skipped_duplicates:
+            message_lines.append(f"Skipped {skipped_duplicates} duplicate row(s) with the same Type + Name.")
+        if invalid_rows:
+            message_lines.append(f"Skipped {invalid_rows} invalid row(s).")
+
+        messagebox.showinfo("Import filtered rows", "\n".join(message_lines))
+
+    def _current_import_duplicate_identities(self) -> set[tuple[str, str]]:
+        return {
+            identity
+            for record in self.data_manager.load_all()
+            if (identity := self.data_manager.duplicate_identity(record)) is not None
+        }
+
+    def _current_import_possible_duplicate_identities(self) -> set[tuple[str, str]]:
+        return {
+            identity
+            for record in self.data_manager.load_all()
+            if (identity := self.data_manager.possible_duplicate_identity(record)) is not None
+        }
+
+    def _current_import_exact_match_records(self) -> dict[tuple[str, str], Record]:
+        return {
+            identity: record
+            for record in self.data_manager.load_all()
+            if (identity := self.data_manager.duplicate_identity(record)) is not None
+        }
+
+    def _current_import_possible_match_records(self) -> dict[tuple[str, str], list[Record]]:
+        match_records: dict[tuple[str, str], list[Record]] = {}
+        for record in self.data_manager.load_all():
+            identity = self.data_manager.possible_duplicate_identity(record)
+            if identity is None:
+                continue
+            match_records.setdefault(identity, []).append(record)
+        return match_records
+
+    def _current_import_review_context(
+        self,
+    ) -> tuple[
+        set[tuple[str, str]],
+        set[tuple[str, str]],
+        dict[tuple[str, str], Record],
+        dict[tuple[str, str], list[Record]],
+    ]:
+        duplicate_identities: set[tuple[str, str]] = set()
+        possible_duplicate_identities: set[tuple[str, str]] = set()
+        exact_match_records: dict[tuple[str, str], Record] = {}
+        possible_match_records: dict[tuple[str, str], list[Record]] = {}
+
+        for record in self.data_manager.load_all():
+            duplicate_identity = self.data_manager.duplicate_identity(record)
+            if duplicate_identity is not None:
+                duplicate_identities.add(duplicate_identity)
+                exact_match_records[duplicate_identity] = record
+
+            possible_duplicate_identity = self.data_manager.possible_duplicate_identity(record)
+            if possible_duplicate_identity is None:
+                continue
+            possible_duplicate_identities.add(possible_duplicate_identity)
+            possible_match_records.setdefault(possible_duplicate_identity, []).append(record)
+
+        return (
+            duplicate_identities,
+            possible_duplicate_identities,
+            exact_match_records,
+            possible_match_records,
         )
 
     def _set_csv_preview_status(self, message: str) -> None:

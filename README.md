@@ -35,18 +35,28 @@ numeric change history per item.
 - If `Edit type...` renames a type to one that already exists, the app asks before merging those matching records into the existing target type.
 - Click the `GP` column header to open a small menu with highlight presets, a custom threshold option, and a clear option.
 - The GP highlight threshold is saved in your local `settings.json` and comes back after restart.
-- `Open CSV` opens a separate read-only raw CSV viewer for the selected file.
+- `Open CSV` opens a separate raw CSV viewer for the selected file.
 - `Open CSV` now asks whether the file already has a header row; if it does not, the preview generates `Column 1`, `Column 2`, `Column 3`, and so on, and keeps the first row as data.
 - `Last CSV` reopens the most recently viewed CSV from a remembered local path so you do not need to browse for the same file every time.
 - `Recent CSVs` shows the latest remembered CSV files so you can jump back to more than one file without browsing again.
 - Opening a CSV, combining sessions, and preparing analysis now show a centered processing dialog so long preview actions are clearly visible.
 - The raw CSV viewer includes a global text search across all visible data, and it runs when you press `Enter` in the search box so you can finish typing first.
 - The raw CSV viewer lets you choose which columns stay visible, and it remembers that choice per CSV path using column headers when possible so reordered files reopen more sensibly.
+- Reopening a CSV with remembered preview state is also faster because the viewer restores the saved visible columns immediately and finishes the heavier initial row refresh right after the window appears.
 - Clicking a CSV preview column header opens a compact popup with a local search box, a scrollable value list, exact-value filtering for that column, and sort controls for that same column.
 - The popup sorts text columns A-to-Z or Z-to-A and sorts numeric columns low-to-high or high-to-low using numeric order instead of text order.
 - The raw CSV viewer remembers the active sort per CSV path and shows the current sort in the preview summary so you can see it without reopening the popup.
 - The raw CSV viewer also shows a small header-mode label so you can see whether the file is using `Row 1` headers or generated column names.
 - The raw CSV viewer includes `Preview` and `Analysis` workspace buttons, and `Analysis` switches the same preview window into an analysis workspace for the current preview result, using only the rows that currently match the preview filters, the active combine-sessions state, and the columns that are still visible.
+- The raw CSV viewer also includes an `Import Filtered Rows` button. If you have selected preview rows, the import uses those selected rows first; otherwise it uses the full current filtered result.
+- Import opens a mapping step and then a review table before saving anything into the main app data.
+- The mapping step treats buying price and selling price separately, so a `Selling Price` CSV column does not auto-fill the buying-price field by default.
+- The review table lets you include or exclude rows, edit mapped values, import only rows that validate successfully, and overwrite a matched saved row when you explicitly choose that path.
+- The review table separates saved-data matches from import-batch conflicts, so statuses that mention another included import row refer to the current CSV selection rather than the main database.
+- Import-batch possible-duplicate checks now keep size markers such as `125ml`, `175ml`, and `250ml` distinct from each other, while saved-data possible matches can still ignore size and format tokens when looking for an overwrite candidate.
+- When a row is blocked by another included import row, the selected-row panel shows exactly which earlier import row it conflicts with and includes a short summary of that blocking row.
+- If one imported row has several possible saved matches, the review table lets you choose which saved row should be overwritten instead of silently picking one.
+- The import summary reports how many rows were imported and how many duplicate or invalid rows were skipped.
 - The analysis workspace can show a summary table, bar chart, pie chart, or histogram so you can inspect top visible values and numeric spread without exporting the CSV first; bar charts can show negative values, while pie charts only render positive values.
 - Bar charts in the analysis workspace can be limited to `All`, `First 5`, `First 10`, `First 20`, `Last 5`, `Last 10`, or `Last 20` items, and can be switched between vertical and horizontal layouts.
 - Switching back to `Preview` keeps the same CSV window open, and returning to `Analysis` reuses the last analysis snapshot when the preview filters and visible columns have not changed.
@@ -71,8 +81,8 @@ numeric change history per item.
 - Export writes the currently displayed rows.
 - Restore from the UI is handled through `Manage backups`, which includes preview, restore, and delete operations for backups created for the current storage file.
 - Table layout is customizable:
-  - drag headers to reorder columns
-  - resize columns and keep the new widths
+  - drag the whole header left or right to reorder columns
+  - drag the divider line between two headers to resize columns and keep the new widths
   - hide/show columns from the `Columns` button
   - layout is remembered after restart
 - The `Change history` box shows recent numeric changes for the selected item, and `View full history` opens the complete stored history for that row.
@@ -164,7 +174,7 @@ python main.py cleanup
 
 - `main.py`: compatibility entrypoint
 - `cli.py`: command-line logic
-- `ui/app.py`: top-level Tkinter shell and composition root, with phased startup and public callbacks kept stable for tests and callers
+- `ui/app.py`: top-level Tkinter shell and composition root, with phased startup, startup settings reuse for recent-CSV initialization, and public callbacks kept stable for tests and callers
 - `ui/app_layout.py`: main-window widget, menu, and processing-status construction extracted from `ui/app.py`
 - `ui/app_csv_preview_controller.py`: remembered CSV path, header-mode, and preview-launch actions
 - `ui/app_storage_controller.py`: export and manage-backups actions
@@ -198,19 +208,19 @@ python main.py cleanup
 - `ui/csv_preview/pipeline.py`: owns preview search, filtering, sort, combine-session, and cache decisions that should stay independent from Tk widgets.
 - `ui/csv_preview/preview_pipeline.py`: provides the dialog-facing preview pipeline class while still routing runtime hooks through the dialog module for test and compatibility stability.
 - `ui/csv_preview/runtime_hooks.py`: centralizes the preview runtime hook assignment for the dialog-facing pipeline and view state while letting `dialog.py` keep late-bound compatibility wrappers.
-- `ui/csv_preview/preview_settings.py`: restores remembered preview columns and sort per CSV path and builds the save callbacks used by the preview window.
+- `ui/csv_preview/preview_settings.py`: restores remembered preview columns and sort per CSV path from one loaded settings snapshot and builds the save callbacks used by the preview window.
 - `ui/csv_preview/preview_state.py`: holds the preview summary and view-state dataclasses used by the table controller.
 - `ui/csv_preview/popup_controller.py`: owns header popup and preview export behavior, including async distinct-value loading and exact-value filter application.
 - `ui/csv_preview/refresh_controller.py`: owns metadata refresh, filtered refresh polling, loading placeholders, and header-filter prewarm orchestration for the preview table.
 - `ui/csv_preview/row_combiner.py`: owns combined-session row iteration and pre-header-filter row generation for the preview pipeline.
 - `ui/csv_preview/table_controller.py`: owns the preview table controller and popup-export adapter used by the dialog.
-- `ui/csv_preview/table_helpers.py`: owns the column chooser dialog, visible-column manager, and chunked Treeview row renderer.
-- `ui/csv_preview/dialog.py`: remains the public preview entrypoint and compatibility surface, while also owning the `Preview` / `Analysis` workspace switching and same-state analysis snapshot reuse used by the raw CSV viewer.
+- `ui/csv_preview/table_helpers.py`: owns the column chooser dialog, visible-column manager, chunked Treeview row renderer, and the no-op heading/display-column update skips used to keep preview refreshes lighter.
+- `ui/csv_preview/dialog.py`: remains the public preview entrypoint and compatibility surface, while also owning the `Preview` / `Analysis` workspace switching, same-state analysis snapshot reuse, immediate remembered-column restore, and idle-deferred first refresh used by the raw CSV viewer.
 - The dialog currently reuses the last analysis snapshot for the same preview state, but it rebuilds the analysis widgets when you return to `Analysis`, so chart-control selections still reset to their defaults.
 
 ## Main App Architecture
 
-- `ui/app.py` is now mainly a wiring layer for the root window, phased startup, and public callbacks.
+- `ui/app.py` is now mainly a wiring layer for the root window, phased startup, startup settings reuse, and public callbacks.
 - `ui/app_layout.py` owns the main-window widget, menu, and processing-status assembly so `GPDataApp` can stay focused on runtime wiring.
 - Main-window behaviors are split into small focused controllers so backup/export, CSV preview launch, table display state, form-mode state, and record list/form actions are easier to reason about independently.
 - `RecordActions.save_inline_edit(...)` now owns inline table-edit save behavior so form saves and inline saves share the same record-action layer.
