@@ -23,6 +23,7 @@ numeric change history per item.
 - Use `Save changes` to commit form edits, or press `Enter` in the last field while an item is loaded.
 - The form shows a highlighted mode banner so edit mode stands out clearly from new-item mode.
 - If the form has unsaved edits, the mode banner switches to an `UNSAVED CHANGES` state.
+- Loading a selected row with long names or longer numeric change history now keeps the left-side form layout stable instead of shifting the input fields.
 - Switching rows, returning to `New item`, deleting the selected row, or closing the window asks before discarding unsaved form changes.
 - `Delete selected` is only active when a table row is selected.
 - Add and edit flows warn when the same `Type + Name` already exists.
@@ -222,6 +223,7 @@ python main.py cleanup
 
 - `ui/app.py` is now mainly a wiring layer for the root window, phased startup, startup settings reuse, and public callbacks.
 - `ui/app_layout.py` owns the main-window widget, menu, and processing-status assembly so `GPDataApp` can stay focused on runtime wiring.
+- `ui/app_layout.py` also freezes the left form pane at its initial natural width so edit-mode banner changes do not repack the form while rows are loaded.
 - Main-window behaviors are split into small focused controllers so backup/export, CSV preview launch, table display state, form-mode state, and record list/form actions are easier to reason about independently.
 - `RecordActions.save_inline_edit(...)` now owns inline table-edit save behavior so form saves and inline saves share the same record-action layer.
 - The compatibility re-export shims in `ui/app_controllers.py` and `ui/app_display_controllers.py` exist to keep imports stable while the concrete code lives in narrower modules.

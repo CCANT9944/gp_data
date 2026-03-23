@@ -81,11 +81,17 @@ def build_app_layout(
         anchor="w",
         padx=8,
         pady=6,
+        justify="left",
         relief="solid",
         borderwidth=1,
         font=("TkDefaultFont", 9, "bold"),
     )
     form_mode_label.pack(fill="x", pady=(6, 0))
+    left.update_idletasks()
+    left_width = max(form.winfo_reqwidth(), form_mode_label.winfo_reqwidth())
+    left.configure(width=left_width)
+    left.pack_propagate(False)
+    form_mode_label.configure(wraplength=max(left_width - 16, 1))
 
     right = ttk.Frame(container)
     right.pack(side="left", fill="both", expand=True)

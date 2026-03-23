@@ -1611,6 +1611,35 @@ def test_selecting_row_updates_mode_label_and_enables_save(tmp_path):
     app.destroy()
 
 
+def test_selecting_row_with_long_values_does_not_expand_left_form_column(tmp_path):
+    try:
+        app = GPDataApp(storage_path=tmp_path / "data.db")
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    app.withdraw()
+    app.update_idletasks()
+
+    initial_left_width = app.form.master.winfo_reqwidth()
+    initial_window_width = app.winfo_reqwidth()
+
+    record = Record(
+        field1="Very Long Category Name For Banner Stability",
+        field2="Very Long Product Name That Previously Expanded The Left Pane During Row Load",
+    )
+    app.data_manager.save(record)
+    app.load_records()
+
+    app.table.selection_set(record.id)
+    app._on_table_select()
+    app.update_idletasks()
+
+    assert app._form_mode_var.get().startswith("EDITING:")
+    assert app.form.master.winfo_reqwidth() <= initial_left_width
+    assert app.winfo_reqwidth() <= initial_window_width
+
+    app.destroy()
+
+
 def test_selecting_new_row_can_cancel_discarding_unsaved_changes(tmp_path, monkeypatch):
     try:
         app = GPDataApp(storage_path=tmp_path / "data.db")

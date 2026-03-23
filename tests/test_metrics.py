@@ -92,3 +92,50 @@ def test_get_values_tolerates_recalc_field6_tclerror(monkeypatch):
     assert values['field1'] == 'beer'
 
     root.destroy()
+
+
+def test_loading_record_values_does_not_expand_input_form_width():
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("Tk not available in this environment")
+    root.withdraw()
+
+    frm = tk.Frame(root)
+    frm.pack()
+    inp = InputForm(frm)
+    inp.update_idletasks()
+    initial_width = inp.winfo_reqwidth()
+
+    inp.set_values(
+        {
+            "field1": "white wine",
+            "field2": "175ml chardonnay reserve",
+            "field7": 11.5,
+            "numeric_change_history": [
+                {
+                    "field_name": "field7",
+                    "from_value": 9.5,
+                    "to_value": 11.5,
+                    "changed_at": "2026-03-23T18:30:00+00:00",
+                },
+                {
+                    "field_name": "field3",
+                    "from_value": 18.0,
+                    "to_value": 19.5,
+                    "changed_at": "2026-03-23T18:40:00+00:00",
+                },
+                {
+                    "field_name": "field5",
+                    "from_value": 150,
+                    "to_value": 175,
+                    "changed_at": "2026-03-23T18:50:00+00:00",
+                },
+            ],
+        }
+    )
+    inp.update_idletasks()
+
+    assert inp.winfo_reqwidth() <= initial_width
+
+    root.destroy()

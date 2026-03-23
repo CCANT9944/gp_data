@@ -76,6 +76,7 @@ class InputForm(ttk.Frame):
             textvariable=self.last_numeric_change_var,
             justify="left",
             anchor="w",
+            width=34,
             wraplength=260,
         )
         self.changes_summary_label.grid(row=0, column=0, sticky="ew", padx=6, pady=4)
