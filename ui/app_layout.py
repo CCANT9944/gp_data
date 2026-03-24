@@ -14,8 +14,11 @@ from .view_helpers import ProcessingDialogHandle
 class _AppLayout:
     form: InputForm
     table: RecordTable
+    formula_panel: ttk.LabelFrame
+    formula_panel_text: tk.Text
     form_mode_var: tk.StringVar
     form_mode_label: tk.Label
+    manage_formula_settings_button: ttk.Button
     save_changes_button: ttk.Button
     delete_selected_button: ttk.Button
     open_last_csv_button: ttk.Button
@@ -48,6 +51,7 @@ def build_app_layout(
     on_save_changes,
     on_delete,
     on_manage_columns,
+    on_manage_formula_settings,
     on_open_csv_preview,
     on_open_last_csv_preview,
     on_manage_backups,
@@ -109,6 +113,11 @@ def build_app_layout(
     )
     table.pack(fill="both", expand=True)
 
+    formula_panel = ttk.LabelFrame(right, text="Calculation details")
+    formula_panel_text = tk.Text(formula_panel, height=11, wrap="word")
+    formula_panel_text.pack(fill="both", expand=True, padx=8, pady=8)
+    formula_panel_text.configure(state="disabled")
+
     controls = ttk.Frame(owner)
     controls.pack(fill="x", padx=8, pady=6)
     ttk.Button(controls, text="New item", command=on_new_item).pack(side="left", padx=4)
@@ -117,6 +126,8 @@ def build_app_layout(
     delete_selected_button = ttk.Button(controls, text="Delete selected", command=on_delete)
     delete_selected_button.pack(side="left", padx=4)
     ttk.Button(controls, text="Columns", command=on_manage_columns).pack(side="left", padx=4)
+    manage_formula_settings_button = ttk.Button(controls, text="Formula settings", command=on_manage_formula_settings)
+    manage_formula_settings_button.pack(side="left", padx=4)
     ttk.Button(controls, text="Rename fields", command=form.rename_fields).pack(side="left", padx=4)
     ttk.Button(controls, text="Open CSV", command=on_open_csv_preview).pack(side="left", padx=4)
     open_last_csv_button = ttk.Button(controls, text="Last CSV", command=on_open_last_csv_preview)
@@ -161,8 +172,11 @@ def build_app_layout(
     return _AppLayout(
         form=form,
         table=table,
+        formula_panel=formula_panel,
+        formula_panel_text=formula_panel_text,
         form_mode_var=form_mode_var,
         form_mode_label=form_mode_label,
+        manage_formula_settings_button=manage_formula_settings_button,
         save_changes_button=save_changes_button,
         delete_selected_button=delete_selected_button,
         open_last_csv_button=open_last_csv_button,

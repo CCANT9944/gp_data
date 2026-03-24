@@ -1,4 +1,5 @@
 import csv
+from pathlib import Path
 import tkinter as tk
 import time
 from tkinter import ttk
@@ -9,6 +10,7 @@ from gp_data import settings
 import gp_data.ui.csv_preview.analysis_dialog as analysis_dialog_module
 import gp_data.ui.csv_preview.dialog as dialog_module
 import gp_data.ui.csv_preview.loader as loader_module
+import gp_data.ui.csv_preview.row_combiner as row_combiner_module
 from gp_data.data_manager.duplicates import import_selection_possible_duplicate_identity_for_values
 from gp_data.models import Record
 from gp_data.ui.csv_preview import CsvPreviewError, load_csv_preview, open_csv_preview_dialog
@@ -20,7 +22,11 @@ from gp_data.ui.csv_preview.dialog import (
     IMPORT_SELECTION_DUPLICATE_STATUS,
     IMPORT_SELECTION_POSSIBLE_DUPLICATE_STATUS,
     MAX_RENDERED_PREVIEW_ROWS,
+    PREVIEW_IMPORTED_ROW_TAG,
+    PREVIEW_POSSIBLE_IMPORTED_ROW_TAG,
+    READY_AS_NEW_POSSIBLE_DUPLICATE_STATUS,
     _review_row_import_collisions,
+    _review_tree_updates,
     _selection_conflict_message,
     _guess_import_mapping,
     _review_row_status,
@@ -303,6 +309,77 @@ def test_open_csv_preview_dialog_shows_header_mode_label_for_real_headers(tk_roo
     assert mode_label is not None
 
     dialog.destroy()
+
+
+def test_open_csv_preview_dialog_highlights_rows_that_match_existing_items(tk_root, tmp_path):
+    csv_path = tmp_path / "matches.csv"
+    csv_path.write_text(
+        "Classname,ItemDescription,Selling Price\nCocktails,Mojito,8.50\nVermouth,50ML Martini Rosso,4.75\nBeer,Peroni,6.10\n",
+        encoding="utf-8",
+    )
+
+    dialog = open_csv_preview_dialog(
+        tk_root,
+        csv_path,
+        width=900,
+        height=520,
+        import_field_labels=["Type", "Name", "Cost", "Notes", "Units In", "Cost/Unit", "Selling Price"],
+        existing_import_identities={("cocktails", "mojito")},
+        existing_import_possible_identities={("vermouth", "martini rosso")},
+    )
+    tree = _find_descendant(dialog, ttk.Treeview)
+    notice = _find_label_with_text(dialog, "Green rows already match saved items")
+
+    assert tree is not None
+    assert notice is not None
+    _wait_for_rows(dialog, tree, 3)
+
+    first_tags = tree.item(tree.get_children()[0])["tags"]
+    second_tags = tree.item(tree.get_children()[1])["tags"]
+    third_tags = tree.item(tree.get_children()[2])["tags"]
+
+    assert PREVIEW_IMPORTED_ROW_TAG in first_tags
+    assert PREVIEW_POSSIBLE_IMPORTED_ROW_TAG in second_tags
+    assert third_tags == "" or third_tags == ()
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_dialog_hides_match_notice_when_preview_has_no_matching_rows(tk_root, tmp_path):
+    csv_path = tmp_path / "no-matches.csv"
+    csv_path.write_text(
+        "Classname,ItemDescription,Selling Price\nCocktails,Mojito,8.50\nBeer,Peroni,6.10\n",
+        encoding="utf-8",
+    )
+
+    dialog = open_csv_preview_dialog(
+        tk_root,
+        csv_path,
+        width=900,
+        height=520,
+        import_field_labels=["Type", "Name", "Cost", "Notes", "Units In", "Cost/Unit", "Selling Price"],
+        existing_import_identities={("wine", "merlot")},
+        existing_import_possible_identities={("vermouth", "martini rosso")},
+    )
+
+    assert _find_label_with_text(dialog, "Green rows already match saved items") is None
+    assert _find_label_with_text(dialog, "Amber rows may match existing saved items") is None
+
+    dialog.destroy()
+
+
+def test_set_csv_preview_import_notice_adds_and_clears_workspace_label(tk_root):
+    label = ttk.Label(tk_root)
+
+    dialog_module._set_csv_preview_import_notice(label, "Already imported")
+
+    assert label.cget("text") == "Already imported"
+    assert label.winfo_manager() == "pack"
+
+    dialog_module._set_csv_preview_import_notice(label, None)
+
+    assert label.cget("text") == ""
+    assert label.winfo_manager() == ""
 
 
 def test_open_csv_preview_dialog_opens_analysis_from_current_filtered_rows(tk_root, tmp_path, monkeypatch):
@@ -2012,6 +2089,39 @@ def test_open_csv_preview_dialog_can_combine_sessions_for_same_product(tk_root, 
     dialog.destroy()
 
 
+def test_iter_combined_rows_reads_uncached_csv_once(tmp_path, monkeypatch):
+    source_rows = [
+        ("Cuban", "101", "Lunch", "12.5", "2"),
+        ("Cuban", "101", "Dinner", "18.5", "3"),
+        ("French 75", "202", "Lunch", "20", "4"),
+    ]
+    data = loader_module.CsvPreviewData(
+        path=tmp_path / "sessions.csv",
+        encoding="utf-8",
+        headers=["Description1", "PluCode", "Sessionname1", "Revenue1", "Quantity1"],
+        rows=[],
+        row_total=len(source_rows),
+        fully_cached=False,
+    )
+
+    iter_calls = 0
+
+    def counting_iter_csv_preview_rows(_data):
+        nonlocal iter_calls
+        iter_calls += 1
+        yield from source_rows
+
+    monkeypatch.setattr(row_combiner_module, "iter_csv_preview_rows", counting_iter_csv_preview_rows)
+
+    combined_rows = list(row_combiner_module._iter_combined_rows(data, True))
+
+    assert iter_calls == 1
+    assert combined_rows == [
+        ("Cuban", "101", "Lunch + Dinner", "31", "5"),
+        ("French 75", "202", "Lunch", "20", "4"),
+    ]
+
+
 def test_open_csv_preview_dialog_reuses_cached_combined_rows_for_follow_up_filters(tk_root, tmp_path, monkeypatch):
     csv_path = tmp_path / "combined_cache.csv"
     csv_path.write_text(
@@ -2822,6 +2932,46 @@ def test_resolve_header_filter_options_streams_distinct_values_without_row_snaps
     assert snapshot_calls == 0
 
 
+def test_iter_rows_after_header_filter_casefolds_each_unique_value_once() -> None:
+    class CountingValue(str):
+        casefold_calls = 0
+
+        def casefold(self):
+            type(self).casefold_calls += 1
+            return super().casefold()
+
+    pipeline = dialog_module._PreviewDataPipeline(
+        loader_module.CsvPreviewData(
+            path=Path("header-filter.csv"),
+            encoding="utf-8",
+            headers=["Name", "Category"],
+            rows=[],
+            row_total=4,
+            fully_cached=True,
+        )
+    )
+    filter_state = dialog_module._PreviewFilterState(
+        query="",
+        combine_sessions=False,
+        header_filter_column_index=1,
+        header_filter_value="beer",
+    )
+    rows = [
+        ("Peroni", CountingValue("Beer")),
+        ("Asahi", CountingValue("Beer")),
+        ("Negroni", CountingValue("Cocktails")),
+        ("Martini", CountingValue("Cocktails")),
+    ]
+
+    CountingValue.casefold_calls = 0
+    pipeline.rows_before_header_filter = lambda _state: iter(rows)  # type: ignore[method-assign]
+
+    matched_rows = list(pipeline._iter_rows_after_header_filter(filter_state))
+
+    assert [row[0] for row in matched_rows] == ["Peroni", "Asahi"]
+    assert CountingValue.casefold_calls == 2
+
+
 def test_open_csv_preview_dialog_loads_header_filter_values_off_ui_thread(tk_root, tmp_path, monkeypatch):
     csv_path = tmp_path / "async_popup.csv"
     csv_path.write_text(
@@ -2918,6 +3068,49 @@ def test_open_csv_preview_dialog_uses_searchable_scrollable_header_filter_popup(
     listbox.selection_set(0)
     controller._apply_selected_header_filter_option()
     _wait_for_tree_values(dialog, tree, [[long_value, "Peroni"]])
+
+    dialog.destroy()
+
+
+def test_header_filter_popup_search_casefolds_each_option_once_per_popup(tk_root, tmp_path, monkeypatch):
+    class CountingValue(str):
+        casefold_calls = 0
+
+        def casefold(self):
+            type(self).casefold_calls += 1
+            return super().casefold()
+
+    csv_path = tmp_path / "popup_cache.csv"
+    csv_path.write_text(
+        "ClassName1,Description1\nBeer,Peroni\nCocktails,Negroni\nSpritz,Aperol\n",
+        encoding="utf-8",
+    )
+
+    dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
+    controller = getattr(dialog, "_csv_preview_controller", None)
+
+    assert controller is not None
+
+    options = [CountingValue("Beer"), CountingValue("Cocktails"), CountingValue("Spritz")]
+    monkeypatch.setattr(controller._pipeline, "cached_header_filter_options", lambda *_args, **_kwargs: options)
+
+    CountingValue.casefold_calls = 0
+    controller.show_header_filter_popup(0, 0, 0)
+    dialog.update()
+
+    popup = controller._header_filter_popup
+    search_entry = _find_descendant(popup, ttk.Entry) if popup is not None else None
+
+    assert popup is not None
+    assert search_entry is not None
+    assert CountingValue.casefold_calls == len(options)
+
+    search_entry.insert(0, "c")
+    dialog.update()
+    search_entry.insert("end", "o")
+    dialog.update()
+
+    assert CountingValue.casefold_calls == len(options)
 
     dialog.destroy()
 
@@ -3118,16 +3311,16 @@ def test_open_csv_preview_dialog_restores_saved_sort_on_reopen_and_shows_it_in_s
 
     second_dialog = open_csv_preview_dialog(tk_root, csv_path, width=900, height=520)
     tree = _find_descendant(second_dialog, ttk.Treeview)
-    summary = _find_descendant(second_dialog, ttk.Label)
+    second_controller = getattr(second_dialog, "_csv_preview_controller", None)
 
     assert tree is not None
-    assert summary is not None
+    assert second_controller is not None
 
     _wait_for_rows(second_dialog, tree, 3)
 
     values = [tree.item(item_id)["values"][0] for item_id in tree.get_children()]
     assert values == ["Peroni", "Negroni", "Aperol"]
-    assert "Sorted by Name (Z to A)" in str(summary.cget("text"))
+    assert "Sorted by Name (Z to A)" in second_controller._summary_var.get()
 
     second_dialog.destroy()
 
@@ -3508,6 +3701,7 @@ def test_open_csv_preview_dialog_can_overwrite_matched_existing_row(tk_root, tmp
         existing_import_possible_identities={("vermouth", "martini rosso")},
         existing_import_possible_match_records={("vermouth", "martini rosso"): [existing_record]},
     )
+    _wait_for_button(dialog, "Import Filtered Rows", present=True)
     import_button = _find_button(dialog, "Import Filtered Rows")
 
     assert import_button is not None
@@ -3568,6 +3762,173 @@ def test_open_csv_preview_dialog_can_overwrite_matched_existing_row(tk_root, tmp
     dialog.destroy()
 
 
+def test_open_csv_preview_dialog_can_import_confirmed_possible_duplicate_as_new_row(tk_root, tmp_path):
+    csv_path = tmp_path / "possible-duplicate-import.csv"
+    csv_path.write_text(
+        "Classname,ItemDescription,Selling Price\n"
+        "Vermouth,50ML Martini Rosso,4.75\n",
+        encoding="utf-8",
+    )
+
+    existing_record = Record(field1="Vermouth", field2="Martini Rosso", field7=4.00)
+    seen: dict[str, object] = {}
+
+    dialog = open_csv_preview_dialog(
+        tk_root,
+        csv_path,
+        width=900,
+        height=520,
+        import_field_labels=["Type", "Name", "Cost Price", "Notes", "Units", "Cost/Unit", "Menu Price"],
+        on_import_filtered_rows=lambda data, reviewed_rows: seen.update(
+            source=data.path.name,
+            reviewed_rows=reviewed_rows,
+        ),
+        existing_import_possible_identities={("vermouth", "martini rosso")},
+        existing_import_possible_match_records={("vermouth", "martini rosso"): [existing_record]},
+    )
+    import_button = _find_button(dialog, "Import Filtered Rows")
+
+    assert import_button is not None
+
+    def _confirm_mapping() -> None:
+        mapping_dialog = _wait_for_toplevel(tk_root, "Import Selected/Filtered Rows")
+        continue_button = _find_button(mapping_dialog, "Continue")
+        assert continue_button is not None
+        continue_button.invoke()
+        dialog.after(50, _confirm_review)
+
+    def _confirm_review() -> None:
+        review_dialog = _wait_for_toplevel(tk_root, "Review Filtered Import")
+        review_tree = _find_descendant(review_dialog, ttk.Treeview)
+        assert review_tree is not None
+        _wait_for_rows(review_dialog, review_tree, 1)
+        assert list(review_tree.item(review_tree.get_children()[0])["values"]) == [
+            "Yes",
+            "Vermouth",
+            "50ML Martini Rosso",
+            "4.75",
+            "Possible duplicate existing item",
+        ]
+
+        allow_button = _find_button(review_dialog, "Import As New Row")
+        assert allow_button is not None
+        allow_button.invoke()
+        review_dialog.update()
+
+        assert list(review_tree.item(review_tree.get_children()[0])["values"]) == [
+            "Yes",
+            "Vermouth",
+            "50ML Martini Rosso",
+            "4.75",
+            READY_AS_NEW_POSSIBLE_DUPLICATE_STATUS,
+        ]
+        assert _find_button(review_dialog, "Undo New Row Override") is not None
+
+        import_ready_button = _find_button(review_dialog, "Import Ready Rows")
+        assert import_ready_button is not None
+        import_ready_button.invoke()
+
+    dialog.after(50, _confirm_mapping)
+    import_button.invoke()
+
+    assert seen["source"] == "possible-duplicate-import.csv"
+    assert seen["reviewed_rows"] == [
+        {
+            "field1": "Vermouth",
+            "field2": "50ML Martini Rosso",
+            "field3": None,
+            "field4": None,
+            "field5": None,
+            "field6": None,
+            "field7": "4.75",
+        }
+    ]
+
+    dialog.destroy()
+
+
+def test_open_csv_preview_dialog_clears_new_row_override_after_editing_duplicate_identity(tk_root, tmp_path):
+    csv_path = tmp_path / "possible-duplicate-edit.csv"
+    csv_path.write_text(
+        "Classname,ItemDescription,Selling Price\n"
+        "Vermouth,50ML Martini Rosso,4.75\n",
+        encoding="utf-8",
+    )
+
+    existing_record = Record(field1="Vermouth", field2="Martini Rosso", field7=4.00)
+
+    dialog = open_csv_preview_dialog(
+        tk_root,
+        csv_path,
+        width=900,
+        height=520,
+        import_field_labels=["Type", "Name", "Cost Price", "Notes", "Units", "Cost/Unit", "Menu Price"],
+        on_import_filtered_rows=lambda *_args, **_kwargs: None,
+        existing_import_possible_identities={("vermouth", "martini rosso")},
+        existing_import_possible_match_records={("vermouth", "martini rosso"): [existing_record]},
+    )
+    _wait_for_button(dialog, "Import Filtered Rows", present=True)
+    import_button = _find_button(dialog, "Import Filtered Rows")
+
+    assert import_button is not None
+
+    def _confirm_mapping() -> None:
+        mapping_dialog = _wait_for_toplevel(tk_root, "Import Selected/Filtered Rows")
+        continue_button = _find_button(mapping_dialog, "Continue")
+        assert continue_button is not None
+        continue_button.invoke()
+        dialog.after(50, _edit_review_row)
+
+    def _edit_review_row() -> None:
+        review_dialog = _wait_for_toplevel(tk_root, "Review Filtered Import")
+        review_tree = _find_descendant(review_dialog, ttk.Treeview)
+        assert review_tree is not None
+        _wait_for_rows(review_dialog, review_tree, 1)
+
+        allow_button = _find_button(review_dialog, "Import As New Row")
+        assert allow_button is not None
+        allow_button.invoke()
+        review_dialog.update()
+
+        assert list(review_tree.item(review_tree.get_children()[0])["values"]) == [
+            "Yes",
+            "Vermouth",
+            "50ML Martini Rosso",
+            "4.75",
+            READY_AS_NEW_POSSIBLE_DUPLICATE_STATUS,
+        ]
+
+        entries = _find_widgets(review_dialog, ttk.Entry)
+        name_entry = next((entry for entry in entries if entry.get() == "50ML Martini Rosso"), None)
+        assert name_entry is not None
+
+        name_entry.delete(0, tk.END)
+        name_entry.insert(0, "Campari Rosso")
+
+        apply_button = _find_button(review_dialog, "Apply Changes")
+        assert apply_button is not None
+        apply_button.invoke()
+        review_dialog.update()
+
+        assert list(review_tree.item(review_tree.get_children()[0])["values"]) == [
+            "Yes",
+            "Vermouth",
+            "Campari Rosso",
+            "4.75",
+            "Ready",
+        ]
+        _wait_for_button_state(review_dialog, "Import As New Row", "disabled")
+
+        cancel_button = _find_button(review_dialog, "Cancel")
+        assert cancel_button is not None
+        cancel_button.invoke()
+
+    dialog.after(50, _confirm_mapping)
+    import_button.invoke()
+
+    dialog.destroy()
+
+
 def test_validated_import_status_reports_field_reason() -> None:
     labels = ["Type", "Name", "Cost Price", "Notes", "Units", "Cost/Unit", "Menu Price"]
 
@@ -3584,6 +3945,18 @@ def test_guess_import_mapping_skips_selling_price_for_buying_price_field() -> No
     assert mapping["field3"] is None
 
 
+def test_guess_import_mapping_prefers_item_description_over_revenue_centre_name() -> None:
+    labels = ["Type", "Name", "Price", "Notes", "Units", "Cost/Unit", "MENU PRICE"]
+    mapping = _guess_import_mapping(
+        ["ItemID", "RevenueCentreName", "Classname", "ItemDescription", "Selling Price", "PriceBandName", "PLUCode"],
+        labels,
+    )
+
+    assert mapping["field1"] == 2
+    assert mapping["field2"] == 3
+    assert mapping["field7"] == 4
+
+
 def test_review_row_status_marks_duplicates_before_import() -> None:
     labels = ["Type", "Name", "Cost Price", "Notes", "Units", "Cost/Unit", "Menu Price"]
     first = _ImportReviewRow("1", (), {"field1": "Cocktails", "field2": "Mojito", "field7": "8.50"})
@@ -3594,6 +3967,22 @@ def test_review_row_status_marks_duplicates_before_import() -> None:
     assert _review_row_status(first, [first], labels, {("cocktails", "mojito")}) == "Duplicate existing Type + Name"
 
 
+def test_review_tree_updates_only_returns_rows_with_changed_rendered_values() -> None:
+    first = _ImportReviewRow("1", (), {"field1": "Cocktails", "field2": "Mojito", "field7": "8.50"})
+    second = _ImportReviewRow("2", (), {"field1": "Beer", "field2": "Peroni", "field7": "6.10"})
+    third = _ImportReviewRow("3", (), {"field1": "Wine", "field2": "Merlot", "field7": "9.00"}, include=False)
+
+    updates = _review_tree_updates(
+        [first, second, third],
+        {"1": "Ready", "2": "Ready", "3": "Ready"},
+        {"1": "Ready to overwrite matched row", "2": "Ready", "3": "Ready"},
+    )
+
+    assert updates == {
+        "1": ("Yes", "Cocktails", "Mojito", "8.50", "Ready to overwrite matched row"),
+    }
+
+
 def test_review_row_status_marks_possible_duplicates_before_import() -> None:
     labels = ["Type", "Name", "Cost Price", "Notes", "Units", "Cost/Unit", "Menu Price"]
     first = _ImportReviewRow("1", (), {"field1": "Beer", "field2": "BTL Peroni", "field7": "5.20"})
@@ -3601,6 +3990,31 @@ def test_review_row_status_marks_possible_duplicates_before_import() -> None:
 
     assert _review_row_status(first, [first], labels, set(), {("beer", "peroni")}) == "Possible duplicate existing item"
     assert _review_row_status(second, [first, second], labels, set(), set()) == IMPORT_SELECTION_POSSIBLE_DUPLICATE_STATUS
+
+
+def test_review_row_status_allows_confirmed_possible_duplicate_as_new_row() -> None:
+    labels = ["Type", "Name", "Cost Price", "Notes", "Units", "Cost/Unit", "Menu Price"]
+    row = _ImportReviewRow(
+        "1",
+        (),
+        {"field1": "Beer", "field2": "BTL Peroni", "field7": "5.20"},
+        allow_possible_duplicate_import=True,
+    )
+
+    assert _review_row_status(row, [row], labels, set(), {("beer", "peroni")}) == READY_AS_NEW_POSSIBLE_DUPLICATE_STATUS
+
+
+def test_review_row_status_keeps_import_selection_possible_duplicate_blocked_after_confirmation() -> None:
+    labels = ["Type", "Name", "Cost Price", "Notes", "Units", "Cost/Unit", "Menu Price"]
+    first = _ImportReviewRow("1", (), {"field1": "Beer", "field2": "BTL Peroni", "field7": "5.20"})
+    second = _ImportReviewRow(
+        "2",
+        (),
+        {"field1": "Beer", "field2": "Peroni", "field7": "5.20"},
+        allow_possible_duplicate_import=True,
+    )
+
+    assert _review_row_status(second, [first, second], labels, set(), {("beer", "peroni")}) == IMPORT_SELECTION_POSSIBLE_DUPLICATE_STATUS
 
 
 def test_review_row_status_does_not_treat_different_size_variants_as_import_selection_duplicates() -> None:

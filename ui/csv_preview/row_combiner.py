@@ -25,12 +25,12 @@ def _iter_combined_rows(data: CsvPreviewData, enabled: bool):
         yield from iter_csv_preview_rows(data)
         return
 
-    numeric_detection_rows = data.rows if data.fully_cached else iter_csv_preview_rows(data)
-    numeric_indices = _detect_numeric_columns(data, {session_index}, rows=numeric_detection_rows)
+    source_rows = data.rows if data.fully_cached else list(iter_csv_preview_rows(data))
+    numeric_indices = _detect_numeric_columns(data, {session_index}, rows=source_rows)
     grouping_exclusions = {session_index, *numeric_indices}
 
     grouped: OrderedDict[tuple[str, ...], dict[str, object]] = OrderedDict()
-    for row in iter_csv_preview_rows(data):
+    for row in source_rows:
         key = tuple(value for index, value in enumerate(row) if index not in grouping_exclusions)
         group = grouped.get(key)
         if group is None:

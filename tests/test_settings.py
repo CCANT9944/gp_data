@@ -218,6 +218,48 @@ def test_save_and_load_csv_preview_has_header_row_for_path(tmp_path: Path):
     assert settings.load_csv_preview_has_header_row(r"C:\data\sales.csv", p) is None
 
 
+def test_save_and_load_show_formula_panel(tmp_path: Path):
+    store = settings.SettingsStore(tmp_path / "settings.json")
+
+    assert store.load_show_formula_panel() is True
+
+    store.save_show_formula_panel(False)
+
+    assert store.load_show_formula_panel() is False
+    assert settings.load_settings(store.path)["show_formula_panel"] is False
+
+
+def test_save_and_load_formula_expressions(tmp_path: Path):
+    store = settings.SettingsStore(tmp_path / "settings.json")
+    expressions = {
+        "field6": "field3 / field5 * 2",
+        "gp": "field6 / field7",
+        "cash_margin": "field7 - field6",
+        "gp70": "field6 * 2",
+    }
+
+    store.save_formula_expressions(expressions)
+
+    assert store.load_formula_expressions() == expressions
+    assert settings.load_settings(store.path)["formula_expressions"] == expressions
+
+
+def test_save_and_load_csv_import_timestamp_for_storage_and_path(tmp_path: Path):
+    store = settings.SettingsStore(tmp_path / "settings.json")
+
+    store.save_csv_import_timestamp(
+        r"C:\data\gp.db",
+        r"C:\data\stock.csv",
+        "2026-03-23T20:15:00+00:00",
+    )
+
+    assert store.load_csv_import_timestamp(r"C:\data\gp.db", r"C:\data\stock.csv") == "2026-03-23T20:15:00+00:00"
+    assert store.load_csv_import_timestamp(r"C:\data\gp.db", r"C:\data\sales.csv") is None
+    assert settings.load_settings(store.path)["csv_import_timestamps_by_storage_path"] == {
+        r"C:\data\gp.db": {r"C:\data\stock.csv": "2026-03-23T20:15:00+00:00"}
+    }
+
+
 def test_settings_store_preserves_csv_preview_last_path_during_other_updates(tmp_path: Path):
     store = settings.SettingsStore(tmp_path / "settings.json")
     store.save_csv_preview_last_path(r"C:\data\sales.csv")
@@ -259,3 +301,4 @@ def test_load_settings_backfills_recent_csv_paths_from_legacy_last_path(tmp_path
     assert loaded["csv_preview_visible_columns_by_path"] == {}
     assert loaded["csv_preview_visible_column_keys_by_path"] == {}
     assert loaded["csv_preview_sort_by_path"] == {}
+    assert loaded["csv_import_timestamps_by_storage_path"] == {}

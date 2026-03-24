@@ -118,11 +118,11 @@ class _PreviewRefreshControllerBase:
         children = self._tree.get_children()
         placeholder_row = self._loading_placeholder_row()
         if children:
-            self._tree.item(children[0], values=placeholder_row)
+            self._tree.item(children[0], values=placeholder_row, tags=())
             if len(children) > 1:
                 self._tree.delete(*children[1:])
             return
-        self._tree.insert("", "end", values=placeholder_row)
+        self._tree.insert("", "end", values=placeholder_row, tags=())
 
     def refresh(self, *_args) -> None:
         self._scheduled_refresh_id = None

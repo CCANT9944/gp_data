@@ -3,6 +3,7 @@ import json
 
 import pytest
 
+from gp_data.formulas import get_active_formula_expressions, set_active_formula_expressions, validate_formula_expressions
 from gp_data.models import Record, calculate_cash_margin, calculate_field6, calculate_gp, calculate_gp70
 
 
@@ -51,6 +52,28 @@ def test_calculate_field6_helper():
     assert calculate_field6(20, 0) is None
     assert calculate_field6(20, "abc") is None
     assert calculate_field6("bad", 5) is None
+
+
+def test_calculation_helpers_use_active_formula_expressions():
+    set_active_formula_expressions(
+        {
+            "field6": "field3 / field5 * 2",
+            "gp": "field6 / field7",
+            "cash_margin": "field7 - field6",
+            "gp70": "field6 * 2",
+        }
+    )
+
+    assert get_active_formula_expressions()["gp70"] == "field6 * 2"
+    assert calculate_field6(20, 5) == pytest.approx(8.0)
+    assert calculate_gp(2.0, 5.0) == pytest.approx(0.4)
+    assert calculate_cash_margin(2.0, 5.0) == pytest.approx(3.0)
+    assert calculate_gp70(3.0) == pytest.approx(6.0)
+
+
+def test_validate_formula_expressions_rejects_disallowed_field_names():
+    with pytest.raises(ValueError, match="field3, field5"):
+        validate_formula_expressions({"field6": "field7 / 2"})
 
 
 def test_record_ignores_malformed_numeric_change_history_string():

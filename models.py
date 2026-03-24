@@ -6,6 +6,8 @@ import uuid
 
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 
+from .formulas import evaluate_formula
+
 
 # helper functions are kept at module level so both the model and the UI can
 # reuse the same business logic without duplicating formulas.  tests exercise
@@ -22,24 +24,12 @@ def _normalize_title_text(value) -> Optional[str]:
 
 def calculate_gp(cost: Optional[float], menu_price: Optional[float]) -> Optional[float]:
     """Return GP fraction (e.g. 0.52 == 52%) or ``None`` if not computable."""
-    if cost is None or menu_price is None:
-        return None
-    try:
-        if float(menu_price) == 0:
-            return None
-        return 1 - (float(cost) * 1.2) / float(menu_price)
-    except (TypeError, ValueError, ZeroDivisionError):
-        return None
+    return evaluate_formula("gp", {"field6": cost, "field7": menu_price})
 
 
 def calculate_cash_margin(cost: Optional[float], menu_price: Optional[float]) -> Optional[float]:
     """Return cash margin (MenuPrice - cost*1.2) or ``None`` if inputs missing."""
-    if cost is None or menu_price is None:
-        return None
-    try:
-        return float(menu_price) - (float(cost) * 1.2)
-    except (TypeError, ValueError):
-        return None
+    return evaluate_formula("cash_margin", {"field6": cost, "field7": menu_price})
 
 
 def calculate_gp70(cost: Optional[float]) -> Optional[float]:
@@ -48,12 +38,7 @@ def calculate_gp70(cost: Optional[float]) -> Optional[float]:
     The formula may change in future; centralising it here keeps everything
     consistent.
     """
-    if cost is None:
-        return None
-    try:
-        return float(cost) * 100.0 / 30.0 * 1.2
-    except (TypeError, ValueError):
-        return None
+    return evaluate_formula("gp70", {"field6": cost})
 
 
 def calculate_field6(total_value, units_in) -> Optional[float]:
@@ -70,9 +55,7 @@ def calculate_field6(total_value, units_in) -> Optional[float]:
         units = float(str(units_in).replace(",", "").strip())
     except (TypeError, ValueError):
         return None
-    if units == 0:
-        return None
-    return total / units
+    return evaluate_formula("field6", {"field3": total, "field5": units})
 
 
 def _parse_optional_float(value, field_name: str) -> Optional[float]:
@@ -166,23 +149,31 @@ class Record(BaseModel):
         return _parse_numeric_change_history(v)
 
     @property
+    def effective_field6(self) -> float | None:
+        calculated = calculate_field6(self.field3, self.field5)
+        if calculated is not None:
+            return calculated
+        return self.field6
+
+    @property
     def gp(self) -> float | None:
         """Computed GP % as a fraction (e.g. 0.52 == 52%)."""
-        return calculate_gp(self.field6, self.field7)
+        return calculate_gp(self.effective_field6, self.field7)
 
     @property
     def cash_margin(self) -> float | None:
         """Computed cash margin (MenuPrice - cost*1.2)."""
-        return calculate_cash_margin(self.field6, self.field7)
+        return calculate_cash_margin(self.effective_field6, self.field7)
 
     @property
     def gp70(self) -> float | None:
         """Computed 'WITH 70% GP' value using shared formula."""
-        return calculate_gp70(self.field6)
+        return calculate_gp70(self.effective_field6)
 
     def to_dict(self) -> dict:
         d = self.model_dump(mode="json")
         # include derived, read-only metrics so they can be exported to CSV
+        d["field6"] = _safe_export_float(self.effective_field6)
         d["gp"] = _safe_export_float(self.gp)
         d["cash_margin"] = _safe_export_float(self.cash_margin)
         d["gp70"] = _safe_export_float(self.gp70)

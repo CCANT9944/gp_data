@@ -3,8 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from .settings_types import CsvPreviewPathState
-
 
 def build_settings_api(store_factory: Callable[[Optional[Path]], Any]) -> dict[str, Callable[..., object]]:
     def _store(path: Optional[Path]) -> Any:
@@ -49,6 +47,21 @@ def build_settings_api(store_factory: Callable[[Optional[Path]], Any]) -> dict[s
     ) -> None:
         _store(path).save_csv_preview_sort(csv_preview_path, column_key, descending=descending)
 
+    def load_csv_import_timestamp(
+        storage_path: str | None,
+        csv_preview_path: str | None,
+        path: Optional[Path] = None,
+    ) -> object:
+        return _store(path).load_csv_import_timestamp(storage_path, csv_preview_path)
+
+    def save_csv_import_timestamp(
+        storage_path: str | None,
+        csv_preview_path: str | None,
+        imported_at: str | None,
+        path: Optional[Path] = None,
+    ) -> None:
+        _store(path).save_csv_import_timestamp(storage_path, csv_preview_path, imported_at)
+
     load_labels = _make_loader("load_labels")
     save_labels = _make_saver("save_labels")
     load_column_order = _make_loader("load_column_order")
@@ -59,6 +72,10 @@ def build_settings_api(store_factory: Callable[[Optional[Path]], Any]) -> dict[s
     save_visible_columns = _make_saver("save_visible_columns")
     load_gp_highlight_threshold = _make_loader("load_gp_highlight_threshold")
     save_gp_highlight_threshold = _make_saver("save_gp_highlight_threshold")
+    load_show_formula_panel = _make_loader("load_show_formula_panel")
+    save_show_formula_panel = _make_saver("save_show_formula_panel")
+    load_formula_expressions = _make_loader("load_formula_expressions")
+    save_formula_expressions = _make_saver("save_formula_expressions")
     load_csv_preview_last_path = _make_loader("load_csv_preview_last_path")
     save_csv_preview_last_path = _make_saver("save_csv_preview_last_path")
     load_csv_preview_recent_paths = _make_loader("load_csv_preview_recent_paths")
@@ -86,6 +103,10 @@ def build_settings_api(store_factory: Callable[[Optional[Path]], Any]) -> dict[s
         "save_visible_columns": save_visible_columns,
         "load_gp_highlight_threshold": load_gp_highlight_threshold,
         "save_gp_highlight_threshold": save_gp_highlight_threshold,
+        "load_show_formula_panel": load_show_formula_panel,
+        "save_show_formula_panel": save_show_formula_panel,
+        "load_formula_expressions": load_formula_expressions,
+        "save_formula_expressions": save_formula_expressions,
         "load_csv_preview_last_path": load_csv_preview_last_path,
         "save_csv_preview_last_path": save_csv_preview_last_path,
         "load_csv_preview_recent_paths": load_csv_preview_recent_paths,
@@ -100,4 +121,6 @@ def build_settings_api(store_factory: Callable[[Optional[Path]], Any]) -> dict[s
         "load_csv_preview_has_header_row": load_csv_preview_has_header_row,
         "save_csv_preview_has_header_row": save_csv_preview_has_header_row,
         "save_csv_preview_sort": save_csv_preview_sort,
+        "load_csv_import_timestamp": load_csv_import_timestamp,
+        "save_csv_import_timestamp": save_csv_import_timestamp,
     }

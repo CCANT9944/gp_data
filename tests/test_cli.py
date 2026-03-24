@@ -1,10 +1,12 @@
+import csv
 from pathlib import Path
 import logging
 
 import pytest
 
-from gp_data.main import run_cli
 import gp_data.cli as cli_module
+from gp_data import settings as settings_module
+from gp_data.main import run_cli
 from gp_data.data_manager import DataManager
 from gp_data.models import Record
 
@@ -20,6 +22,52 @@ def test_cli_add_and_list(tmp_path: Path, capsys):
     run_cli(["--storage", str(storage), "list"])
     out = capsys.readouterr().out
     assert "foo" in out.lower()
+
+
+def test_cli_list_uses_saved_formula_expressions(tmp_path: Path, capsys, monkeypatch):
+    storage = tmp_path / "data.db"
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setattr(settings_module, "DEFAULT_PATH", settings_path)
+    settings_module.SettingsStore(settings_path).save_formula_expressions(
+        {
+            "field6": "field3 / field5",
+            "gp": "1 - (field6 * 1.2) / field7",
+            "cash_margin": "field7 - (field6 * 1.2)",
+            "gp70": "field6 * 2",
+        }
+    )
+    DataManager(storage).save(Record(field1="beer", field3=24.0, field5="24", field7=5.5))
+
+    run_cli(["--storage", str(storage), "list"])
+    out = capsys.readouterr().out
+
+    assert "'field6': 1.0" in out
+    assert "'gp70': 2.0" in out
+
+
+def test_cli_export_uses_saved_formula_expressions(tmp_path: Path, capsys, monkeypatch):
+    storage = tmp_path / "data.db"
+    settings_path = tmp_path / "settings.json"
+    export_path = tmp_path / "export.csv"
+    monkeypatch.setattr(settings_module, "DEFAULT_PATH", settings_path)
+    settings_module.SettingsStore(settings_path).save_formula_expressions(
+        {
+            "field6": "field3 / field5",
+            "gp": "1 - (field6 * 1.2) / field7",
+            "cash_margin": "field7 - (field6 * 1.2)",
+            "gp70": "field6 * 2",
+        }
+    )
+    DataManager(storage).save(Record(field1="beer", field3=24.0, field5="24", field7=5.5))
+
+    run_cli(["--storage", str(storage), "export", str(export_path)])
+    _ = capsys.readouterr()
+
+    with export_path.open("r", encoding="utf-8") as handle:
+        row = next(csv.DictReader(handle))
+
+    assert row[settings_module.DEFAULT_LABELS[5]] == "1.0"
+    assert row["WITH 70% GP"] == "2.0"
 
 
 def test_cli_backup_and_restore(tmp_path: Path, capsys):

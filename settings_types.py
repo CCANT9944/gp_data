@@ -38,12 +38,15 @@ class AppSettings:
     column_widths: dict[str, int]
     visible_columns: list[str]
     gp_highlight_threshold: float | None
+    show_formula_panel: bool
+    formula_expressions: dict[str, str]
     csv_preview_last_path: str | None
     csv_preview_recent_paths: list[str]
     csv_preview_state_by_path: dict[str, CsvPreviewPathState]
     csv_preview_visible_columns_by_path: dict[str, list[int]]
     csv_preview_visible_column_keys_by_path: dict[str, list[str]]
     csv_preview_sort_by_path: dict[str, dict[str, object]]
+    csv_import_timestamps_by_storage_path: dict[str, dict[str, str]]
 
     def to_dict(self) -> dict:
         return {
@@ -53,6 +56,8 @@ class AppSettings:
             "visible_columns": list(self.visible_columns),
             "gp_highlight_threshold": self.gp_highlight_threshold,
             "csv_preview_last_path": self.csv_preview_last_path,
+            "show_formula_panel": self.show_formula_panel,
+            "formula_expressions": dict(self.formula_expressions),
             "csv_preview_recent_paths": list(self.csv_preview_recent_paths),
             "csv_preview_state_by_path": {
                 path: state.to_dict() for path, state in self.csv_preview_state_by_path.items()
@@ -66,5 +71,9 @@ class AppSettings:
             "csv_preview_sort_by_path": {
                 path: {"column_key": str(sort_state["column_key"]), "descending": bool(sort_state["descending"])}
                 for path, sort_state in self.csv_preview_sort_by_path.items()
+            },
+            "csv_import_timestamps_by_storage_path": {
+                storage_path: dict(path_timestamps)
+                for storage_path, path_timestamps in self.csv_import_timestamps_by_storage_path.items()
             },
         }

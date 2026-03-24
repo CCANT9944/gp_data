@@ -78,6 +78,18 @@ class SettingsStore:
     def save_gp_highlight_threshold(self, threshold: float | None) -> AppSettings:
         return self.update(gp_highlight_threshold=threshold)
 
+    def load_show_formula_panel(self) -> bool:
+        return self.load().show_formula_panel
+
+    def save_show_formula_panel(self, show_formula_panel: bool) -> AppSettings:
+        return self.update(show_formula_panel=bool(show_formula_panel))
+
+    def load_formula_expressions(self) -> dict[str, str]:
+        return dict(self.load().formula_expressions)
+
+    def save_formula_expressions(self, formula_expressions: Mapping[str, object]) -> AppSettings:
+        return self.update(formula_expressions=dict(formula_expressions))
+
     def load_csv_preview_last_path(self) -> str | None:
         return self.load().csv_preview_last_path
 
@@ -268,3 +280,37 @@ class SettingsStore:
         else:
             current_state_by_path.pop(normalized_path, None)
         return self.update(csv_preview_state_by_path=current_state_by_path)
+
+    def load_csv_import_timestamp(self, storage_path: str | None, csv_preview_path: str | None) -> str | None:
+        normalized_storage_path = _normalized_csv_preview_last_path(storage_path)
+        normalized_csv_path = _normalized_csv_preview_last_path(csv_preview_path)
+        if normalized_storage_path is None or normalized_csv_path is None:
+            return None
+        return self.load().csv_import_timestamps_by_storage_path.get(normalized_storage_path, {}).get(normalized_csv_path)
+
+    def save_csv_import_timestamp(
+        self,
+        storage_path: str | None,
+        csv_preview_path: str | None,
+        imported_at: str | None,
+    ) -> AppSettings:
+        normalized_storage_path = _normalized_csv_preview_last_path(storage_path)
+        normalized_csv_path = _normalized_csv_preview_last_path(csv_preview_path)
+        current = {
+            saved_storage_path: dict(path_timestamps)
+            for saved_storage_path, path_timestamps in self.load().csv_import_timestamps_by_storage_path.items()
+        }
+        if normalized_storage_path is None or normalized_csv_path is None:
+            return self.update(csv_import_timestamps_by_storage_path=current)
+
+        normalized_imported_at = str(imported_at).strip() if imported_at is not None else ""
+        if not normalized_imported_at:
+            storage_history = current.get(normalized_storage_path)
+            if storage_history is not None:
+                storage_history.pop(normalized_csv_path, None)
+                if not storage_history:
+                    current.pop(normalized_storage_path, None)
+        else:
+            current.setdefault(normalized_storage_path, {})[normalized_csv_path] = normalized_imported_at
+
+        return self.update(csv_import_timestamps_by_storage_path=current)

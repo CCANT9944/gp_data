@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .formulas import DEFAULT_FORMULA_EXPRESSIONS
+
 MAX_RECENT_CSV_PREVIEW_PATHS = 8
 
 DEFAULT_LABELS = ["Field 1", "Field 2", "Field 3", "Field 4", "Field 5", "Field 6", "Field 7"]
@@ -34,6 +36,8 @@ DEFAULT_SETTINGS = {
     "column_widths": DEFAULT_COLUMN_WIDTHS,
     "visible_columns": DEFAULT_VISIBLE_COLUMNS,
     "gp_highlight_threshold": None,
+    "show_formula_panel": True,
+    "formula_expressions": dict(DEFAULT_FORMULA_EXPRESSIONS),
     "csv_preview_last_path": None,
     "csv_preview_recent_paths": [],
     "csv_preview_visible_columns_by_path": {},

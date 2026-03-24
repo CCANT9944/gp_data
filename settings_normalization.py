@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Mapping
 
+from .formulas import DEFAULT_FORMULA_EXPRESSIONS, normalized_formula_expressions
 from .settings_defaults import (
     DEFAULT_COLUMN_ORDER,
     DEFAULT_COLUMN_WIDTHS,
@@ -13,21 +14,6 @@ from .settings_defaults import (
 from .settings_types import AppSettings, CsvPreviewPathState
 
 
-def _default_settings() -> dict:
-    return {
-        "labels": DEFAULT_LABELS.copy(),
-        "column_order": DEFAULT_COLUMN_ORDER.copy(),
-        "column_widths": dict(DEFAULT_COLUMN_WIDTHS),
-        "visible_columns": DEFAULT_VISIBLE_COLUMNS.copy(),
-        "gp_highlight_threshold": None,
-        "csv_preview_last_path": None,
-        "csv_preview_recent_paths": [],
-        "csv_preview_visible_columns_by_path": {},
-        "csv_preview_visible_column_keys_by_path": {},
-        "csv_preview_sort_by_path": {},
-    }
-
-
 def _default_app_settings() -> AppSettings:
     return AppSettings(
         labels=DEFAULT_LABELS.copy(),
@@ -36,11 +22,14 @@ def _default_app_settings() -> AppSettings:
         visible_columns=DEFAULT_VISIBLE_COLUMNS.copy(),
         gp_highlight_threshold=None,
         csv_preview_last_path=None,
+        show_formula_panel=True,
+        formula_expressions=dict(DEFAULT_FORMULA_EXPRESSIONS),
         csv_preview_recent_paths=[],
         csv_preview_state_by_path={},
         csv_preview_visible_columns_by_path={},
         csv_preview_visible_column_keys_by_path={},
         csv_preview_sort_by_path={},
+        csv_import_timestamps_by_storage_path={},
     )
 
 
@@ -118,6 +107,24 @@ def _normalized_gp_highlight_threshold(raw_threshold) -> float | None:
     if threshold < 0 or threshold > 100:
         return None
     return threshold
+
+
+def _normalized_show_formula_panel(raw_value) -> bool:
+    if isinstance(raw_value, bool):
+        return raw_value
+    if raw_value is None:
+        return True
+    if isinstance(raw_value, str):
+        normalized = raw_value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    return bool(raw_value)
+
+
+def _normalized_formula_expressions(raw_expressions) -> dict[str, str]:
+    return normalized_formula_expressions(raw_expressions)
 
 
 def _normalized_csv_preview_last_path(raw_path) -> str | None:
@@ -247,6 +254,30 @@ def _normalized_csv_preview_state_by_path(raw_state_by_path) -> dict[str, CsvPre
     return normalized
 
 
+def _normalized_csv_import_timestamps_by_storage_path(raw_import_timestamps) -> dict[str, dict[str, str]]:
+    normalized: dict[str, dict[str, str]] = {}
+    if not isinstance(raw_import_timestamps, dict):
+        return normalized
+
+    for raw_storage_path, raw_csv_paths in raw_import_timestamps.items():
+        storage_path = _normalized_csv_preview_last_path(raw_storage_path)
+        if storage_path is None or not isinstance(raw_csv_paths, dict):
+            continue
+
+        normalized_csv_paths: dict[str, str] = {}
+        for raw_csv_path, raw_imported_at in raw_csv_paths.items():
+            csv_path = _normalized_csv_preview_last_path(raw_csv_path)
+            imported_at = str(raw_imported_at).strip() if raw_imported_at is not None else ""
+            if csv_path is None or not imported_at:
+                continue
+            normalized_csv_paths[csv_path] = imported_at
+
+        if normalized_csv_paths:
+            normalized[storage_path] = normalized_csv_paths
+
+    return normalized
+
+
 def _normalized_app_settings(raw_data: Mapping[str, object] | None) -> AppSettings:
     data = raw_data if isinstance(raw_data, Mapping) else {}
     csv_preview_last_path = _normalized_csv_preview_last_path(data.get("csv_preview_last_path"))
@@ -257,6 +288,9 @@ def _normalized_app_settings(raw_data: Mapping[str, object] | None) -> AppSettin
     csv_preview_visible_columns_by_path = _normalized_csv_preview_visible_columns(data.get("csv_preview_visible_columns_by_path"))
     csv_preview_visible_column_keys_by_path = _normalized_csv_preview_visible_column_keys(data.get("csv_preview_visible_column_keys_by_path"))
     csv_preview_sort_by_path = _normalized_csv_preview_sort_by_path(data.get("csv_preview_sort_by_path"))
+    show_formula_panel = _normalized_show_formula_panel(data.get("show_formula_panel"))
+    formula_expressions = _normalized_formula_expressions(data.get("formula_expressions"))
+    csv_import_timestamps_by_storage_path = _normalized_csv_import_timestamps_by_storage_path(data.get("csv_import_timestamps_by_storage_path"))
 
     for path, state in list(csv_preview_state_by_path.items()):
         if state.visible_columns:
@@ -285,10 +319,13 @@ def _normalized_app_settings(raw_data: Mapping[str, object] | None) -> AppSettin
         column_widths=_normalized_column_widths(data.get("column_widths", DEFAULT_COLUMN_WIDTHS)),
         visible_columns=_normalized_visible_columns(data.get("visible_columns", DEFAULT_VISIBLE_COLUMNS)),
         gp_highlight_threshold=_normalized_gp_highlight_threshold(data.get("gp_highlight_threshold")),
+        show_formula_panel=show_formula_panel,
+        formula_expressions=formula_expressions,
         csv_preview_last_path=csv_preview_last_path,
         csv_preview_recent_paths=csv_preview_recent_paths,
         csv_preview_state_by_path=csv_preview_state_by_path,
         csv_preview_visible_columns_by_path=csv_preview_visible_columns_by_path,
         csv_preview_visible_column_keys_by_path=csv_preview_visible_column_keys_by_path,
         csv_preview_sort_by_path=csv_preview_sort_by_path,
+        csv_import_timestamps_by_storage_path=csv_import_timestamps_by_storage_path,
     )

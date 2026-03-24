@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import tkinter as tk
 from tkinter import messagebox, ttk
-from typing import Callable, Sequence
+from typing import Callable, Literal, Sequence
 
 from ..models import Record
 
@@ -26,6 +26,7 @@ ROW_EVEN_BACKGROUND = "#e7edf5"
 ROW_GP_LOW_ODD_BACKGROUND = "#ffe4d8"
 ROW_GP_LOW_EVEN_BACKGROUND = "#ffd7c5"
 LOGGER = logging.getLogger(__name__)
+TableAnchor = Literal["nw", "n", "ne", "w", "center", "e", "sw", "s", "se"]
 
 
 def _is_separator_column(name: str) -> bool:
@@ -88,6 +89,8 @@ class RecordTable(ttk.Treeview):
         self._heading_press_xy = (0, 0)
         self._gp_highlight_threshold: float | None = None
         self._last_known_widths = dict(self._column_widths)
+        self._editor: ttk.Entry | None = None
+        self._editing: tuple[str, str] | None = None
         _configure_table_style(parent)
 
         super().__init__(parent, columns=self._display_cols, show="headings", style=TABLE_STYLE, **kwargs)
@@ -119,8 +122,31 @@ class RecordTable(ttk.Treeview):
         except tk.TclError:
             LOGGER.debug(log_context, exc_info=True)
 
-    def _show_callback_error(self, title: str, message: str) -> None:
-        self._show_error_dialog(title, message, log_context="Unable to show callback failure dialog")
+    def _invoke_callback_safe(
+        self,
+        callback: Callable[..., object] | None,
+        *args,
+        on_error: Callable[[], None] | None = None,
+        log_message: str,
+        error_title: str,
+        error_message: str,
+        dialog_log_context: str = "Unable to show callback failure dialog",
+    ) -> bool:
+        if not callable(callback):
+            return True
+        try:
+            callback(*args)
+        except Exception as exc:
+            LOGGER.exception(log_message)
+            if callable(on_error):
+                on_error()
+            self._show_error_dialog(
+                error_title,
+                f"{error_message}\n\nReason: {exc}",
+                log_context=dialog_log_context,
+            )
+            return False
+        return True
 
     def _copy_text_to_clipboard_safely(self, text: str) -> None:
         try:
@@ -202,14 +228,19 @@ class RecordTable(ttk.Treeview):
         original_visible = list(self._visible_cols)
         self._visible_cols = visible
         self._apply_column_layout(reload_rows=False)
-        if callable(self._on_visible_columns_changed):
-            try:
-                self._on_visible_columns_changed(self.get_visible_columns())
-            except Exception as exc:
-                LOGGER.exception("Visible-columns callback failed")
-                self._visible_cols = original_visible
-                self._apply_column_layout(reload_rows=False)
-                self._show_callback_error("Columns not updated", f"Could not apply the visible column change.\n\nReason: {exc}")
+
+        def _rollback_visible_columns() -> None:
+            self._visible_cols = original_visible
+            self._apply_column_layout(reload_rows=False)
+
+        self._invoke_callback_safe(
+            self._on_visible_columns_changed,
+            self.get_visible_columns(),
+            on_error=_rollback_visible_columns,
+            log_message="Visible-columns callback failed",
+            error_title="Columns not updated",
+            error_message="Could not apply the visible column change.",
+        )
 
     def set_column_order(self, columns: Sequence[str]) -> None:
         new_order = [column for column in columns if column in self._cols]
@@ -229,7 +260,7 @@ class RecordTable(ttk.Treeview):
                 return self._labels[idx]
         return METRIC_LABELS.get(col, col)
 
-    def _column_presentation(self, col: str) -> tuple[int, str]:
+    def _column_presentation(self, col: str) -> tuple[int, TableAnchor]:
         width = self._column_widths.get(col)
         if width is None:
             if col in ("field3", "field4", "field5", "field6", "field7", "gp", "cash_margin", "gp70"):
@@ -266,15 +297,20 @@ class RecordTable(ttk.Treeview):
         original_widths = dict(self._last_known_widths)
         self._last_known_widths = dict(widths)
         self._column_widths = dict(widths)
-        if callable(self._on_column_widths_changed):
-            try:
-                self._on_column_widths_changed(widths)
-            except Exception as exc:
-                LOGGER.exception("Column-width callback failed")
-                self._column_widths = dict(original_widths)
-                self._last_known_widths = dict(original_widths)
-                self._apply_column_layout(reload_rows=False)
-                self._show_callback_error("Column widths not updated", f"Could not apply the column width change.\n\nReason: {exc}")
+
+        def _rollback_column_widths() -> None:
+            self._column_widths = dict(original_widths)
+            self._last_known_widths = dict(original_widths)
+            self._apply_column_layout(reload_rows=False)
+
+        self._invoke_callback_safe(
+            self._on_column_widths_changed,
+            widths,
+            on_error=_rollback_column_widths,
+            log_message="Column-width callback failed",
+            error_title="Column widths not updated",
+            error_message="Could not apply the column width change.",
+        )
 
     def _apply_column_layout(self, reload_rows: bool = False) -> None:
         records = list(self._records)
@@ -333,18 +369,21 @@ class RecordTable(ttk.Treeview):
         original_visible = list(self._visible_cols)
         self.set_column_order(new_order)
         self._visible_cols = [column for column in self._cols if column in self._visible_cols]
-        if callable(self._on_column_order_changed):
-            try:
-                self._on_column_order_changed(self.get_column_order())
-            except Exception as exc:
-                LOGGER.exception("Column-order callback failed")
-                self._cols = list(original_order)
-                self._display_cols = _build_display_columns(self._cols)
-                self._visible_cols = list(original_visible)
-                self._apply_column_layout(reload_rows=True)
-                self._show_callback_error("Column order not updated", f"Could not apply the column order change.\n\nReason: {exc}")
-                return False
-        return True
+
+        def _rollback_column_order() -> None:
+            self._cols = list(original_order)
+            self._display_cols = _build_display_columns(self._cols)
+            self._visible_cols = list(original_visible)
+            self._apply_column_layout(reload_rows=True)
+
+        return self._invoke_callback_safe(
+            self._on_column_order_changed,
+            self.get_column_order(),
+            on_error=_rollback_column_order,
+            log_message="Column-order callback failed",
+            error_title="Column order not updated",
+            error_message="Could not apply the column order change.",
+        )
 
     def _row_tag_for_record(self, record: Record, row_index: int) -> str:
         if self._gp_highlight_threshold is not None and record.gp is not None and (record.gp * 100.0) < self._gp_highlight_threshold:
@@ -377,12 +416,14 @@ class RecordTable(ttk.Treeview):
         self._heading_press_column = None
         target = self._column_name_from_event(event)
         is_click = target == pressed and abs(event.x - press_x) <= 4 and abs(event.y - press_y) <= 4
-        if is_click and callable(self._on_heading_click):
-            try:
-                self._on_heading_click(target)
-            except Exception as exc:
-                LOGGER.exception("Heading-click callback failed")
-                self._show_callback_error("Header action failed", f"Could not open the header action.\n\nReason: {exc}")
+        if is_click:
+            self._invoke_callback_safe(
+                self._on_heading_click,
+                target,
+                log_message="Heading-click callback failed",
+                error_title="Header action failed",
+                error_message="Could not open the header action.",
+            )
             return
         if target is None or _is_separator_column(target) or target == dragged:
             return
@@ -436,23 +477,29 @@ class RecordTable(ttk.Treeview):
         self._editing = (iid, col)
 
     def _commit_edit(self, event=None) -> None:
-        if not getattr(self, "_editor", None) or not getattr(self, "_editing", None):
-            return
-        iid, col = self._editing
         editor = self._editor
+        editing = self._editing
+        if editor is None or editing is None:
+            return
+        iid, col = editing
         new_val = editor.get()
+        if not self._invoke_callback_safe(
+            self._on_commit,
+            iid,
+            col,
+            new_val,
+            on_error=lambda: self._focus_editor_safely(
+                editor,
+                context="refocus inline editor after commit failure",
+                select_text=True,
+            ),
+            log_message="Inline edit commit callback failed",
+            error_title="Edit failed",
+            error_message="Could not save the inline edit.",
+            dialog_log_context="Unable to show inline edit failure dialog",
+        ):
+            return
         if callable(self._on_commit):
-            try:
-                self._on_commit(iid, col, new_val)
-            except Exception as exc:
-                LOGGER.exception("Inline edit commit callback failed")
-                self._focus_editor_safely(editor, context="refocus inline editor after commit failure", select_text=True)
-                self._show_error_dialog(
-                    "Edit failed",
-                    f"Could not save the inline edit.\n\nReason: {exc}",
-                    log_context="Unable to show inline edit failure dialog",
-                )
-                return
             self._destroy_editor_safely(context="committing an inline edit")
             self._clear_editor_state()
             return
@@ -467,21 +514,17 @@ class RecordTable(ttk.Treeview):
     def load(self, records: Sequence[Record]) -> None:
         self._records = list(records)
         self.delete(*self.get_children())
-        for record in records:
-            self.insert_record(record)
+        for row_index, record in enumerate(self._records):
+            self._render_record_row(record, row_index)
 
     def update_record(self, record: Record) -> None:
-        values = self._values_for_record(record)
         row_index = next((index for index, existing in enumerate(self._records) if existing.id == record.id), None)
         if row_index is None:
             self._records.append(record)
             row_index = len(self._records) - 1
         else:
             self._records[row_index] = record
-        if self.exists(record.id):
-            self.item(record.id, values=values, tags=(self._row_tag_for_record(record, row_index),))
-        else:
-            self.insert_record(record)
+        self._render_record_row(record, row_index)
 
     def _format_display_value(self, col: str, val) -> str:
         if val is None:
@@ -501,13 +544,30 @@ class RecordTable(ttk.Treeview):
         return str(val)
 
     def _values_for_record(self, record: Record) -> list[str]:
-        return [self._format_display_value(col, getattr(record, col)) for col in self._cols]
+        values: list[str] = []
+        for col in self._cols:
+            if col == "field6":
+                values.append(self._format_display_value(col, record.effective_field6))
+                continue
+            values.append(self._format_display_value(col, getattr(record, col)))
+        return values
+
+    def _render_record_row(self, record: Record, row_index: int):
+        values = self._values_for_record(record)
+        tag = self._row_tag_for_record(record, row_index)
+        if self.exists(record.id):
+            self.item(record.id, values=values, tags=(tag,))
+            return record.id
+        return self.insert("", "end", iid=record.id, values=values, tags=(tag,))
 
     def insert_record(self, record: Record):
-        values = self._values_for_record(record)
-        row_index = len(self.get_children())
-        tag = self._row_tag_for_record(record, row_index)
-        return self.insert("", "end", iid=record.id, values=values, tags=(tag,))
+        row_index = next((index for index, existing in enumerate(self._records) if existing.id == record.id), None)
+        if row_index is None:
+            self._records.append(record)
+            row_index = len(self._records) - 1
+        else:
+            self._records[row_index] = record
+        return self._render_record_row(record, row_index)
 
     def get_selected_id(self) -> str | None:
         sel = self.selection()
@@ -516,5 +576,11 @@ class RecordTable(ttk.Treeview):
         return sel[0]
 
     def delete_selected(self) -> None:
-        for iid in self.selection():
+        selected_ids = tuple(self.selection())
+        if not selected_ids:
+            return
+        for iid in selected_ids:
             self.delete(iid)
+        selected_id_set = set(selected_ids)
+        self._records = [record for record in self._records if record.id not in selected_id_set]
+        self._refresh_row_tags()

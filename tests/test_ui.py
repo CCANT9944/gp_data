@@ -8,6 +8,7 @@ from gp_data import settings as settings_module
 from gp_data.ui import RecordTable, GPDataApp
 from gp_data.ui.app import DIRTY_MODE_BANNER_BG, EDIT_MODE_BANNER_BG, NEW_MODE_BANNER_BG
 from gp_data.ui.csv_preview import CsvPreviewData
+from gp_data.ui.csv_preview.dialog import PREVIEW_IMPORTED_ROW_TAG
 from gp_data.ui.table import ROW_TAG_EVEN, ROW_TAG_GP_LOW_EVEN, ROW_TAG_GP_LOW_ODD, ROW_TAG_ODD, TABLE_HEADING_STYLE, TABLE_STYLE
 from gp_data.models import NumericChange, Record
 
@@ -67,6 +68,16 @@ def test_record_table_applies_alternating_row_tags(tk_root):
     assert ROW_TAG_ODD in table.item(first_id)["tags"]
     assert ROW_TAG_EVEN in table.item(second_id)["tags"]
     assert len(table.item(first_id)["values"]) == len(table.get_column_order())
+
+
+def test_record_table_insert_record_survives_layout_reload(tk_root):
+    table = RecordTable(tk_root)
+    record = Record(field1="alpha")
+
+    table.insert_record(record)
+    table._apply_column_layout(reload_rows=True)
+
+    assert table.get_children() == (record.id,)
 
 
 
@@ -345,7 +356,7 @@ def test_open_csv_preview_launches_dialog(app_factory, tmp_path, monkeypatch):
     monkeypatch.setattr("gp_data.ui.app.filedialog.askopenfilename", lambda **kwargs: str(csv_path))
     monkeypatch.setattr("gp_data.ui.app.messagebox.askyesnocancel", lambda *args, **kwargs: True)
 
-    def fake_open(parent, csv_path, *, width, height, has_header_row, import_field_labels=None, on_import_filtered_rows=None, existing_import_identities=None, existing_import_possible_identities=None, existing_import_exact_match_records=None, existing_import_possible_match_records=None):
+    def fake_open(parent, csv_path, *, width, height, has_header_row, import_field_labels=None, on_import_filtered_rows=None, existing_import_identities=None, existing_import_possible_identities=None, existing_import_exact_match_records=None, existing_import_possible_match_records=None, import_notice_text=None):
         seen["parent"] = parent
         seen["path"] = csv_path
         seen["width"] = width
@@ -404,7 +415,7 @@ def test_open_csv_preview_can_generate_default_headers_for_headerless_files(app_
     monkeypatch.setattr("gp_data.ui.app.filedialog.askopenfilename", lambda **kwargs: str(csv_path))
     monkeypatch.setattr("gp_data.ui.app.messagebox.askyesnocancel", lambda *args, **kwargs: False)
 
-    def fake_open(parent, csv_path, *, width, height, has_header_row, import_field_labels=None, on_import_filtered_rows=None, existing_import_identities=None, existing_import_possible_identities=None, existing_import_exact_match_records=None, existing_import_possible_match_records=None):
+    def fake_open(parent, csv_path, *, width, height, has_header_row, import_field_labels=None, on_import_filtered_rows=None, existing_import_identities=None, existing_import_possible_identities=None, existing_import_exact_match_records=None, existing_import_possible_match_records=None, import_notice_text=None):
         seen["path"] = csv_path
         seen["has_header_row"] = has_header_row
         return None
@@ -445,10 +456,147 @@ def test_open_last_csv_button_enabled_from_saved_settings(tmp_path, monkeypatch)
     app.withdraw()
 
     assert str(app._open_last_csv_button.cget("state")) == "normal"
+    assert str(app._open_last_csv_button.cget("text")) == "Last CSV"
     assert str(app._open_recent_csv_button.cget("state")) == "normal"
     assert app._recent_csv_menu.entrycget(1, "label") == str(other_csv_path)
 
     app.destroy()
+
+
+def test_app_formula_panel_updates_for_selected_record(app_factory):
+    app = app_factory()
+    record = Record(field1="Beer", field2="Peroni", field3=24.0, field5="24", field7=5.50)
+    app.data_manager.save(record)
+    app.load_records()
+
+    assert str(app._formula_panel.winfo_manager()) == "pack"
+    assert "Select a row to view calculations." in app._formula_panel_text.get("1.0", "end-1c")
+
+    app.table.selection_set(record.id)
+    app._on_table_select()
+    app.update()
+
+    panel_text = app._formula_panel_text.get("1.0", "end-1c")
+    field3_label, field5_label, field6_label, field7_label = (
+        app.form.labels[2],
+        app.form.labels[4],
+        app.form.labels[5],
+        app.form.labels[6],
+    )
+
+    assert "Selected row calculations" in panel_text
+    assert f"Formula: {field6_label} = {field3_label} / {field5_label}" in panel_text
+    assert f"Formula: GP = 1 - ({field6_label} * 1.2) / {field7_label}" in panel_text
+    assert "Result: £1.00" in panel_text
+
+
+def test_formula_settings_dialog_can_hide_formula_panel(app_factory, tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setattr(settings_module, "DEFAULT_PATH", settings_path)
+    app = app_factory()
+    seen: dict[str, str] = {}
+
+    def apply_dialog_changes() -> None:
+        dialog = _find_toplevel_with_title(app, "Formula settings")
+        assert dialog is not None
+
+        overview = _find_descendant(dialog, tk.Text)
+        toggle = _find_descendant(dialog, ttk.Checkbutton)
+        apply_button = _find_descendant(dialog, ttk.Button, text="Apply")
+
+        assert overview is not None
+        assert toggle is not None
+        assert apply_button is not None
+
+        seen["overview"] = overview.get("1.0", "end-1c")
+        toggle.invoke()
+        dialog.update()
+        apply_button.invoke()
+
+    app.after(50, apply_dialog_changes)
+    app._manage_formula_settings_button.invoke()
+    app.update()
+
+    assert "Editable formulas use stable field names" in seen["overview"]
+    assert str(app._formula_panel.winfo_manager()) == ""
+    assert app._settings.load_show_formula_panel() is False
+
+    app.destroy()
+
+    reopened_app = app_factory()
+
+    assert str(reopened_app._formula_panel.winfo_manager()) == ""
+
+
+def test_formula_settings_dialog_updates_live_calculations(app_factory, tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setattr(settings_module, "DEFAULT_PATH", settings_path)
+    app = app_factory()
+    record = Record(field1="Beer", field2="Peroni", field3=24.0, field5="24", field7=5.50)
+    app.data_manager.save(record)
+    app.load_records()
+    app.table.selection_set(record.id)
+    app._on_table_select()
+    app.update()
+
+    gp70_index = app.table.get_column_order().index("gp70")
+    field6_label = app.form.labels[5]
+
+    assert app.table.item(record.id)["values"][gp70_index] == "£4.00"
+
+    def apply_dialog_changes() -> None:
+        dialog = _find_toplevel_with_title(app, "Formula settings")
+        assert dialog is not None
+
+        entries = _find_widgets(dialog, ttk.Entry)
+        apply_button = _find_descendant(dialog, ttk.Button, text="Apply")
+
+        assert len(entries) >= 4
+        assert apply_button is not None
+
+        entries[3].delete(0, tk.END)
+        entries[3].insert(0, "field6 * 2")
+        apply_button.invoke()
+
+    app.after(50, apply_dialog_changes)
+    app._manage_formula_settings_button.invoke()
+    app.update()
+
+    panel_text = app._formula_panel_text.get("1.0", "end-1c")
+
+    assert f"Formula: WITH 70% GP = {field6_label} * 2" in panel_text
+    assert app.table.item(record.id)["values"][gp70_index] == "£2.00"
+    assert app._settings.load_formula_expressions()["gp70"] == "field6 * 2"
+
+    app.destroy()
+
+    reopened_app = app_factory()
+    reopened_gp70_index = reopened_app.table.get_column_order().index("gp70")
+
+    assert reopened_app._settings.load_formula_expressions()["gp70"] == "field6 * 2"
+    assert reopened_app.table.item(record.id)["values"][reopened_gp70_index] == "£2.00"
+
+
+def test_imported_recent_csvs_are_marked_in_picker_controls(app_factory, tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setattr(settings_module, "DEFAULT_PATH", settings_path)
+    app = app_factory()
+    imported_csv = tmp_path / "imported.csv"
+    plain_csv = tmp_path / "plain.csv"
+    imported_csv.write_text("A,B\n1,2\n", encoding="utf-8")
+    plain_csv.write_text("A,B\n3,4\n", encoding="utf-8")
+    app._settings.save_csv_preview_recent_paths([str(imported_csv), str(plain_csv)])
+    app._settings.save_csv_import_timestamp(
+        str(app.data_manager.path),
+        str(imported_csv),
+        "2026-03-23T20:15:00+00:00",
+    )
+
+    app._update_open_last_csv_button_state()
+
+    assert str(app._open_last_csv_button.cget("text")) == "Last CSV [*]"
+    assert app._recent_csv_menu.entrycget(0, "label") == f"{imported_csv} [*]"
+    assert app._recent_csv_menu.entrycget(1, "label") == str(plain_csv)
 
 
 def test_open_last_csv_preview_launches_saved_path(app_factory, tmp_path, monkeypatch):
@@ -462,7 +610,7 @@ def test_open_last_csv_preview_launches_saved_path(app_factory, tmp_path, monkey
 
     seen: dict[str, object] = {}
 
-    def fake_open(parent, csv_path, *, width, height, has_header_row, import_field_labels=None, on_import_filtered_rows=None, existing_import_identities=None, existing_import_possible_identities=None, existing_import_exact_match_records=None, existing_import_possible_match_records=None):
+    def fake_open(parent, csv_path, *, width, height, has_header_row, import_field_labels=None, on_import_filtered_rows=None, existing_import_identities=None, existing_import_possible_identities=None, existing_import_exact_match_records=None, existing_import_possible_match_records=None, import_notice_text=None):
         seen["parent"] = parent
         seen["path"] = csv_path
         seen["has_header_row"] = has_header_row
@@ -490,7 +638,7 @@ def test_open_last_csv_preview_reuses_saved_header_mode(app_factory, tmp_path, m
 
     seen: dict[str, object] = {}
 
-    def fake_open(parent, csv_path, *, width, height, has_header_row, import_field_labels=None, on_import_filtered_rows=None, existing_import_identities=None, existing_import_possible_identities=None, existing_import_exact_match_records=None, existing_import_possible_match_records=None):
+    def fake_open(parent, csv_path, *, width, height, has_header_row, import_field_labels=None, on_import_filtered_rows=None, existing_import_identities=None, existing_import_possible_identities=None, existing_import_exact_match_records=None, existing_import_possible_match_records=None, import_notice_text=None):
         seen["path"] = csv_path
         seen["has_header_row"] = has_header_row
         return None
@@ -507,6 +655,78 @@ def test_open_last_csv_preview_reuses_saved_header_mode(app_factory, tmp_path, m
     assert seen["has_header_row"] is False
 
 
+def test_open_last_csv_preview_sets_import_notice_on_dialog(app_factory, tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setattr(settings_module, "DEFAULT_PATH", settings_path)
+    app = app_factory()
+    csv_path = tmp_path / "saved.csv"
+    csv_path.write_text("A,B\n1,2\n", encoding="utf-8")
+    app._settings.save_csv_preview_last_path(str(csv_path))
+    app._settings.save_csv_preview_has_header_row(str(csv_path), True)
+    app._settings.save_csv_import_timestamp(
+        str(app.data_manager.path),
+        str(csv_path),
+        "2026-03-23T20:15:00+00:00",
+    )
+    app._update_open_last_csv_button_state()
+
+    dialog = app._open_csv_preview_dialog(
+        csv_path,
+        width=900,
+        height=520,
+        has_header_row=True,
+    )
+
+    deadline = datetime.now().timestamp() + 2.0
+    notice_text = None
+    while datetime.now().timestamp() < deadline:
+        app.update()
+        dialog.update()
+        notice = _find_label_with_text(dialog, "This CSV path has prior import history for the current data file from")
+        if notice is not None:
+            notice_text = str(notice.cget("text"))
+            break
+
+    assert notice_text is not None
+    assert "2026-03-23 20:15:00" in notice_text
+    assert "does not necessarily mean the full CSV was imported" in notice_text
+
+    dialog.destroy()
+    app.destroy()
+
+
+def test_app_open_csv_preview_dialog_highlights_existing_import_matches(app_factory, tmp_path):
+    app = app_factory()
+    app.data_manager.save(Record(field1="Cocktails", field2="Mojito", field7=8.50))
+    csv_path = tmp_path / "preview.csv"
+    csv_path.write_text(
+        "Classname,ItemDescription,Selling Price\nCocktails,Mojito,8.50\nCocktails,Martini,9.50\n",
+        encoding="utf-8",
+    )
+
+    dialog = app._open_csv_preview_dialog(
+        csv_path,
+        width=900,
+        height=520,
+        has_header_row=True,
+    )
+    tree = _find_descendant(dialog, ttk.Treeview)
+
+    assert tree is not None
+
+    deadline = datetime.now().timestamp() + 2.0
+    while datetime.now().timestamp() < deadline:
+        app.update()
+        dialog.update()
+        if len(tree.get_children()) == 2:
+            break
+    assert len(tree.get_children()) == 2
+    assert PREVIEW_IMPORTED_ROW_TAG in tree.item(tree.get_children()[0])["tags"]
+
+    dialog.destroy()
+    app.destroy()
+
+
 def test_open_last_csv_preview_shows_processing_message_while_loading(app_factory, tmp_path, monkeypatch):
     settings_path = tmp_path / "settings.json"
     monkeypatch.setattr(settings_module, "DEFAULT_PATH", settings_path)
@@ -518,7 +738,7 @@ def test_open_last_csv_preview_shows_processing_message_while_loading(app_factor
 
     seen: dict[str, object] = {}
 
-    def fake_open(parent, csv_path, *, width, height, has_header_row, import_field_labels=None, on_import_filtered_rows=None, existing_import_identities=None, existing_import_possible_identities=None, existing_import_exact_match_records=None, existing_import_possible_match_records=None):
+    def fake_open(parent, csv_path, *, width, height, has_header_row, import_field_labels=None, on_import_filtered_rows=None, existing_import_identities=None, existing_import_possible_identities=None, existing_import_exact_match_records=None, existing_import_possible_match_records=None, import_notice_text=None):
         dialog = parent._csv_preview_status_dialog
         seen["dialog_exists"] = bool(dialog is not None and dialog.winfo_exists())
         seen["dialog_title"] = dialog.title() if dialog is not None else ""
@@ -578,7 +798,7 @@ def test_open_recent_csv_preview_launches_selected_saved_path(app_factory, tmp_p
 
     seen: dict[str, object] = {}
 
-    def fake_open(parent, csv_path, *, width, height, has_header_row, import_field_labels=None, on_import_filtered_rows=None, existing_import_identities=None, existing_import_possible_identities=None, existing_import_exact_match_records=None, existing_import_possible_match_records=None):
+    def fake_open(parent, csv_path, *, width, height, has_header_row, import_field_labels=None, on_import_filtered_rows=None, existing_import_identities=None, existing_import_possible_identities=None, existing_import_exact_match_records=None, existing_import_possible_match_records=None, import_notice_text=None):
         seen["parent"] = parent
         seen["path"] = csv_path
         seen["has_header_row"] = has_header_row
@@ -595,6 +815,8 @@ def test_open_recent_csv_preview_launches_selected_saved_path(app_factory, tmp_p
 
 
 def test_app_can_import_filtered_csv_rows_and_skip_duplicates(app_factory, tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setattr(settings_module, "DEFAULT_PATH", settings_path)
     app = app_factory()
     data = CsvPreviewData(
         path=tmp_path / "preview.csv",
@@ -635,6 +857,10 @@ def test_app_can_import_filtered_csv_rows_and_skip_duplicates(app_factory, tmp_p
     ]
     seen_info: dict[str, str] = {}
 
+    data.path.write_text("Classname,ItemDescription,Selling Price\n", encoding="utf-8")
+    app._settings.save_csv_preview_recent_paths([str(data.path)])
+    app._update_open_last_csv_button_state()
+
     monkeypatch.setattr(app._record_actions, "_create_safety_backup_or_confirm", lambda action: True)
     monkeypatch.setattr("gp_data.ui.app.messagebox.showinfo", lambda title, message: seen_info.update(title=title, message=message))
 
@@ -652,6 +878,9 @@ def test_app_can_import_filtered_csv_rows_and_skip_duplicates(app_factory, tmp_p
     assert seen_info["title"] == "Import filtered rows"
     assert "Imported 2 row(s) from preview.csv." in seen_info["message"]
     assert "Skipped 1 duplicate row(s)" in seen_info["message"]
+    assert app._settings.load_csv_import_timestamp(str(app.data_manager.path), str(data.path)) is not None
+    assert str(app._open_last_csv_button.cget("text")) == "Last CSV [*]"
+    assert app._recent_csv_menu.entrycget(0, "label") == f"{data.path} [*]"
 
 
 def test_app_can_import_filtered_csv_rows_and_overwrite_existing_match(app_factory, tmp_path, monkeypatch):
@@ -717,6 +946,43 @@ def _find_descendant(root: tk.Misc, cls, text: str | None = None):
             except tk.TclError:
                 pass
         found = _find_descendant(widget, cls, text=text)
+        if found is not None:
+            return found
+    return None
+
+
+def _find_label_with_text(root: tk.Misc, expected_text: str):
+    for widget in root.winfo_children():
+        if isinstance(widget, ttk.Label):
+            try:
+                if expected_text in str(widget.cget("text")):
+                    return widget
+            except tk.TclError:
+                pass
+        found = _find_label_with_text(widget, expected_text)
+        if found is not None:
+            return found
+    return None
+
+
+def _find_widgets(root: tk.Misc, cls):
+    found: list[tk.Misc] = []
+    for widget in root.winfo_children():
+        if isinstance(widget, cls):
+            found.append(widget)
+        found.extend(_find_widgets(widget, cls))
+    return found
+
+
+def _find_toplevel_with_title(root: tk.Misc, expected_title: str):
+    for widget in root.winfo_children():
+        if isinstance(widget, tk.Toplevel):
+            try:
+                if widget.title() == expected_title:
+                    return widget
+            except tk.TclError:
+                pass
+        found = _find_toplevel_with_title(widget, expected_title)
         if found is not None:
             return found
     return None
@@ -965,6 +1231,20 @@ def test_record_table_copy_and_delete(tmp_path):
     assert table.get_children() == ()
 
     root.destroy()
+
+
+def test_record_table_delete_selected_removes_records_from_reload_state(tk_root):
+    table = RecordTable(tk_root)
+    first = Record(field1="alpha")
+    second = Record(field1="beta")
+    table.load([first, second])
+
+    table.selection_set(first.id)
+    table.delete_selected()
+    table._apply_column_layout(reload_rows=True)
+
+    assert table.get_children() == (second.id,)
+    assert ROW_TAG_ODD in table.item(second.id)["tags"]
 
 
 def test_field6_autocompute_and_edgecases():

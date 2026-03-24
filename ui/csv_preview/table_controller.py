@@ -86,6 +86,7 @@ class _PreviewTableController(_PreviewRefreshControllerBase):
         initial_sort_descending: bool = False,
         on_visible_columns_changed=None,
         on_sort_changed=None,
+        row_tags_for_row=None,
         *,
         view_state_factory,
         normalize_visible_column_indices,
@@ -131,6 +132,7 @@ class _PreviewTableController(_PreviewRefreshControllerBase):
             tree,
             self._view_state,
             self._update_summary_label,
+            row_tags_for_row=row_tags_for_row,
         )
         self._analysis_launcher = analysis_launcher_factory(
             win,

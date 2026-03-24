@@ -30,7 +30,7 @@ def _focus_widget(widget: tk.Misc | None) -> None:
 class InputForm(ttk.Frame):
     """Encapsulates seven input fields. Labels can be renamed at runtime."""
 
-    def __init__(self, parent, labels: Sequence[str] | None = None, on_rename: Callable[[list[str]], None] | None = None, on_submit: Callable[[], None] | None = None, save_labels_callback: Callable[[list[str]], object] | None = None, on_dirty_change: Callable[[bool], None] | None = None, **kwargs):
+    def __init__(self, parent, labels: Sequence[str] | None = None, on_rename: Callable[[list[str]], None] | None = None, on_submit: Callable[[], None] | None = None, save_labels_callback: Callable[[list[str]], object] | None = None, on_dirty_change: Callable[[bool], None] | None = None, on_values_changed: Callable[[], None] | None = None, **kwargs):
         super().__init__(parent, **kwargs)
         default = ["Field 1", "Field 2", "Field 3", "Field 4", "Field 5", "Field 6", "Field 7"]
         self.labels = list(labels or default)
@@ -39,6 +39,7 @@ class InputForm(ttk.Frame):
         self.on_submit = on_submit
         self._save_labels = save_labels_callback or save_labels_to_settings
         self.on_dirty_change = on_dirty_change
+        self.on_values_changed = on_values_changed
         self.current_record_id: str | None = None
         self._clean_snapshot: dict | None = None
         self._current_change_data: dict = {}
@@ -103,6 +104,7 @@ class InputForm(ttk.Frame):
             if key == "field6":
                 continue
             ent.bind("<KeyRelease>", lambda e: self._notify_dirty_state(), add="+")
+            ent.bind("<KeyRelease>", lambda e: self._notify_values_changed(), add="+")
 
         self.columnconfigure(1, weight=1)
         self._mark_clean()
@@ -121,6 +123,10 @@ class InputForm(ttk.Frame):
     def _notify_dirty_state(self) -> None:
         if callable(self.on_dirty_change):
             self.on_dirty_change(self.is_dirty())
+
+    def _notify_values_changed(self) -> None:
+        if callable(self.on_values_changed):
+            self.on_values_changed()
 
     def _set_changes_text(self, text: str) -> None:
         self.last_numeric_change_var.set(text)
@@ -346,6 +352,7 @@ class InputForm(ttk.Frame):
         self._safe_recalc_field6("loading record values")
         self._mark_clean()
         self._notify_dirty_state()
+        self._notify_values_changed()
 
     def recalc_field6(self) -> None:
         v3 = self.entries.get("field3").get() if self.entries.get("field3") else None
@@ -447,6 +454,7 @@ class InputForm(ttk.Frame):
         self._current_change_data = {}
         self._mark_clean()
         self._notify_dirty_state()
+        self._notify_values_changed()
 
     def _apply_field_labels_to_form(self, labels: Sequence[str]) -> None:
         for index, label in enumerate(labels):

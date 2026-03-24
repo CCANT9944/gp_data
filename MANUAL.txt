@@ -47,6 +47,9 @@ The first time you open a CSV, the app asks whether the file already has a heade
 If you answer No, the viewer creates Column 1, Column 2, Column 3, and so on, and keeps the first row as data.
 There is a Last CSV button beside it that reopens the most recently viewed CSV path if that file still exists.
 There is also a Recent CSVs button that lists several recently viewed CSV files.
+If you reopen a CSV that has prior import history for the current data file, the app now shows a notice inside the preview window.
+CSV files with prior import history are also marked with a compact [*] marker in the Last CSV button text and inside the Recent CSVs list, even when only part of the file was imported before.
+Inside the CSV preview, matching rows are highlighted so you can review row by row what is already in the current data file before you import again.
 
 4. ADDING A RECORD
 
@@ -58,6 +61,8 @@ Important notes:
 
 - Field 6 is calculated automatically from Field 3 and Field 5 when possible.
 - GP, CASH MARGIN, and WITH 70% GP are calculated fields.
+- Formula settings lets you edit those formulas using safe field names and simple math operators, and it also lets you show or hide the calculation details panel below the main table.
+- When a row is selected, that details panel explains the current row calculations using the current field labels and values.
 - Some text fields are automatically title-cased.
 - If another item already has the same Type and Name, the program warns you before adding another one.
 - You can still continue and add the duplicate if you really mean to.
@@ -127,6 +132,7 @@ Use the search box near the top.
 - You can also pick Custom from that menu and type your own GP threshold.
 - Use Clear GP highlight from that same menu to remove the highlighting again.
 - That GP highlight choice is saved locally, so it stays there next time you open the app.
+- Click Formula settings if you want to show or hide the calculation details panel under the main table without opening a separate calculation window.
 - The table only shows matching rows.
 - Export uses the rows currently displayed in the table.
 
@@ -237,6 +243,8 @@ What it does:
 - lets you type a text search and press Enter when you are ready to run it
 - lets you choose which columns stay visible
 - reopens remembered CSV preview columns quickly and shows those saved columns immediately when the window opens again
+- shows a notice inside the preview if that same CSV path has prior import history for the current data file, so you do not accidentally re-import it without noticing
+- highlights rows that already match saved items, so the preview itself shows row by row what is already in the current data file before you open the import review
 - shows a small label in the preview telling you whether it is using Headers: Row 1 or Headers: Generated
 - lets you click a column header and open a compact popup with a search box and scrollable value list so you can pick one exact value to view, such as one ClassName
 - lets you sort text columns A-to-Z or Z-to-A and sort numeric columns low-to-high or high-to-low from that same popup using the real values for that column type
@@ -247,6 +255,7 @@ What it does:
 - opens a mapping step first so you can choose which CSV column goes into which main form field
 - treats buying price and selling price separately during that mapping step, so a Selling Price CSV column is not auto-mapped into the buying-price field by default
 - opens a review table after mapping so you can edit values, include or exclude rows, import only the rows that are ready, and overwrite a matched saved row when you choose that on purpose
+- lets you explicitly import a possible-duplicate saved-data match as a new row when you mean to, instead of forcing you to overwrite the saved row
 - shows the difference between a clash with saved data and a clash with another row in the current CSV import, so import-row warnings are easier to understand
 - keeps size variants such as 125ml, 175ml, and 250ml separate from each other when checking possible duplicates inside the current import batch
 - still lets saved-data possible matches ignore size and format words when that helps find the existing row you may want to overwrite
@@ -328,6 +337,7 @@ This includes:
 - column widths
 - visible columns
 - the GP row highlight threshold
+- whether the calculation details panel under the main table is shown
 - the last CSV preview path used by Last CSV
 - the recent CSV preview paths used by Recent CSVs
 - the saved raw CSV preview state for each CSV path, including visible columns, active sort, and remembered header-row choice, with header-aware restore when possible for reordered CSVs
@@ -335,7 +345,7 @@ This includes:
 Important:
 
 - if renamed field labels cannot be saved or applied, the app keeps the old labels and shows an error
-- if saving column layout or GP highlight settings fails, the app warns that the change may not still be there after restart
+- if saving column layout, GP highlight, or calculation-panel visibility settings fails, the app warns that the change may not still be there after restart
 - if you try to close the window with unsaved form edits, the app asks before discarding them
 
 

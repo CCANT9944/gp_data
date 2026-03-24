@@ -8,6 +8,17 @@ except ModuleNotFoundError:
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def reset_formula_expressions_between_tests():
+    from gp_data.formulas import reset_active_formula_expressions
+
+    reset_active_formula_expressions()
+    try:
+        yield
+    finally:
+        reset_active_formula_expressions()
+
+
 GUI_TEST_FILES = {
     "test_edit_commit.py",
     "test_enter_submit.py",

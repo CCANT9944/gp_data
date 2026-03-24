@@ -493,14 +493,20 @@ class _PreviewDataPipelineBase:
 
     def _iter_rows_after_header_filter(self, filter_state: _PreviewFilterState):
         normalized_value = filter_state.header_filter_value.casefold() if filter_state.header_filter_value is not None else None
+        if filter_state.header_filter_column_index is None or normalized_value is None:
+            yield from self.rows_before_header_filter(filter_state)
+            return
+
+        column_index = filter_state.header_filter_column_index
+        casefold_cache: dict[str, str] = {}
         for row in self.rows_before_header_filter(filter_state):
-            if (
-                filter_state.header_filter_column_index is not None
-                and normalized_value is not None
-                and row[filter_state.header_filter_column_index].casefold() != normalized_value
-            ):
-                continue
-            yield row
+            raw_value = row[column_index]
+            folded_value = casefold_cache.get(raw_value)
+            if folded_value is None:
+                folded_value = raw_value.casefold()
+                casefold_cache[raw_value] = folded_value
+            if folded_value == normalized_value:
+                yield row
 
     def iter_filtered_refresh_messages(self, load_token: int, filter_state: _PreviewFilterState, *, rendered_row_limit: int, should_cancel=None):
         if filter_state.sort_column_index is not None:

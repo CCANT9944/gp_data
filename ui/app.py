@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 import logging
 import tkinter as tk
 from pathlib import Path
@@ -7,10 +8,12 @@ from tkinter import filedialog, messagebox, simpledialog
 from typing import Sequence
 
 from ..data_manager import DataManager
+from ..formulas import set_active_formula_expressions
 from ..models import Record
 from ..settings import SettingsStore
 from .app_layout import build_app_layout
 from .app_csv_preview_controller import _CsvPreviewLaunchController
+from .app_formula_display_controller import _FormulaDisplayController
 from .app_form_mode_controller import _FormModeController
 from .app_record_controllers import _RecordFormActionsController, _RecordListController
 from .app_storage_controller import _AppStorageActionsController
@@ -59,6 +62,7 @@ class GPDataApp(tk.Tk):
             current_records=self._current_loaded_records,
         )
         app_settings = self._settings.load()
+        set_active_formula_expressions(app_settings.formula_expressions)
         labels = app_settings.labels
         column_order = app_settings.column_order
         column_widths = app_settings.column_widths
@@ -83,6 +87,7 @@ class GPDataApp(tk.Tk):
             on_save_changes=self.on_save_changes,
             on_delete=self.on_delete,
             on_manage_columns=self.on_manage_columns,
+            on_manage_formula_settings=self.on_manage_formula_settings,
             on_open_csv_preview=self.on_open_csv_preview,
             on_open_last_csv_preview=self.on_open_last_csv_preview,
             on_manage_backups=self.on_manage_backups,
@@ -102,8 +107,11 @@ class GPDataApp(tk.Tk):
     def _apply_layout(self, layout) -> None:
         self.form = layout.form
         self.table = layout.table
+        self._formula_panel = layout.formula_panel
+        self._formula_panel_text = layout.formula_panel_text
         self._form_mode_var = layout.form_mode_var
         self._form_mode_label = layout.form_mode_label
+        self._manage_formula_settings_button = layout.manage_formula_settings_button
         self._save_changes_button = layout.save_changes_button
         self._delete_selected_button = layout.delete_selected_button
         self._open_last_csv_button = layout.open_last_csv_button
@@ -140,6 +148,7 @@ class GPDataApp(tk.Tk):
             ),
             CsvPreviewError,
             self.on_open_recent_csv_preview,
+            lambda csv_path: self._load_csv_import_timestamp(Path(csv_path)) if csv_path else None,
         )
         self._storage_actions = _AppStorageActionsController(
             self,
@@ -165,6 +174,17 @@ class GPDataApp(tk.Tk):
             DIRTY_MODE_BANNER_BG,
             DIRTY_MODE_BANNER_FG,
         )
+        self._formula_display = _FormulaDisplayController(
+            self,
+            self._settings,
+            self.form,
+            self.table,
+            self._formula_panel,
+            self._formula_panel_text,
+            self._refresh_record_view,
+            self._warn_settings_save_failure,
+        )
+        self.form.on_values_changed = self._formula_display.refresh
         self.form.on_dirty_change = self._on_form_dirty_change
         self._table_display = _TableDisplayController(
             self,
@@ -322,21 +342,8 @@ class GPDataApp(tk.Tk):
     def _update_form_mode_ui(self, record: Record | None = None) -> None:
         self._form_mode.update(record)
 
-    def _set_form_mode_banner(self, text: str, bg: str, fg: str) -> None:
-        self._form_mode_var.set(text)
-        self._form_mode_label.config(bg=bg, fg=fg)
-
     def _current_search_query(self) -> str:
         return self._search_entry.get().strip().lower()
-
-    def _normalized_type_value(self, value: str | None) -> str:
-        return self._table_display.normalized_type_value(value)
-
-    def _record_type_options(self, records: list[Record]) -> list[str]:
-        return self._table_display.record_type_options(records)
-
-    def _apply_type_filter(self, records: list[Record]) -> list[Record]:
-        return self._table_display.apply_type_filter(records)
 
     def _sort_records_for_display(self, records: list[Record]) -> list[Record]:
         return sorted(
@@ -344,9 +351,6 @@ class GPDataApp(tk.Tk):
             key=lambda record: record.created_at.timestamp() if record.created_at is not None else 0.0,
             reverse=True,
         )
-
-    def _set_type_filter(self, value: str | None) -> None:
-        self._table_display.set_type_filter(value)
 
     def _show_type_filter_menu(self) -> None:
         self._table_display.show_type_filter_menu()
@@ -437,7 +441,7 @@ class GPDataApp(tk.Tk):
             existing_import_exact_match_records,
             existing_import_possible_match_records,
         ) = self._current_import_review_context()
-        return open_csv_preview_dialog(
+        dialog = open_csv_preview_dialog(
             self,
             csv_path,
             width=width,
@@ -449,7 +453,9 @@ class GPDataApp(tk.Tk):
             existing_import_possible_identities=existing_import_possible_identities,
             existing_import_exact_match_records=existing_import_exact_match_records,
             existing_import_possible_match_records=existing_import_possible_match_records,
+            import_notice_text=self._csv_preview_import_notice_text(csv_path),
         )
+        return dialog
 
     def _update_open_last_csv_button_state(
         self,
@@ -497,6 +503,9 @@ class GPDataApp(tk.Tk):
             return
 
         imported_count, overwritten_count, skipped_duplicates, invalid_rows = result
+        if imported_count or overwritten_count:
+            self._remember_imported_csv(data.path)
+            self._update_open_last_csv_button_state()
         message_lines = [f"Imported {imported_count} row(s) from {data.path.name}."]
         if overwritten_count:
             message_lines.append(f"Overwrote {overwritten_count} existing row(s).")
@@ -513,6 +522,39 @@ class GPDataApp(tk.Tk):
             for record in self.data_manager.load_all()
             if (identity := self.data_manager.duplicate_identity(record)) is not None
         }
+
+    def _settings_storage_path(self) -> str:
+        return str(self.data_manager.path)
+
+    def _load_csv_import_timestamp(self, csv_path: Path) -> str | None:
+        return self._settings.load_csv_import_timestamp(self._settings_storage_path(), str(csv_path))
+
+    def _remember_imported_csv(self, csv_path: Path) -> None:
+        imported_at = datetime.now().astimezone().isoformat(timespec="seconds")
+        try:
+            self._settings.save_csv_import_timestamp(self._settings_storage_path(), str(csv_path), imported_at)
+        except (OSError, TypeError, ValueError) as exc:
+            LOGGER.warning("Unable to persist CSV import marker", exc_info=True)
+            self._warn_settings_save_failure("the CSV import history", exc)
+
+    def _csv_preview_import_notice_text(self, csv_path: Path) -> str | None:
+        imported_at = self._load_csv_import_timestamp(csv_path)
+        if imported_at is None:
+            return
+        return (
+            "This CSV path has prior import history for the current data file from "
+            f"{self._format_csv_import_timestamp(imported_at)}. That does not necessarily mean the full CSV was imported. "
+            "Use the row highlights below to review which rows already match saved items."
+        )
+
+    def _format_csv_import_timestamp(self, imported_at: str) -> str:
+        try:
+            parsed = datetime.fromisoformat(imported_at)
+        except ValueError:
+            return imported_at
+        if parsed.tzinfo is None:
+            return parsed.strftime("%Y-%m-%d %H:%M:%S")
+        return parsed.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z").strip()
 
     def _current_import_possible_duplicate_identities(self) -> set[tuple[str, str]]:
         return {
@@ -595,6 +637,7 @@ class GPDataApp(tk.Tk):
 
     def on_labels_changed(self, labels: Sequence[str]) -> None:
         self._table_display.on_labels_changed(labels)
+        self._formula_display.on_labels_changed()
 
     def on_column_order_changed(self, columns: Sequence[str]) -> None:
         self._table_display.on_column_order_changed(columns)
@@ -610,6 +653,9 @@ class GPDataApp(tk.Tk):
 
     def on_manage_columns(self) -> None:
         self._table_display.on_manage_columns()
+
+    def on_manage_formula_settings(self) -> None:
+        self._formula_display.on_manage_formula_settings()
 
     def _on_table_commit(self, record_id: str, col: str, new_value: str) -> None:
         self._record_actions.save_inline_edit(record_id, col, new_value)

@@ -10,6 +10,8 @@ from typing import Iterable, Optional
 from pydantic import ValidationError
 
 from .data_manager import DataManager
+from .formulas import set_active_formula_expressions
+from .settings import SettingsStore
 
 
 CSV_PREVIEW_DEBUG_ENV = "GP_DATA_CSV_PREVIEW_DEBUG"
@@ -123,6 +125,10 @@ def _load_data_manager(command: str, storage: Optional[Path]) -> DataManager | N
     return DataManager(storage) if storage else DataManager()
 
 
+def _initialize_runtime_formula_expressions() -> None:
+    set_active_formula_expressions(SettingsStore().load_formula_expressions())
+
+
 def _handle_restore(dm: DataManager) -> int:
     try:
         try:
@@ -173,6 +179,9 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
     if csv_preview_debug_log_path is not None:
         csv_preview_debug_log_path = _configure_csv_preview_debug_logging(csv_preview_debug_log_path)
     data_manager = _load_data_manager(command, args.storage)
+
+    if command not in {"gui", "migrate", "cleanup"}:
+        _initialize_runtime_formula_expressions()
 
     if command == "gui":
         if csv_preview_debug_log_path is not None:

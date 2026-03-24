@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import tkinter as tk
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,13 +19,12 @@ from ...data_manager.duplicates import (
 from gp_data.settings import SettingsStore
 from ...models import Record, calculate_field6
 from .analysis import PreviewAnalysisSnapshot, build_preview_analysis_snapshot
-from .analysis_dialog import build_csv_preview_analysis_view, open_csv_preview_analysis_dialog_from_snapshot
+from .analysis_dialog import build_csv_preview_analysis_view
 from .analysis_launcher import _AnalysisSnapshotCoordinator, _PreviewAnalysisLauncher
 from .dialog_support import (
     _build_tree as _build_tree_impl,
     _column_ids as _column_ids_impl,
     _column_width as _column_width_impl,
-    _default_csv_preview_export_directory as _default_csv_preview_export_directory_impl,
     _default_csv_preview_export_path as _default_csv_preview_export_path_impl,
     _normalized_visible_column_indices as _normalized_visible_column_indices_impl,
     _paths_match as _paths_match_impl,
@@ -51,9 +51,10 @@ from .helpers import (
 )
 from .loader import CsvPreviewData, iter_csv_preview_rows, load_csv_preview, resolve_csv_preview_metadata
 from .pipeline import (
-    MAX_INDEXED_SOURCE_MEMORY_BYTES as _PIPELINE_MAX_INDEXED_SOURCE_MEMORY_BYTES,
     _FilteredCountUpdate,
+    _FilteredErrorUpdate,
     _FilteredPreviewUpdate,
+    MAX_INDEXED_SOURCE_MEMORY_BYTES as _PIPELINE_MAX_INDEXED_SOURCE_MEMORY_BYTES,
     _PreviewFilterState,
 )
 from .preview_pipeline import _PreviewDataPipeline
@@ -91,12 +92,25 @@ HEADER_FILTER_POPUP_WIDTH = 320
 HEADER_FILTER_POPUP_HEIGHT = 300
 HEADER_FILTER_POPUP_LIST_HEIGHT = 10
 CSV_PREVIEW_EXPORT_ENCODING = "utf-8-sig"
+CSV_PREVIEW_NOTICE_WRAPLENGTH = 560
 MAX_INDEXED_SOURCE_MEMORY_BYTES = _PIPELINE_MAX_INDEXED_SOURCE_MEMORY_BYTES
 DEFAULT_IMPORT_FIELD_LABELS = ["Field 1", "Field 2", "Field 3", "Field 4", "Field 5", "Field 6", "Field 7"]
 IMPORT_REVIEW_TABLE_COLUMNS = ("include", "field1", "field2", "field7", "status")
 LARGE_IMPORT_PREFLIGHT_ROW_COUNT = 250
 IMPORT_SELECTION_DUPLICATE_STATUS = "Duplicate with another included import row"
 IMPORT_SELECTION_POSSIBLE_DUPLICATE_STATUS = "Possible duplicate with another included import row"
+READY_TO_OVERWRITE_STATUS = "Ready to overwrite matched row"
+READY_AS_NEW_POSSIBLE_DUPLICATE_STATUS = "Ready as new row (possible duplicate)"
+IMPORT_READY_STATUSES = {
+    "Ready",
+    READY_TO_OVERWRITE_STATUS,
+    READY_AS_NEW_POSSIBLE_DUPLICATE_STATUS,
+}
+PREVIEW_IMPORTED_ROW_TAG = "preview_imported"
+PREVIEW_POSSIBLE_IMPORTED_ROW_TAG = "preview_possible_imported"
+PREVIEW_IMPORTED_ROW_BACKGROUND = "#dff3e4"
+PREVIEW_POSSIBLE_IMPORTED_ROW_BACKGROUND = "#fff1c2"
+_CAMEL_CASE_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
 def _log_preview_performance(operation: str, started_at: float, **fields: object) -> None:
@@ -121,6 +135,7 @@ class _PreviewDialogWidgets:
     win: tk.Toplevel
     container: ttk.Frame
     workspace_row: ttk.Frame
+    workspace_notice: ttk.Label
     summary: ttk.Label
     filter_row: ttk.Frame
     summary_var: tk.StringVar
@@ -139,6 +154,7 @@ class _ImportReviewRow:
     payload: dict[str, object]
     include: bool = True
     overwrite_record_id: str | None = None
+    allow_possible_duplicate_import: bool = False
 
 
 @dataclass
@@ -146,11 +162,139 @@ class _ReviewRowAnalysis:
     status_by_row_id: dict[str, str]
     collisions_by_row_id: dict[str, _ImportReviewRow]
 
+@dataclass(frozen=True)
+class _ReviewRowStatusContext:
+    row: _ImportReviewRow
+    validation_status: str
+    identity: tuple[str, str] | None
+    possible_identity: tuple[str, str] | None
+    import_selection_possible_identity: tuple[str, str] | None
+    exact_existing_record: Record | None
+    possible_existing_records: list[Record]
+    overwrite_target: Record | None
+    overwrite_target_matches_row: bool
+
+
+class _ImportReviewStatusResolver:
+    def __init__(
+        self,
+        field_labels: Sequence[str] | None = None,
+        existing_identities: set[tuple[str, str]] | None = None,
+        existing_possible_identities: set[tuple[str, str]] | None = None,
+        existing_exact_match_records: dict[tuple[str, str], Record] | None = None,
+        existing_possible_match_records: dict[tuple[str, str], list[Record]] | None = None,
+    ) -> None:
+        self._field_labels = field_labels
+        self._exact_match_records = existing_exact_match_records or {}
+        self._possible_match_records = existing_possible_match_records or {}
+        self.exact_match_identities = set(existing_identities or self._exact_match_records.keys())
+        self.possible_match_identities = set(existing_possible_identities or self._possible_match_records.keys())
+        self.matched_record_ids = {record.id for record in self._exact_match_records.values()} | {
+            record.id for records in self._possible_match_records.values() for record in records
+        }
+
+    def build_context(self, row: _ImportReviewRow) -> _ReviewRowStatusContext:
+        identity = _payload_duplicate_identity(row.payload)
+        possible_identity = _payload_possible_duplicate_identity(row.payload)
+        overwrite_target = _overwrite_target_record(row, self._exact_match_records, self._possible_match_records)
+        exact_existing_record = self._exact_match_records.get(identity) if identity is not None else None
+        possible_existing_records = list(self._possible_match_records.get(possible_identity, [])) if possible_identity is not None else []
+        overwrite_target_matches_row = (
+            overwrite_target is not None
+            and (
+                (exact_existing_record is not None and exact_existing_record.id == overwrite_target.id)
+                or any(record.id == overwrite_target.id for record in possible_existing_records)
+            )
+        )
+        return _ReviewRowStatusContext(
+            row=row,
+            validation_status=_validated_import_status(row.payload, self._field_labels),
+            identity=identity,
+            possible_identity=possible_identity,
+            import_selection_possible_identity=_payload_import_selection_possible_duplicate_identity(row.payload),
+            exact_existing_record=exact_existing_record,
+            possible_existing_records=possible_existing_records,
+            overwrite_target=overwrite_target,
+            overwrite_target_matches_row=overwrite_target_matches_row,
+        )
+
+    def determine_status(
+        self,
+        context: _ReviewRowStatusContext,
+        seen_identities: dict[tuple[str, str], _ImportReviewRow],
+        seen_possible_identities: dict[tuple[str, str], _ImportReviewRow],
+        seen_overwrite_record_ids: dict[str, _ImportReviewRow],
+    ) -> str:
+        if context.validation_status != "Ready":
+            return context.validation_status
+        if context.row.overwrite_record_id is not None:
+            return self._overwrite_status(context, seen_identities, seen_possible_identities, seen_overwrite_record_ids)
+        return self._new_row_status(context, seen_identities, seen_possible_identities)
+
+    def _overwrite_status(
+        self,
+        context: _ReviewRowStatusContext,
+        seen_identities: dict[tuple[str, str], _ImportReviewRow],
+        seen_possible_identities: dict[tuple[str, str], _ImportReviewRow],
+        seen_overwrite_record_ids: dict[str, _ImportReviewRow],
+    ) -> str:
+        overwrite_record_id = context.row.overwrite_record_id
+        if overwrite_record_id not in self.matched_record_ids:
+            return "Missing overwrite target"
+        if not context.overwrite_target_matches_row:
+            return "Overwrite target no longer matches row"
+        if overwrite_record_id in seen_overwrite_record_ids:
+            return "Overwrite target already used in import selection"
+        if (
+            context.identity is not None
+            and context.exact_existing_record is not None
+            and context.exact_existing_record.id != overwrite_record_id
+        ):
+            return "Duplicate existing Type + Name"
+        if context.identity is not None and context.identity in seen_identities:
+            return IMPORT_SELECTION_DUPLICATE_STATUS
+        if (
+            context.import_selection_possible_identity is not None
+            and context.import_selection_possible_identity in seen_possible_identities
+        ):
+            return IMPORT_SELECTION_POSSIBLE_DUPLICATE_STATUS
+        return "Ready to overwrite matched row"
+
+    def _new_row_status(
+        self,
+        context: _ReviewRowStatusContext,
+        seen_identities: dict[tuple[str, str], _ImportReviewRow],
+        seen_possible_identities: dict[tuple[str, str], _ImportReviewRow],
+    ) -> str:
+        if context.identity is None:
+            return "Ready"
+        if context.identity in self.exact_match_identities:
+            return "Duplicate existing Type + Name"
+        if context.identity in seen_identities:
+            return IMPORT_SELECTION_DUPLICATE_STATUS
+        if context.possible_identity is not None and context.possible_identity in self.possible_match_identities:
+            if not context.row.allow_possible_duplicate_import:
+                return "Possible duplicate existing item"
+            if (
+                context.import_selection_possible_identity is not None
+                and context.import_selection_possible_identity in seen_possible_identities
+            ):
+                return IMPORT_SELECTION_POSSIBLE_DUPLICATE_STATUS
+            return READY_AS_NEW_POSSIBLE_DUPLICATE_STATUS
+        if (
+            context.import_selection_possible_identity is not None
+            and context.import_selection_possible_identity in seen_possible_identities
+        ):
+            return IMPORT_SELECTION_POSSIBLE_DUPLICATE_STATUS
+        return "Ready"
+
 
 def _normalized_mapping_text(value: str | None) -> str:
     if not value:
         return ""
-    return " ".join(str(value).replace("_", " ").strip().lower().split())
+    normalized = _CAMEL_CASE_BOUNDARY_RE.sub(" ", str(value))
+    normalized = normalized.replace("_", " ")
+    return " ".join(normalized.strip().lower().split())
 
 
 def _normalized_import_field_labels(labels: Sequence[str] | None) -> list[str]:
@@ -164,74 +308,91 @@ def _header_contains_any(normalized_header: str, tokens: Sequence[str]) -> bool:
     return any(token in normalized_header for token in tokens)
 
 
+class _ImportHeaderMatcher:
+    FIELD_ORDER = ("field1", "field2", "field3", "field4", "field5", "field7")
+    HINTS_BY_FIELD = {
+        "field1": ("type", "class", "class name", "classname", "category"),
+        "field2": ("name", "description", "item", "product", "item description", "item name"),
+        "field3": ("cost", "buy", "purchase", "total"),
+        "field4": ("note", "notes", "supplier", "brand", "size"),
+        "field5": ("unit", "units", "qty", "quantity", "volume", "ml"),
+        "field7": ("selling price", "menu price", "sell price", "price", "revenue", "amount", "sales"),
+    }
+
+    @classmethod
+    def hints_for_field(cls, field_name: str) -> tuple[str, ...]:
+        return cls.HINTS_BY_FIELD.get(field_name, ())
+
+    @classmethod
+    def score_header_for_field(cls, field_name: str, label: str, header: str) -> int:
+        normalized_header = _normalized_mapping_text(header)
+        normalized_label = _normalized_mapping_text(label)
+        if not normalized_header:
+            return -1
+
+        header_looks_like_buy_price = _header_contains_any(normalized_header, ("cost", "buy", "purchase", "wholesale"))
+        header_looks_like_sell_price = _header_contains_any(normalized_header, ("selling", "menu", "sell", "revenue", "sales"))
+        header_has_generic_price = "price" in normalized_header
+
+        score = 0
+        if normalized_label and normalized_header == normalized_label:
+            score += 100
+        elif normalized_label and normalized_label in normalized_header:
+            score += 35
+
+        for hint in cls.hints_for_field(field_name):
+            if normalized_header == hint:
+                score += 80
+            elif hint in normalized_header:
+                score += 30
+
+        if field_name == "field2" and "item" in normalized_header and "description" in normalized_header:
+            score += 40
+        if field_name == "field2" and _header_contains_any(normalized_header, ("revenue centre", "revenue center")):
+            score -= 50
+
+        if field_name == "field7" and "cost" in normalized_header and "price" not in normalized_header:
+            score -= 20
+        if field_name == "field3" and header_looks_like_sell_price:
+            score -= 80
+        if field_name == "field3" and header_has_generic_price and not header_looks_like_buy_price:
+            score -= 45
+        if field_name == "field7" and header_looks_like_buy_price and not header_looks_like_sell_price:
+            score -= 60
+        return score
+
+    @classmethod
+    def guess_mapping(cls, headers: Sequence[str], field_labels: Sequence[str]) -> dict[str, int | None]:
+        guessed_mapping: dict[str, int | None] = {"field6": None}
+        used_indices: set[int] = set()
+        for field_name in cls.FIELD_ORDER:
+            label_index = int(field_name[5:]) - 1
+            label = field_labels[label_index] if 0 <= label_index < len(field_labels) else field_name
+            best_index: int | None = None
+            best_score = 0
+            for index, header in enumerate(headers):
+                if index in used_indices:
+                    continue
+                score = cls.score_header_for_field(field_name, label, header)
+                if score > best_score:
+                    best_score = score
+                    best_index = index
+            guessed_mapping[field_name] = best_index
+            if best_index is not None:
+                used_indices.add(best_index)
+        return guessed_mapping
+
+
 def _import_header_hints(field_name: str) -> tuple[str, ...]:
-    if field_name == "field1":
-        return ("type", "class", "class name", "classname", "category")
-    if field_name == "field2":
-        return ("name", "description", "item", "product")
-    if field_name == "field3":
-        return ("cost", "buy", "purchase", "total")
-    if field_name == "field4":
-        return ("note", "notes", "supplier", "brand", "size")
-    if field_name == "field5":
-        return ("unit", "units", "qty", "quantity", "volume", "ml")
-    if field_name == "field7":
-        return ("selling price", "menu price", "sell price", "price", "revenue", "amount", "sales")
-    return ()
+    return _ImportHeaderMatcher.hints_for_field(field_name)
 
 
 def _import_header_match_score(field_name: str, label: str, header: str) -> int:
-    normalized_header = _normalized_mapping_text(header)
-    normalized_label = _normalized_mapping_text(label)
-    if not normalized_header:
-        return -1
-
-    header_looks_like_buy_price = _header_contains_any(normalized_header, ("cost", "buy", "purchase", "wholesale"))
-    header_looks_like_sell_price = _header_contains_any(normalized_header, ("selling", "menu", "sell", "revenue", "sales"))
-    header_has_generic_price = "price" in normalized_header
-
-    score = 0
-    if normalized_label and normalized_header == normalized_label:
-        score += 100
-    elif normalized_label and normalized_label in normalized_header:
-        score += 35
-
-    for hint in _import_header_hints(field_name):
-        if normalized_header == hint:
-            score += 80
-        elif hint in normalized_header:
-            score += 30
-
-    if field_name == "field7" and "cost" in normalized_header and "price" not in normalized_header:
-        score -= 20
-    if field_name == "field3" and header_looks_like_sell_price:
-        score -= 80
-    if field_name == "field3" and header_has_generic_price and not header_looks_like_buy_price:
-        score -= 45
-    if field_name == "field7" and header_looks_like_buy_price and not header_looks_like_sell_price:
-        score -= 60
-    return score
+    return _ImportHeaderMatcher.score_header_for_field(field_name, label, header)
 
 
 def _guess_import_mapping(headers: Sequence[str], field_labels: Sequence[str]) -> dict[str, int | None]:
-    guessed_mapping: dict[str, int | None] = {"field6": None}
-    used_indices: set[int] = set()
-    for offset, field_name in enumerate(("field1", "field2", "field3", "field4", "field5", "field7")):
-        label_index = int(field_name[5:]) - 1
-        label = field_labels[label_index] if 0 <= label_index < len(field_labels) else field_name
-        best_index: int | None = None
-        best_score = 0
-        for index, header in enumerate(headers):
-            if index in used_indices:
-                continue
-            score = _import_header_match_score(field_name, label, header)
-            if score > best_score:
-                best_score = score
-                best_index = index
-        guessed_mapping[field_name] = best_index
-        if best_index is not None:
-            used_indices.add(best_index)
-    return guessed_mapping
+    return _ImportHeaderMatcher.guess_mapping(headers, field_labels)
 
 
 def _sample_value_for_column(rows: Sequence[tuple[str, ...]], column_index: int | None) -> str:
@@ -268,6 +429,125 @@ def _build_import_payload(row: tuple[str, ...], mapping: dict[str, int | None]) 
     }
     payload["field6"] = calculate_field6(payload.get("field3"), payload.get("field5"))
     return payload
+
+
+def _preview_highlight_mapping(
+    headers: Sequence[str],
+    field_labels: Sequence[str] | None,
+) -> dict[str, int | None] | None:
+    mapping = _guess_import_mapping(headers, _normalized_import_field_labels(field_labels))
+    if mapping.get("field1") is None or mapping.get("field2") is None:
+        return None
+    return mapping
+
+
+def _preview_row_match_kind(
+    row: tuple[str, ...],
+    mapping: dict[str, int | None] | None,
+    existing_identities: set[tuple[str, str]] | None = None,
+    existing_possible_identities: set[tuple[str, str]] | None = None,
+) -> str | None:
+    if mapping is None:
+        return None
+
+    payload = _build_import_payload(row, mapping)
+    identity = _payload_duplicate_identity(payload)
+    if identity is not None and identity in (existing_identities or set()):
+        return "exact"
+
+    possible_identity = _payload_possible_duplicate_identity(payload)
+    if possible_identity is not None and possible_identity in (existing_possible_identities or set()):
+        return "possible"
+
+    return None
+
+
+def _preview_row_tags(
+    row: tuple[str, ...],
+    mapping: dict[str, int | None] | None,
+    existing_identities: set[tuple[str, str]] | None = None,
+    existing_possible_identities: set[tuple[str, str]] | None = None,
+) -> tuple[str, ...]:
+    match_kind = _preview_row_match_kind(
+        row,
+        mapping,
+        existing_identities,
+        existing_possible_identities,
+    )
+    if match_kind == "exact":
+        return (PREVIEW_IMPORTED_ROW_TAG,)
+    if match_kind == "possible":
+        return (PREVIEW_POSSIBLE_IMPORTED_ROW_TAG,)
+    return ()
+
+
+def _preview_match_presence(
+    data: CsvPreviewData,
+    mapping: dict[str, int | None] | None,
+    existing_identities: set[tuple[str, str]] | None = None,
+    existing_possible_identities: set[tuple[str, str]] | None = None,
+) -> tuple[bool, bool]:
+    if mapping is None:
+        return False, False
+
+    if not existing_identities and not existing_possible_identities:
+        return False, False
+
+    rows = data.rows if data.fully_cached else iter_csv_preview_rows(data)
+    has_exact_matches = False
+    has_possible_matches = False
+    for row in rows:
+        match_kind = _preview_row_match_kind(
+            row,
+            mapping,
+            existing_identities,
+            existing_possible_identities,
+        )
+        if match_kind == "exact":
+            has_exact_matches = True
+        elif match_kind == "possible":
+            has_possible_matches = True
+        if has_exact_matches and has_possible_matches:
+            break
+
+    return has_exact_matches, has_possible_matches
+
+
+def _configure_preview_row_highlight_tags(tree: ttk.Treeview) -> None:
+    tree.tag_configure(PREVIEW_IMPORTED_ROW_TAG, background=PREVIEW_IMPORTED_ROW_BACKGROUND)
+    tree.tag_configure(PREVIEW_POSSIBLE_IMPORTED_ROW_TAG, background=PREVIEW_POSSIBLE_IMPORTED_ROW_BACKGROUND)
+
+
+def _preview_import_notice_text(
+    has_exact_matches: bool,
+    has_possible_matches: bool,
+    imported_csv_notice_text: str | None = None,
+) -> str | None:
+    messages: list[str] = []
+    if imported_csv_notice_text:
+        messages.append(imported_csv_notice_text)
+
+    if has_exact_matches and has_possible_matches:
+        messages.append("Green rows already match saved items. Amber rows may match existing saved items.")
+    elif has_exact_matches:
+        messages.append("Green rows already match saved items.")
+    elif has_possible_matches:
+        messages.append("Amber rows may match existing saved items.")
+    return "\n".join(messages) if messages else None
+
+
+def _set_csv_preview_import_notice(label: ttk.Label, notice_text: str | None) -> None:
+    if not notice_text:
+        label.pack_forget()
+        label.configure(text="")
+        return
+    label.configure(
+        text=notice_text,
+        anchor="w",
+        justify="left",
+        wraplength=CSV_PREVIEW_NOTICE_WRAPLENGTH,
+    )
+    label.pack(side="left", padx=(12, 0), pady=(2, 0))
 
 
 def _build_import_review_rows(
@@ -382,13 +662,13 @@ def _build_review_row_analysis(
     existing_exact_match_records: dict[tuple[str, str], Record] | None = None,
     existing_possible_match_records: dict[tuple[str, str], list[Record]] | None = None,
 ) -> _ReviewRowAnalysis:
-    exact_match_records = existing_exact_match_records or {}
-    possible_match_records = existing_possible_match_records or {}
-    exact_match_identities = set(existing_identities or exact_match_records.keys())
-    possible_match_identities = set(existing_possible_identities or possible_match_records.keys())
-    matched_record_ids = {record.id for record in exact_match_records.values()} | {
-        record.id for records in possible_match_records.values() for record in records
-    }
+    resolver = _ImportReviewStatusResolver(
+        field_labels,
+        existing_identities,
+        existing_possible_identities,
+        existing_exact_match_records,
+        existing_possible_match_records,
+    )
 
     status_by_row_id: dict[str, str] = {}
     collisions_by_row_id: dict[str, _ImportReviewRow] = {}
@@ -397,67 +677,24 @@ def _build_review_row_analysis(
     seen_overwrite_record_ids: dict[str, _ImportReviewRow] = {}
 
     for row in rows:
-        validation_status = _validated_import_status(row.payload, field_labels)
-        identity = _payload_duplicate_identity(row.payload)
-        possible_identity = _payload_possible_duplicate_identity(row.payload)
-        import_selection_possible_identity = _payload_import_selection_possible_duplicate_identity(row.payload)
-        exact_existing_record = exact_match_records.get(identity) if identity is not None else None
-        possible_existing_records = list(possible_match_records.get(possible_identity, [])) if possible_identity is not None else []
-        overwrite_target = _overwrite_target_record(row, exact_match_records, possible_match_records)
-        overwrite_target_matches_row = (
-            overwrite_target is not None
-            and (
-                (exact_existing_record is not None and exact_existing_record.id == overwrite_target.id)
-                or any(record.id == overwrite_target.id for record in possible_existing_records)
-            )
+        context = resolver.build_context(row)
+        status = resolver.determine_status(
+            context,
+            seen_identities,
+            seen_possible_identities,
+            seen_overwrite_record_ids,
         )
-
-        if validation_status != "Ready":
-            status = validation_status
-        elif row.overwrite_record_id is not None:
-            if row.overwrite_record_id not in matched_record_ids:
-                status = "Missing overwrite target"
-            elif not overwrite_target_matches_row:
-                status = "Overwrite target no longer matches row"
-            elif row.overwrite_record_id in seen_overwrite_record_ids:
-                status = "Overwrite target already used in import selection"
-            elif identity is not None and exact_existing_record is not None and exact_existing_record.id != row.overwrite_record_id:
-                status = "Duplicate existing Type + Name"
-            elif identity is not None and identity in seen_identities:
-                status = IMPORT_SELECTION_DUPLICATE_STATUS
-            elif (
-                import_selection_possible_identity is not None
-                and import_selection_possible_identity in seen_possible_identities
-            ):
-                status = IMPORT_SELECTION_POSSIBLE_DUPLICATE_STATUS
-            else:
-                status = "Ready to overwrite matched row"
-        elif identity is None:
-            status = "Ready"
-        elif identity in exact_match_identities:
-            status = "Duplicate existing Type + Name"
-        elif identity in seen_identities:
-            status = IMPORT_SELECTION_DUPLICATE_STATUS
-        elif possible_identity is not None and possible_identity in possible_match_identities:
-            status = "Possible duplicate existing item"
-        elif (
-            import_selection_possible_identity is not None
-            and import_selection_possible_identity in seen_possible_identities
-        ):
-            status = IMPORT_SELECTION_POSSIBLE_DUPLICATE_STATUS
-        else:
-            status = "Ready"
 
         status_by_row_id[row.row_id] = status
 
-        if status == IMPORT_SELECTION_DUPLICATE_STATUS and identity is not None and identity in seen_identities:
-            collisions_by_row_id[row.row_id] = seen_identities[identity]
+        if status == IMPORT_SELECTION_DUPLICATE_STATUS and context.identity is not None and context.identity in seen_identities:
+            collisions_by_row_id[row.row_id] = seen_identities[context.identity]
         elif (
             status == IMPORT_SELECTION_POSSIBLE_DUPLICATE_STATUS
-            and import_selection_possible_identity is not None
-            and import_selection_possible_identity in seen_possible_identities
+            and context.import_selection_possible_identity is not None
+            and context.import_selection_possible_identity in seen_possible_identities
         ):
-            collisions_by_row_id[row.row_id] = seen_possible_identities[import_selection_possible_identity]
+            collisions_by_row_id[row.row_id] = seen_possible_identities[context.import_selection_possible_identity]
         elif (
             status == "Overwrite target already used in import selection"
             and row.overwrite_record_id is not None
@@ -467,11 +704,14 @@ def _build_review_row_analysis(
 
         if not row.include:
             continue
-        if identity is not None and identity not in seen_identities:
-            seen_identities[identity] = row
-        if import_selection_possible_identity is not None and import_selection_possible_identity not in seen_possible_identities:
-            seen_possible_identities[import_selection_possible_identity] = row
-        if status == "Ready to overwrite matched row" and row.overwrite_record_id is not None:
+        if context.identity is not None and context.identity not in seen_identities:
+            seen_identities[context.identity] = row
+        if (
+            context.import_selection_possible_identity is not None
+            and context.import_selection_possible_identity not in seen_possible_identities
+        ):
+            seen_possible_identities[context.import_selection_possible_identity] = row
+        if status == READY_TO_OVERWRITE_STATUS and row.overwrite_record_id is not None:
             seen_overwrite_record_ids.setdefault(row.overwrite_record_id, row)
 
     return _ReviewRowAnalysis(status_by_row_id=status_by_row_id, collisions_by_row_id=collisions_by_row_id)
@@ -583,9 +823,9 @@ def _review_status_counts(status_by_row_id: dict[str, str]) -> dict[str, int]:
         "possible_selection": 0,
     }
     for status in status_by_row_id.values():
-        if status == "Ready":
+        if status in {"Ready", READY_AS_NEW_POSSIBLE_DUPLICATE_STATUS}:
             counts["ready"] += 1
-        elif status == "Ready to overwrite matched row":
+        elif status == READY_TO_OVERWRITE_STATUS:
             counts["overwrite"] += 1
         elif status == "Duplicate existing Type + Name":
             counts["duplicate_existing"] += 1
@@ -629,6 +869,20 @@ def _review_tree_values(row: _ImportReviewRow, status: str) -> tuple[str, str, s
     )
 
 
+def _review_tree_updates(
+    rows: Sequence[_ImportReviewRow],
+    previous_status_by_row_id: dict[str, str],
+    next_status_by_row_id: dict[str, str],
+) -> dict[str, tuple[str, str, str, str, str]]:
+    updates: dict[str, tuple[str, str, str, str, str]] = {}
+    for row in rows:
+        previous_values = _review_tree_values(row, previous_status_by_row_id.get(row.row_id, "Ready"))
+        next_values = _review_tree_values(row, next_status_by_row_id.get(row.row_id, "Ready"))
+        if next_values != previous_values:
+            updates[row.row_id] = next_values
+    return updates
+
+
 def _review_summary_text(rows: Sequence[_ImportReviewRow], status_by_row_id: dict[str, str]) -> str:
     included_ready = 0
     included_blocked = 0
@@ -638,7 +892,7 @@ def _review_summary_text(rows: Sequence[_ImportReviewRow], status_by_row_id: dic
         if not row.include:
             excluded_rows += 1
             continue
-        if status in {"Ready", "Ready to overwrite matched row"}:
+        if status in IMPORT_READY_STATUSES:
             included_ready += 1
         else:
             included_blocked += 1
@@ -784,6 +1038,7 @@ def _prompt_import_review(
     match_choice_combobox = ttk.Combobox(editor_frame, state="disabled", textvariable=match_choice_var)
     match_choice_combobox.grid(row=5, column=1, columnspan=3, sticky="ew", padx=(0, 12), pady=(0, 8))
     overwrite_button: ttk.Button | None = None
+    possible_duplicate_button: ttk.Button | None = None
     match_choice_ids_by_label: dict[str, str] = {}
 
     action_row = ttk.Frame(container)
@@ -798,6 +1053,7 @@ def _prompt_import_review(
 
     def _refresh_all_rows() -> dict[str, str]:
         nonlocal current_analysis
+        previous_statuses = dict(current_analysis.status_by_row_id)
         current_analysis = _build_review_row_analysis(
             resolved_review_rows,
             resolved_labels,
@@ -807,10 +1063,10 @@ def _prompt_import_review(
             existing_possible_match_records,
         )
         refreshed_statuses = current_analysis.status_by_row_id
-        for review_row in resolved_review_rows:
-            values = _review_tree_values(review_row, refreshed_statuses.get(review_row.row_id, "Ready"))
-            if tree.exists(review_row.row_id):
-                tree.item(review_row.row_id, values=values)
+        updated_values_by_row_id = _review_tree_updates(resolved_review_rows, previous_statuses, refreshed_statuses)
+        for row_id, values in updated_values_by_row_id.items():
+            if tree.exists(row_id):
+                tree.item(row_id, values=values)
         summary_var.set(_review_summary_text(resolved_review_rows, refreshed_statuses))
         selected_row = _selected_review_row()
         if selected_row is not None:
@@ -840,6 +1096,17 @@ def _prompt_import_review(
         match_choice_combobox.configure(values=[match_choice_prompt, *match_choice_ids_by_label.keys()], state="readonly")
         match_choice_var.set(selected_label)
 
+    def _update_possible_duplicate_button(current_status: str) -> None:
+        if possible_duplicate_button is None:
+            return
+        if current_status == "Possible duplicate existing item":
+            possible_duplicate_button.configure(text="Import As New Row", state="normal")
+            return
+        if current_status == READY_AS_NEW_POSSIBLE_DUPLICATE_STATUS:
+            possible_duplicate_button.configure(text="Undo New Row Override", state="normal")
+            return
+        possible_duplicate_button.configure(text="Import As New Row", state="disabled")
+
     def _select_match_choice(_event=None) -> None:
         row = _selected_review_row()
         if row is None:
@@ -854,6 +1121,7 @@ def _prompt_import_review(
         if selected_record_id is None:
             return
         row.overwrite_record_id = selected_record_id
+        row.allow_possible_duplicate_import = False
         row.include = True
         _refresh_tree_row(row)
 
@@ -870,6 +1138,7 @@ def _prompt_import_review(
         )
         current_status = current_analysis.status_by_row_id.get(row.row_id, "Ready")
         _set_match_choice_options(row, matched_records)
+        _update_possible_duplicate_button(current_status)
         if not matched_records or match_kind is None:
             if overwrite_target is not None and row.overwrite_record_id is not None:
                 match_var.set(f"Overwrite target no longer matches this row: {_match_summary(overwrite_target, resolved_labels)}")
@@ -943,9 +1212,34 @@ def _prompt_import_review(
                 or updated_possible_identity != original_possible_identity
             ):
                 row.overwrite_record_id = None
+        if row.allow_possible_duplicate_import:
+            updated_duplicate_identity = _payload_duplicate_identity(row.payload)
+            updated_possible_identity = _payload_possible_duplicate_identity(row.payload)
+            if (
+                updated_duplicate_identity != original_duplicate_identity
+                or updated_possible_identity != original_possible_identity
+            ):
+                row.allow_possible_duplicate_import = False
         _refresh_tree_row(row)
         selection_status_var.set(current_analysis.status_by_row_id.get(row.row_id, "Ready"))
         return True
+
+    def _toggle_possible_duplicate_selected_row() -> None:
+        _apply_selected_changes()
+        row = _selected_review_row()
+        if row is None:
+            return
+        current_status = current_analysis.status_by_row_id.get(row.row_id, "Ready")
+        if row.allow_possible_duplicate_import:
+            row.allow_possible_duplicate_import = False
+            _refresh_tree_row(row)
+            return
+        if current_status != "Possible duplicate existing item":
+            return
+        row.allow_possible_duplicate_import = True
+        row.include = True
+        row.overwrite_record_id = None
+        _refresh_tree_row(row)
 
     def _toggle_overwrite_selected_row() -> None:
         _apply_selected_changes()
@@ -965,6 +1259,7 @@ def _prompt_import_review(
             return
         matched_record = matched_records[0]
         row.overwrite_record_id = matched_record.id
+        row.allow_possible_duplicate_import = False
         row.include = True
         _refresh_tree_row(row)
 
@@ -976,7 +1271,7 @@ def _prompt_import_review(
             if not row.include:
                 continue
             status = current_analysis.status_by_row_id.get(row.row_id, "Ready")
-            if status not in {"Ready", "Ready to overwrite matched row"}:
+            if status not in IMPORT_READY_STATUSES:
                 continue
             payload = dict(row.payload)
             if row.overwrite_record_id is not None:
@@ -991,7 +1286,7 @@ def _prompt_import_review(
     def _exclude_non_ready_rows() -> None:
         _apply_selected_changes()
         for row in resolved_review_rows:
-            if current_analysis.status_by_row_id.get(row.row_id, "Ready") not in {"Ready", "Ready to overwrite matched row"}:
+            if current_analysis.status_by_row_id.get(row.row_id, "Ready") not in IMPORT_READY_STATUSES:
                 row.include = False
         _refresh_all_rows()
         _load_selected_row()
@@ -1013,6 +1308,8 @@ def _prompt_import_review(
     ttk.Button(action_row, text="Exclude Non-ready", command=_exclude_non_ready_rows).pack(side="left")
     overwrite_button = ttk.Button(action_row, text="Overwrite Matched Row", command=_toggle_overwrite_selected_row)
     overwrite_button.pack(side="left", padx=(8, 0))
+    possible_duplicate_button = ttk.Button(action_row, text="Import As New Row", command=_toggle_possible_duplicate_selected_row)
+    possible_duplicate_button.pack(side="left", padx=(8, 0))
     ttk.Button(action_row, text="Apply Changes", command=_apply_selected_changes).pack(side="left", padx=(8, 0))
     ttk.Button(action_row, text="Cancel", command=win.destroy).pack(side="right")
     ttk.Button(action_row, text="Import Ready Rows", command=_import_ready_rows).pack(side="right", padx=(0, 8))
@@ -1148,41 +1445,6 @@ def _normalized_visible_column_indices(column_count: int, visible_indices: list[
     return _normalized_visible_column_indices_impl(column_count, visible_indices)
 
 
-def _build_tree(parent: tk.Misc, data: CsvPreviewData) -> ttk.Treeview:
-    column_ids = _column_ids(data)
-    return _build_tree_impl(
-        parent,
-        data,
-        column_ids=column_ids,
-        column_width_for_header=_column_width,
-        min_column_width=MIN_COLUMN_WIDTH,
-    )
-
-
-def _default_csv_preview_export_path(source_path: Path) -> Path:
-    return _default_csv_preview_export_path_impl(source_path)
-
-
-def _default_csv_preview_export_directory(source_path: Path) -> Path:
-    return _default_csv_preview_export_directory_impl(source_path)
-
-
-def _prepare_csv_preview_export_directory(source_path: Path) -> Path:
-    return _prepare_csv_preview_export_directory_impl(source_path)
-
-
-def _paths_match(first: Path, second: Path) -> bool:
-    return _paths_match_impl(first, second)
-
-
-def _write_csv_preview_export(dest_path: Path, headers: list[str], rows) -> None:
-    _write_csv_preview_export_impl(dest_path, headers, rows, encoding=CSV_PREVIEW_EXPORT_ENCODING)
-
-
-def _widget_descends_from(widget: tk.Misc | None, ancestor: tk.Misc | None) -> bool:
-    return _widget_descends_from_impl(widget, ancestor)
-
-
 def _iter_combined_rows(data: CsvPreviewData, enabled: bool):
     yield from _iter_combined_rows_impl(data, enabled)
 
@@ -1244,7 +1506,7 @@ configure_preview_runtime(
         filtered=filtered,
         sort_description=sort_description,
     ),
-    normalize_visible_column_indices=lambda column_count, visible_indices: _normalized_visible_column_indices(
+    normalize_visible_column_indices=lambda column_count, visible_indices: _normalized_visible_column_indices_impl(
         column_count,
         visible_indices,
     ),
@@ -1269,6 +1531,12 @@ def _build_preview_dialog_widgets(
 
     workspace_row = ttk.Frame(container)
     workspace_row.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+    workspace_notice = ttk.Label(
+        workspace_row,
+        anchor="w",
+        justify="left",
+        wraplength=CSV_PREVIEW_NOTICE_WRAPLENGTH,
+    )
 
     initial_displayed_rows = min(data.row_count or len(data.rows), _rendered_preview_row_limit(data.column_count))
     summary_var = tk.StringVar(
@@ -1304,7 +1572,13 @@ def _build_preview_dialog_widgets(
     table_frame.columnconfigure(0, weight=1)
     table_frame.rowconfigure(0, weight=1)
 
-    tree = _build_tree(table_frame, data)
+    tree = _build_tree_impl(
+        table_frame,
+        data,
+        column_ids=_column_ids_impl(data),
+        column_width_for_header=_column_width,
+        min_column_width=MIN_COLUMN_WIDTH,
+    )
     y_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
     x_scroll = ttk.Scrollbar(table_frame, orient="horizontal", command=tree.xview)
     tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
@@ -1320,6 +1594,7 @@ def _build_preview_dialog_widgets(
         win=win,
         container=container,
         workspace_row=workspace_row,
+        workspace_notice=workspace_notice,
         summary=summary,
         filter_row=filter_row,
         summary_var=summary_var,
@@ -1349,11 +1624,28 @@ def create_csv_preview_dialog(
     existing_import_possible_identities: set[tuple[str, str]] | None = None,
     existing_import_exact_match_records: dict[tuple[str, str], Record] | None = None,
     existing_import_possible_match_records: dict[tuple[str, str], list[Record]] | None = None,
+    import_notice_text: str | None = None,
 ) -> tk.Toplevel:
     widgets = _build_preview_dialog_widgets(parent, data, width=width, height=height)
     analysis_frame: ttk.Frame | None = None
     cached_analysis_snapshot: PreviewAnalysisSnapshot | None = None
     cached_analysis_request_state: tuple[_PreviewFilterState, tuple[int, ...], frozenset[int]] | None = None
+    preview_highlight_mapping = _preview_highlight_mapping(data.headers, import_field_labels)
+    existing_exact_identities = set(existing_import_identities or ())
+    existing_possible_identities = set(existing_import_possible_identities or ())
+    preview_has_exact_matches, preview_has_possible_matches = _preview_match_presence(
+        data,
+        preview_highlight_mapping,
+        existing_exact_identities,
+        existing_possible_identities,
+    )
+    preview_import_notice_text = _preview_import_notice_text(
+        preview_has_exact_matches,
+        preview_has_possible_matches,
+        imported_csv_notice_text=import_notice_text,
+    )
+
+    _configure_preview_row_highlight_tags(widgets.tree)
 
     def _current_analysis_request_state() -> tuple[_PreviewFilterState, tuple[int, ...], frozenset[int]]:
         filter_state, visible_column_indices, numeric_column_indices = controller._analysis_request_state()
@@ -1400,6 +1692,24 @@ def create_csv_preview_dialog(
             return
         controller.open_analysis_dialog()
 
+    def _build_preview_row_renderer(*args, **kwargs) -> _PreviewRowRenderer:
+        row_tags_for_row = kwargs.pop(
+            "row_tags_for_row",
+            lambda row: _preview_row_tags(
+                row,
+                preview_highlight_mapping,
+                existing_exact_identities,
+                existing_possible_identities,
+            ),
+        )
+        return _PreviewRowRenderer(
+            *args,
+            row_tags_for_row=row_tags_for_row,
+            row_insert_chunk_size=ROW_INSERT_CHUNK_SIZE,
+            log_preview_performance=_log_preview_performance,
+            **kwargs,
+        )
+
     controller = _PreviewTableController(
         widgets.win,
         widgets.tree,
@@ -1413,6 +1723,12 @@ def create_csv_preview_dialog(
         initial_sort_descending=initial_sort_descending,
         on_visible_columns_changed=on_visible_columns_changed,
         on_sort_changed=on_sort_changed,
+        row_tags_for_row=lambda row: _preview_row_tags(
+            row,
+            preview_highlight_mapping,
+            existing_exact_identities,
+            existing_possible_identities,
+        ),
         view_state_factory=_PreviewViewState,
         normalize_visible_column_indices=_normalized_visible_column_indices,
         pipeline_factory=_PreviewDataPipeline,
@@ -1421,13 +1737,18 @@ def create_csv_preview_dialog(
             popup_width=HEADER_FILTER_POPUP_WIDTH,
             popup_height=HEADER_FILTER_POPUP_HEIGHT,
             popup_list_height=HEADER_FILTER_POPUP_LIST_HEIGHT,
-            prepare_export_directory=_prepare_csv_preview_export_directory,
-            default_export_path=_default_csv_preview_export_path,
-            paths_match=_paths_match,
-            write_export=_write_csv_preview_export,
+            prepare_export_directory=_prepare_csv_preview_export_directory_impl,
+            default_export_path=_default_csv_preview_export_path_impl,
+            paths_match=_paths_match_impl,
+            write_export=lambda dest_path, headers, rows: _write_csv_preview_export_impl(
+                dest_path,
+                headers,
+                rows,
+                encoding=CSV_PREVIEW_EXPORT_ENCODING,
+            ),
             filter_label=_filter_label,
             compact_filter_popup_label=_compact_filter_popup_label,
-            widget_descends_from=_widget_descends_from,
+            widget_descends_from=_widget_descends_from_impl,
         ),
         column_manager_factory=lambda *args, **kwargs: _PreviewColumnManager(
             *args,
@@ -1438,11 +1759,7 @@ def create_csv_preview_dialog(
             normalize_visible_column_indices=_normalized_visible_column_indices,
             filter_label=_filter_label,
         ),
-        row_renderer_factory=lambda *args: _PreviewRowRenderer(
-            *args,
-            row_insert_chunk_size=ROW_INSERT_CHUNK_SIZE,
-            log_preview_performance=_log_preview_performance,
-        ),
+        row_renderer_factory=_build_preview_row_renderer,
         analysis_launcher_factory=lambda *args: _PreviewAnalysisLauncher(
             *args,
             coordinator_factory=lambda win: _AnalysisSnapshotCoordinator(
@@ -1526,6 +1843,7 @@ def create_csv_preview_dialog(
     preview_button.pack(side="left")
     analysis_button = ttk.Button(widgets.workspace_row, text="Analysis", command=_open_analysis_workspace)
     analysis_button.pack(side="left", padx=(8, 0))
+    _set_csv_preview_import_notice(widgets.workspace_notice, preview_import_notice_text)
     _sync_workspace_buttons()
 
     ttk.Button(widgets.filter_row, text="Columns", command=controller.open_column_dialog).pack(side="left", padx=(0, 12))
@@ -1559,6 +1877,7 @@ def open_csv_preview_dialog(
     existing_import_possible_identities: set[tuple[str, str]] | None = None,
     existing_import_exact_match_records: dict[tuple[str, str], Record] | None = None,
     existing_import_possible_match_records: dict[tuple[str, str], list[Record]] | None = None,
+    import_notice_text: str | None = None,
 ) -> tk.Toplevel:
     data = load_csv_preview(csv_path, has_header_row=has_header_row)
     settings_store = SettingsStore()
@@ -1584,4 +1903,5 @@ def open_csv_preview_dialog(
         existing_import_possible_identities=existing_import_possible_identities,
         existing_import_exact_match_records=existing_import_exact_match_records,
         existing_import_possible_match_records=existing_import_possible_match_records,
+        import_notice_text=import_notice_text,
     )

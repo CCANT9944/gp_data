@@ -36,10 +36,15 @@ numeric change history per item.
 - If `Edit type...` renames a type to one that already exists, the app asks before merging those matching records into the existing target type.
 - Click the `GP` column header to open a small menu with highlight presets, a custom threshold option, and a clear option.
 - The GP highlight threshold is saved in your local `settings.json` and comes back after restart.
+- `Formula settings` lets you edit the calculation formulas using safe field names with simple `+`, `-`, `*`, `/`, and parentheses syntax, and it also lets you show or hide the inline calculation details panel below the main table.
+- When a row is selected, the inline calculation details panel explains `field6`, `GP`, `Cash margin`, and `WITH 70% GP` using the current field labels and row values.
 - `Open CSV` opens a separate raw CSV viewer for the selected file.
 - `Open CSV` now asks whether the file already has a header row; if it does not, the preview generates `Column 1`, `Column 2`, `Column 3`, and so on, and keeps the first row as data.
 - `Last CSV` reopens the most recently viewed CSV from a remembered local path so you do not need to browse for the same file every time.
 - `Recent CSVs` shows the latest remembered CSV files so you can jump back to more than one file without browsing again.
+- If the current data file has prior import history for that same CSV path, reopening it now shows an inline notice in the preview so you can avoid accidentally importing the same source again.
+- CSVs with prior import history are also marked with a compact `[*]` marker in the `Last CSV` button state and in the `Recent CSVs` menu so you can spot them before reopening, even when only part of the file was imported earlier.
+- Inside the CSV preview, rows that already match saved items are highlighted so you can review row-by-row what is already in the current data file before starting the import review.
 - Opening a CSV, combining sessions, and preparing analysis now show a centered processing dialog so long preview actions are clearly visible.
 - The raw CSV viewer includes a global text search across all visible data, and it runs when you press `Enter` in the search box so you can finish typing first.
 - The raw CSV viewer lets you choose which columns stay visible, and it remembers that choice per CSV path using column headers when possible so reordered files reopen more sensibly.
@@ -53,6 +58,7 @@ numeric change history per item.
 - Import opens a mapping step and then a review table before saving anything into the main app data.
 - The mapping step treats buying price and selling price separately, so a `Selling Price` CSV column does not auto-fill the buying-price field by default.
 - The review table lets you include or exclude rows, edit mapped values, import only rows that validate successfully, and overwrite a matched saved row when you explicitly choose that path.
+- The review table also lets you intentionally keep an advisory possible-duplicate saved-data match as a new row, so amber duplicate warnings do not force an overwrite.
 - The review table separates saved-data matches from import-batch conflicts, so statuses that mention another included import row refer to the current CSV selection rather than the main database.
 - Import-batch possible-duplicate checks now keep size markers such as `125ml`, `175ml`, and `250ml` distinct from each other, while saved-data possible matches can still ignore size and format tokens when looking for an overwrite candidate.
 - When a row is blocked by another included import row, the selected-row panel shows exactly which earlier import row it conflicts with and includes a short summary of that blocking row.
@@ -178,10 +184,12 @@ python main.py cleanup
 - `ui/app.py`: top-level Tkinter shell and composition root, with phased startup, startup settings reuse for recent-CSV initialization, and public callbacks kept stable for tests and callers
 - `ui/app_layout.py`: main-window widget, menu, and processing-status construction extracted from `ui/app.py`
 - `ui/app_csv_preview_controller.py`: remembered CSV path, header-mode, and preview-launch actions
+- `ui/app_formula_display_controller.py`: formula settings dialog and inline calculation-details panel visibility
 - `ui/app_storage_controller.py`: export and manage-backups actions
 - `ui/app_form_mode_controller.py`: form-mode banner and edit/new-item button-state logic
 - `ui/app_table_display_controller.py`: type filter, bulk type rename, GP highlight, column labels, and column-visibility controls
 - `ui/app_record_controllers.py`: record list refresh/selection flow plus add/edit/save/delete form actions
+- `ui/formula_explanation.py`: text rendering for the read-only formula overview dialog and selected-row calculation details panel
 - `ui/record_actions.py`: record lookup and add/save/delete flows, plus inline table-edit save logic
 - `ui/csv_preview/`: raw CSV preview package split into loader, dialog, controller, helper, state, and analysis modules
 - `ui/view_helpers.py`: shared UI focus, recalc, table-selection, and processing-dialog helpers
@@ -232,6 +240,7 @@ python main.py cleanup
 
 - `settings.py` remains the public module that callers import from.
 - `settings_store.py` owns reading, writing, and updating saved settings.
+- `settings_store.py` also keeps per-storage CSV import markers so reopening a previously imported CSV can warn before you import it again.
 - `settings_normalization.py` owns defaults, normalization, and backfill rules so malformed or older settings still load safely.
 - `settings_facade.py` provides the module-level `load_*` and `save_*` helper bindings without putting that boilerplate back into `settings.py`.
 - `settings.SettingsStore` still resolves its default path through `settings.DEFAULT_PATH`, which keeps tests and UI flows compatible when that default path is monkeypatched.

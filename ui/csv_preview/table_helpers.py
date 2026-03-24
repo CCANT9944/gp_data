@@ -164,6 +164,7 @@ class _PreviewRowRenderer:
         tree: ttk.Treeview,
         view_state,
         update_summary_label,
+        row_tags_for_row=None,
         *,
         row_insert_chunk_size: int,
         log_preview_performance,
@@ -172,6 +173,7 @@ class _PreviewRowRenderer:
         self._tree = tree
         self._view_state = view_state
         self._update_summary_label = update_summary_label
+        self._row_tags_for_row = row_tags_for_row if callable(row_tags_for_row) else (lambda row: ())
         self._row_insert_chunk_size = row_insert_chunk_size
         self._log_preview_performance = log_preview_performance
 
@@ -199,10 +201,11 @@ class _PreviewRowRenderer:
         end_index = min(start_index + self._row_insert_chunk_size, len(displayed_rows))
         children = list(self._tree.get_children())
         for row_index, row in enumerate(displayed_rows[start_index:end_index], start=start_index):
+            row_tags = tuple(self._row_tags_for_row(row))
             if row_index < len(children):
-                self._tree.item(children[row_index], values=row)
+                self._tree.item(children[row_index], values=row, tags=row_tags)
                 continue
-            self._tree.insert("", "end", values=row)
+            self._tree.insert("", "end", values=row, tags=row_tags)
 
         if end_index >= len(displayed_rows) and len(children) > len(displayed_rows):
             self._tree.delete(*children[len(displayed_rows):])

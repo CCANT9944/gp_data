@@ -10,6 +10,7 @@ from ..settings import SettingsStore
 
 
 LOGGER = logging.getLogger(__name__)
+IMPORT_HISTORY_MARKER = "[*]"
 
 
 class _CsvPreviewLaunchController:
@@ -30,6 +31,7 @@ class _CsvPreviewLaunchController:
         open_csv_preview_dialog,
         csv_preview_error_type,
         on_open_recent_csv_preview,
+        load_csv_import_timestamp,
     ) -> None:
         self._app = app
         self._settings = settings
@@ -46,6 +48,13 @@ class _CsvPreviewLaunchController:
         self._open_csv_preview_dialog = open_csv_preview_dialog
         self._csv_preview_error_type = csv_preview_error_type
         self._on_open_recent_csv_preview = on_open_recent_csv_preview
+        self._load_csv_import_timestamp = load_csv_import_timestamp
+
+    @staticmethod
+    def _recent_csv_label(saved_path: str, imported_at: str | None) -> str:
+        if imported_at:
+            return f"{saved_path} {IMPORT_HISTORY_MARKER}"
+        return saved_path
 
     def update_open_last_csv_button_state(
         self,
@@ -68,11 +77,14 @@ class _CsvPreviewLaunchController:
         state = "normal" if existing_paths else "disabled"
         self._open_last_csv_button.config(state=state)
         self._open_recent_csv_button.config(state=state)
+        last_path_imported_at = self._load_csv_import_timestamp(existing_paths[0]) if existing_paths else None
+        self._open_last_csv_button.config(text=f"Last CSV {IMPORT_HISTORY_MARKER}" if last_path_imported_at else "Last CSV")
 
         self._recent_csv_menu.delete(0, "end")
         for saved_path in existing_paths:
+            imported_at = self._load_csv_import_timestamp(saved_path)
             self._recent_csv_menu.add_command(
-                label=saved_path,
+                label=self._recent_csv_label(saved_path, imported_at),
                 command=lambda value=saved_path: self._on_open_recent_csv_preview(value),
             )
 

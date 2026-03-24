@@ -37,6 +37,7 @@ class _PreviewPopupExportControllerBase:
         self._header_filter_popup_listbox: tk.Listbox | None = None
         self._header_filter_popup_empty_var: tk.StringVar | None = None
         self._header_filter_popup_options: list[str] = []
+        self._header_filter_popup_casefolded_options: list[str] = []
         self._header_filter_popup_filtered_options: list[str] = []
         self._header_filter_popup_loading = False
         self._header_filter_options_request_token = 0
@@ -135,6 +136,7 @@ class _PreviewPopupExportControllerBase:
         self._header_filter_popup = popup
         self._header_filter_popup_column_index = column_index
         self._header_filter_popup_options = list(options or [])
+        self._header_filter_popup_casefolded_options = [option.casefold() for option in self._header_filter_popup_options]
         self._header_filter_popup_filtered_options = []
         self._header_filter_popup_search_var = tk.StringVar(value="")
         self._header_filter_popup_empty_var = tk.StringVar(value="")
@@ -267,6 +269,7 @@ class _PreviewPopupExportControllerBase:
                 continue
 
             self._header_filter_popup_options = list(message.options)
+            self._header_filter_popup_casefolded_options = [option.casefold() for option in self._header_filter_popup_options]
             self._refresh_header_filter_popup_options()
 
         if self._header_filter_popup_loading or not self._header_filter_options_queue.empty():
@@ -289,7 +292,14 @@ class _PreviewPopupExportControllerBase:
 
         query = search_var.get().strip().casefold()
         if query:
-            filtered_options = [option for option in self._header_filter_popup_options if query in option.casefold()]
+            filtered_options = [
+                option
+                for option, casefolded_option in zip(
+                    self._header_filter_popup_options,
+                    self._header_filter_popup_casefolded_options,
+                )
+                if query in casefolded_option
+            ]
         else:
             filtered_options = list(self._header_filter_popup_options)
 
@@ -364,6 +374,7 @@ class _PreviewPopupExportControllerBase:
         self._header_filter_popup_listbox = None
         self._header_filter_popup_empty_var = None
         self._header_filter_popup_options = []
+        self._header_filter_popup_casefolded_options = []
         self._header_filter_popup_filtered_options = []
         self._header_filter_popup_loading = False
 
